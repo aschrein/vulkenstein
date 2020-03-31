@@ -3,11 +3,6 @@ import sys
 
 module = \
 """
-%Render_Target = type { i32 }
-%Sampler2D = type { i32, i32 }
-
-declare void @store_rt_2d_f4(%Render_Target* %0, <2 x i32> %coord, <4 x float> %val)
-declare <4 x float> @sample_2d_f4(%Sampler2D* %0, <2 x float> %uv)
 
 """
 module += open(sys.argv[1]).read()

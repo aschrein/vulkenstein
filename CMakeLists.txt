@@ -42,5 +42,6 @@ target_include_directories(s2l
   ${CMAKE_BINARY_DIR}
   ${LLVM_INCLUDE_DIRS}
 )
-target_compile_definitions(s2l PRIVATE "-DS2L_EXE -fmax-errors=1 -fno-exceptions -fno-rtti" ${LLVM_COMPILE_FLAGS})
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -fmax-errors=1 -fno-exceptions -fno-rtti")
+target_compile_definitions(s2l PRIVATE "-DS2L_EXE " ${LLVM_COMPILE_FLAGS})
 target_link_libraries(s2l ${LLVM_LIBRARY_LIST} pthread ncurses z)

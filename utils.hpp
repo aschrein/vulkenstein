@@ -201,10 +201,10 @@ struct Allocator {
   virtual void free(void *) = 0;
   static Allocator *get_default() {
     struct _Allocator : public Allocator {
-      virtual void *alloc(size_t size) override { tl_alloc(size); }
+      virtual void *alloc(size_t size) override { return tl_alloc(size); }
       virtual void *realloc(void *ptr, size_t old_size,
                             size_t new_size) override {
-        tl_realloc(ptr, old_size, new_size);
+        return tl_realloc(ptr, old_size, new_size);
       }
       virtual void free(void *ptr) override { tl_free(ptr); }
     };
@@ -222,8 +222,7 @@ template <typename T> struct TinyArray {
   }
 };
 
-template <typename T>
-struct Array {
+template <typename T> struct Array {
   T *ptr;
   size_t size;
   size_t capacity;
@@ -323,7 +322,6 @@ template <typename K, typename V> struct HashArray {
     item_count = 0;
   }
   bool push(K key, V value) {
-    PERF_ENTER("HashArray push");
     {
       uint32_t attempts = attempts;
       uint64_t hash = hash_of(key);
@@ -344,8 +342,6 @@ template <typename K, typename V> struct HashArray {
           if (arr.ptr[id].hash == 0) {
             memcpy(arr.ptr + id, &pair, sizeof(HP));
             item_count += 1;
-            PERF_HIST_ADD("HashArray_${KEY}_${VALUE}_push:hit", attempt_id);
-            PERF_EXIT("HashArray_${KEY}_${VALUE}_push");
             return true;
           }
         }
