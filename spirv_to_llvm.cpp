@@ -265,6 +265,26 @@ struct Spirv_Builder {
   uint32_t const *code;
   size_t code_size;
 
+  auto find_decoration(spv::Decoration spv_dec, uint32_t val_id) -> Decoration {
+    ASSERT_ALWAYS(contains(decorations, val_id));
+    auto &decs = decorations[val_id];
+    for (auto &dec : decs) {
+      if (dec.type == spv_dec)
+        return dec;
+    }
+    UNIMPLEMENTED;
+  }
+  auto find_member_decoration(spv::Decoration spv_dec, uint32_t type_id,
+                              uint32_t member_id) -> Member_Decoration {
+    ASSERT_ALWAYS(contains(member_decorations, type_id));
+    for (auto &item : member_decorations[type_id]) {
+      if (item.type == spv_dec && item.member_id == member_id) {
+        return item;
+      }
+    }
+    UNIMPLEMENTED;
+  }
+
   void build_llvm_module() {
     llvm::LLVMContext *context = new llvm::LLVMContext();
     auto &c = *context;
@@ -273,7 +293,7 @@ struct Spirv_Builder {
         llvm::StringRef((char *)llvm_stdlib_bc, llvm_stdlib_bc_len), "", false);
     llvm::Module *module = llvm::parseIR(*mbuf.get(), error, c).release();
 
-//    module->setDataLayout(NULL);
+    //    module->setDataLayout(NULL);
     ASSERT_ALWAYS(module);
     //    {
     //      llvm::Function *func = LOOKUP_DECL("sample_2d_f4");
@@ -297,6 +317,7 @@ struct Spirv_Builder {
     // Initialize framework functions
     LOOKUP_FN(get_push_constant_ptr);
     LOOKUP_FN(get_uniform_ptr);
+    LOOKUP_FN(get_uniform_const_ptr);
     LOOKUP_FN(get_input_ptr);
     LOOKUP_FN(get_output_ptr);
     LOOKUP_TY(sampler_t);
@@ -404,15 +425,11 @@ struct Spirv_Builder {
         case spv::StorageClass::StorageClassInput:
         case spv::StorageClass::StorageClassPushConstant: {
           // Handle global variables per function
-          //          llvm::Type *type = llvm_types[c.type_id];
-          //          ASSERT_ALWAYS(type != NULL);
-          //          ASSERT_ALWAYS(c.init_id == 0 && "UNIMPLEMENTED");
-          //          llvm_values[c.id] = llvm::ConstantInt::get(type, 0);
           skip = true;
           break;
         }
         case spv::StorageClass::StorageClassFunction: {
-          // Handle local variables at later passes
+          // Handle local variables at later passes per function
           skip = true;
           break;
         }
@@ -434,12 +451,10 @@ struct Spirv_Builder {
         StructTy type = struct_types.find(item.first)->second;
         std::vector<llvm::Type *> members;
         std::vector<size_t> offsets(type.member_types.size());
-        ASSERT_ALWAYS(contains(member_decorations, type.id));
-        for (auto &item : member_decorations[type.id]) {
-          if (item.type == spv::Decoration::DecorationOffset) {
-            offsets[item.member_id] = item.param1;
-          }
-        }
+        ito(type.member_types.size()) offsets[i] =
+            find_member_decoration(spv::Decoration::DecorationOffset, type.id,
+                                   i)
+                .param1;
         size_t offset = 0;
         for (uint32_t member_id = 0; member_id < type.member_types.size();
              member_id++) {
@@ -612,7 +627,7 @@ struct Spirv_Builder {
           llvm::BasicBlock::Create(c, "allocas", cur_fun, NULL);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
-
+      // @allocas
       // Make a local copy of llvm_values to make global->local shadows
       auto llvm_values = copy(llvm_values_copy);
       auto &locals = local_variables[func_id];
@@ -623,7 +638,7 @@ struct Spirv_Builder {
         llvm::Type *llvm_type = llvm_types[var.type_id];
         ASSERT_ALWAYS(llvm_type != NULL);
         llvm::Value *llvm_value = llvm_builder->CreateAlloca(
-            llvm_type, (uint32_t)var.storage, NULL, get_spv_name(var.id));
+            llvm_type, 0, NULL, get_spv_name(var.id));
         if (var.init_id != 0) {
           llvm::Value *init_value = llvm_values[var.init_id];
           ASSERT_ALWAYS(init_value != NULL);
@@ -631,6 +646,7 @@ struct Spirv_Builder {
         }
         llvm_values[var.id] = llvm_value;
       }
+
       // Make shadow variables for global state(push_constants, uniforms,
       // samplers etc)
       for (auto &var_id : global_variables) {
@@ -639,51 +655,35 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(var.storage != spv::StorageClass::StorageClassFunction);
         llvm::Type *llvm_type = llvm_types[var.type_id];
         ASSERT_ALWAYS(llvm_type != NULL);
-        //        llvm::Type *ptr_type = llvm::PointerType::get(llvm_type, 0);
         llvm::Value *llvm_value = llvm_builder->CreateAlloca(
             llvm_type, 0, NULL, get_spv_name(var.id));
         switch (var.storage) {
         case spv::StorageClass::StorageClassUniformConstant:
         case spv::StorageClass::StorageClassUniform: {
-          //          ASSERT_ALWAYS(contains(ptr_types, var.type_id));
-          ASSERT_ALWAYS(contains(decorations, var.id));
-          auto &decs = decorations[var.id];
-          int32_t set = -1;
-          int32_t binding = -1;
-          for (auto &dec : decs) {
-            switch (dec.type) {
-            case spv::Decoration::DecorationBinding:
-              binding = (int32_t)dec.param1;
-              break;
-            case spv::Decoration::DecorationDescriptorSet:
-              set = (int32_t)dec.param1;
-              break;
-            default:
-              UNIMPLEMENTED_(get_cstr(dec.type));
-            }
-          }
+          uint32_t set =
+              find_decoration(spv::Decoration::DecorationDescriptorSet, var.id)
+                  .param1;
+          uint32_t binding =
+              find_decoration(spv::Decoration::DecorationBinding, var.id)
+                  .param1;
           ASSERT_ALWAYS(set >= 0);
           ASSERT_ALWAYS(binding >= 0);
           llvm::Value *pc_ptr = llvm_builder->CreateCall(
-              get_uniform_ptr, {llvm_builder->getInt32((uint32_t)set),
-                                llvm_builder->getInt32((uint32_t)binding)});
+
+              var.storage == spv::StorageClass::StorageClassUniformConstant
+                  ? get_uniform_const_ptr
+                  : get_uniform_ptr,
+              {llvm_builder->getInt32((uint32_t)set),
+               llvm_builder->getInt32((uint32_t)binding)});
           llvm::Value *cast = llvm_builder->CreateBitCast(pc_ptr, llvm_type);
           llvm_builder->CreateStore(cast, llvm_value);
           break;
         }
         case spv::StorageClass::StorageClassOutput: {
-          ASSERT_ALWAYS(contains(decorations, var.id));
-          auto &decs = decorations[var.id];
-          int32_t location = -1;
-          for (auto &dec : decs) {
-            switch (dec.type) {
-            case spv::Decoration::DecorationLocation:
-              location = (int32_t)dec.param1;
-              break;
-            default:
-              UNIMPLEMENTED_(get_cstr(dec.type));
-            }
-          }
+          uint32_t location =
+              find_decoration(spv::Decoration::DecorationLocation, var.id)
+                  .param1;
+
           ASSERT_ALWAYS(location >= 0);
           llvm::Value *pc_ptr = llvm_builder->CreateCall(
               get_output_ptr, {
@@ -694,18 +694,9 @@ struct Spirv_Builder {
           break;
         }
         case spv::StorageClass::StorageClassInput: {
-          ASSERT_ALWAYS(contains(decorations, var.id));
-          auto &decs = decorations[var.id];
-          int32_t location = -1;
-          for (auto &dec : decs) {
-            switch (dec.type) {
-            case spv::Decoration::DecorationLocation:
-              location = (int32_t)dec.param1;
-              break;
-            default:
-              UNIMPLEMENTED_(get_cstr(dec.type));
-            }
-          }
+          uint32_t location =
+              find_decoration(spv::Decoration::DecorationLocation, var.id)
+                  .param1;
           ASSERT_ALWAYS(location >= 0);
           llvm::Value *pc_ptr = llvm_builder->CreateCall(
               get_input_ptr, {
@@ -733,7 +724,6 @@ struct Spirv_Builder {
         }
         llvm_values[var.id] = llvm_value;
       }
-      break;
       for (uint32_t const *pCode : item.second) {
         uint16_t WordCount = pCode[0] >> spv::WordCountShift;
         spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
@@ -751,7 +741,13 @@ struct Spirv_Builder {
         case spv::Op::OpLabel: {
           uint32_t id = word1;
           snprintf(name_buf, sizeof(name_buf), "label_%i", id);
-          cur_bb = llvm::BasicBlock::Create(c, name_buf, cur_fun, NULL);
+
+          llvm::BasicBlock *new_bb =
+              llvm::BasicBlock::Create(c, name_buf, cur_fun, NULL);
+          if (cur_bb != NULL) {
+            llvm::BranchInst::Create(new_bb, cur_bb);
+          }
+          cur_bb = new_bb;
           llvm_builder.reset(
               new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
           llvm_labels[id] = cur_bb;
@@ -760,7 +756,7 @@ struct Spirv_Builder {
         case spv::Op::OpAccessChain: {
           ASSERT_ALWAYS(cur_bb != NULL);
           std::vector<llvm::Value *> indices = {
-              llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), 0)};
+                        llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), 0)};
           for (uint32_t i = 4; i < WordCount; i++) {
             llvm::Value *index_val = llvm_values[pCode[i]];
             ASSERT_ALWAYS(index_val != NULL);
@@ -768,12 +764,24 @@ struct Spirv_Builder {
           }
           llvm::Value *base = llvm_values[word3];
           ASSERT_ALWAYS(base != NULL);
+          llvm::Value *deref = llvm_builder->CreateLoad(base, "deref");
           llvm::PointerType *ptr_type =
-              llvm::dyn_cast<llvm::PointerType>(base->getType());
+              llvm::dyn_cast<llvm::PointerType>(deref->getType());
           ASSERT_ALWAYS(ptr_type != NULL);
-          llvm_values[word2] = llvm_builder->CreateGEP(base, indices);
-          goto exit_and_print;
-          //          break;
+          llvm_values[word2] = llvm_builder->CreateGEP(deref, indices);
+          break;
+        }
+        case spv::Op::OpLoad: {
+          ASSERT_ALWAYS(cur_bb != NULL);
+          llvm::Value *addr = llvm_values[word3];
+          ASSERT_ALWAYS(addr != NULL);
+          llvm_values[word2] = llvm_builder->CreateLoad(addr);
+          goto finish_function;
+          break;
+        }
+        case spv::Op::OpStore: {
+          goto finish_function;
+          break;
         }
         // Skip declarations
         case spv::Op::OpNop:
@@ -837,8 +845,6 @@ struct Spirv_Builder {
         case spv::Op::OpFunctionCall:
         case spv::Op::OpVariable:
         case spv::Op::OpImageTexelPointer:
-        case spv::Op::OpLoad:
-        case spv::Op::OpStore:
         case spv::Op::OpCopyMemory:
         case spv::Op::OpCopyMemorySized:
 
@@ -1320,14 +1326,25 @@ struct Spirv_Builder {
         }
         }
       }
+    finish_function:
+      llvm::BasicBlock *exit_bb = llvm::BasicBlock::Create(c, "exit");
+      llvm::ReturnInst::Create(c, NULL, exit_bb);
+      exit_bb->insertInto(cur_fun);
+      llvm::BranchInst::Create(exit_bb, cur_bb);
     }
-  exit_and_print:
+    // @llvm/print
+
     std::string str;
     llvm::raw_string_ostream os(str);
     str.clear();
     module->print(os, NULL);
     os.flush();
     fprintf(stdout, "%s", str.c_str());
+    if (verifyModule(*module, &os)) {
+      fprintf(stdout, "%s", os.str().c_str());
+    } else {
+      fprintf(stdout, "Module verified!\n");
+    }
   }
   void parse_meta(const uint32_t *pCode, size_t codeSize) {
     this->code = pCode;
