@@ -14,6 +14,7 @@
 // #include <llvm/Support/DynamicLibrary.h>
 // #include <llvm/Support/TargetSelect.h>
 // #include <llvm/Transforms/IPO/PassManagerBuilder.h>
+#include "3rdparty/SPIRV/GLSL.std.450.h"
 #include "3rdparty/SPIRV/spirv.hpp"
 //#include <fstream>
 //#include <iostream>
@@ -41,6 +42,7 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
 
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -61,10 +63,20 @@ bool contains(std::map<K, V> const &in, K const &key) {
 #define UNIMPLEMENTED_(s)                                                      \
   {                                                                            \
     fprintf(stderr, "UNIMPLEMENTED %s: %s:%i\n", s, __FILE__, __LINE__);       \
+    (void)(*(int *)(void *)(0) = 0);                                           \
     exit(1);                                                                   \
   }
 
 #define UNIMPLEMENTED UNIMPLEMENTED_("")
+
+void WARNING(char const *fmt, ...) {
+  static char buf[0x100];
+  va_list argptr;
+  va_start(argptr, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, argptr);
+  va_end(argptr);
+  fprintf(stderr, "[WARNING] %s\n", buf);
+}
 
 #define LOOKUP_FN(name)                                                        \
   llvm::Function *name = module->getFunction(#name);                           \
@@ -248,7 +260,6 @@ struct Spirv_Builder {
   std::map<uint32_t, FunTy> functypes;
   std::map<uint32_t, MatrixTy> matrix_types;
   std::map<uint32_t, StructTy> struct_types;
-  uint32_t cur_function = 0;
   // function_id -> [var_id...]
   std::map<uint32_t, std::vector<uint32_t>> local_variables;
   std::vector<uint32_t> global_variables;
@@ -320,10 +331,21 @@ struct Spirv_Builder {
     LOOKUP_FN(get_uniform_const_ptr);
     LOOKUP_FN(get_input_ptr);
     LOOKUP_FN(get_output_ptr);
+    LOOKUP_FN(kill);
+    LOOKUP_FN(normalize_f2);
+    LOOKUP_FN(normalize_f3);
+    LOOKUP_FN(normalize_f4);
+    LOOKUP_FN(length_f2);
+    LOOKUP_FN(length_f3);
+    LOOKUP_FN(length_f4);
+    LOOKUP_FN(dummy_sample);
+    LOOKUP_FN(spv_on_exit);
     LOOKUP_TY(sampler_t);
     LOOKUP_TY(image_t);
     LOOKUP_TY(combined_image_t);
 
+    // Structure member offsets for GEP
+    std::map<llvm::Type *, std::vector<uint32_t>> member_reloc;
     std::vector<llvm::Type *> llvm_types(idbound);
     std::vector<llvm::Value *> llvm_values(idbound);
     //    for (auto &item : vector_types) {
@@ -456,6 +478,10 @@ struct Spirv_Builder {
                                    i)
                 .param1;
         size_t offset = 0;
+        // We manually insert padding bytes which offsets the structure members
+        // for GEP instructions
+        std::vector<uint32_t> member_indices;
+        uint32_t index_offset = 0;
         for (uint32_t member_id = 0; member_id < type.member_types.size();
              member_id++) {
           llvm::Type *member_type = llvm_types[type.member_types[member_id]];
@@ -467,10 +493,12 @@ struct Spirv_Builder {
             // Push dummy bytes until the member offset is ok
             members.push_back(
                 llvm::ArrayType::get(llvm::Type::getInt8Ty(c), diff));
+            index_offset += 1;
           }
           size_t size = 0;
           uint32_t member_type_id = type.member_types[member_id];
-
+          member_indices.push_back(index_offset);
+          index_offset += 1;
           auto get_primitive_size = [](Primitive_t type) {
             size_t size = 0;
             switch (type) {
@@ -550,8 +578,10 @@ struct Spirv_Builder {
           offset += size;
           members.push_back(member_type);
         }
-        llvm_types[type.id] =
+        llvm::Type *struct_type =
             llvm::StructType::create(c, members, get_spv_name(type.id), true);
+        member_reloc[struct_type] = member_indices;
+        llvm_types[type.id] = struct_type;
         break;
       }
       case DeclTy::VectorTy: {
@@ -724,6 +754,8 @@ struct Spirv_Builder {
         }
         llvm_values[var.id] = llvm_value;
       }
+      std::vector<std::pair<llvm::BasicBlock *, uint32_t const *>>
+          deferred_branches;
       for (uint32_t const *pCode : item.second) {
         uint16_t WordCount = pCode[0] >> spv::WordCountShift;
         spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
@@ -755,34 +787,413 @@ struct Spirv_Builder {
         }
         case spv::Op::OpAccessChain: {
           ASSERT_ALWAYS(cur_bb != NULL);
-          std::vector<llvm::Value *> indices = {
-                        llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), 0)};
-          for (uint32_t i = 4; i < WordCount; i++) {
-            llvm::Value *index_val = llvm_values[pCode[i]];
-            ASSERT_ALWAYS(index_val != NULL);
-            indices.push_back(index_val);
-          }
           llvm::Value *base = llvm_values[word3];
           ASSERT_ALWAYS(base != NULL);
           llvm::Value *deref = llvm_builder->CreateLoad(base, "deref");
           llvm::PointerType *ptr_type =
               llvm::dyn_cast<llvm::PointerType>(deref->getType());
           ASSERT_ALWAYS(ptr_type != NULL);
-          llvm_values[word2] = llvm_builder->CreateGEP(deref, indices);
+          llvm::Type *pointee_type = ptr_type->getPointerElementType();
+          ASSERT_ALWAYS(pointee_type != NULL);
+          std::vector<llvm::Value *> indices = {
+              llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), 0)};
+          if (contains(member_reloc, pointee_type)) {
+            std::vector<uint32_t> const &reloc_table =
+                member_reloc[pointee_type];
+            for (uint32_t i = 4; i < WordCount; i++) {
+              llvm::Value *index_val = llvm_values[pCode[i]];
+              ASSERT_ALWAYS(index_val != NULL);
+              llvm::ConstantInt *integer =
+                  llvm::dyn_cast<llvm::ConstantInt>(index_val);
+              ASSERT_ALWAYS(
+                  integer != NULL &&
+                  "Access chain index must be OpConstant for structures");
+              uint32_t cval = (uint32_t)integer->getLimitedValue();
+              indices.push_back(llvm::ConstantInt::get(
+                  llvm::Type::getInt32Ty(c), reloc_table[cval]));
+            }
+          } else {
+            for (uint32_t i = 4; i < WordCount; i++) {
+              llvm::Value *index_val = llvm_values[pCode[i]];
+              ASSERT_ALWAYS(index_val != NULL);
+              indices.push_back(index_val);
+            }
+          }
+
+          llvm::Value *val = llvm_builder->CreateGEP(deref, indices);
+          llvm::Value *alloca = llvm_builder->CreateAlloca(val->getType(), 0,
+                                                           NULL, "stack_proxy");
+          llvm_values[word2] = alloca;
+          llvm_builder->CreateStore(val, alloca);
           break;
         }
         case spv::Op::OpLoad: {
           ASSERT_ALWAYS(cur_bb != NULL);
           llvm::Value *addr = llvm_values[word3];
           ASSERT_ALWAYS(addr != NULL);
-          llvm_values[word2] = llvm_builder->CreateLoad(addr);
-          goto finish_function;
+          llvm::PointerType *ptr_type =
+              llvm::dyn_cast<llvm::PointerType>(addr->getType());
+          ASSERT_ALWAYS(ptr_type != NULL);
+          llvm::Value *deref = llvm_builder->CreateLoad(addr, "deref");
+          llvm_values[word2] = llvm_builder->CreateLoad(deref);
           break;
         }
         case spv::Op::OpStore: {
-          goto finish_function;
+          ASSERT_ALWAYS(cur_bb != NULL);
+          llvm::Value *addr = llvm_values[word1];
+          ASSERT_ALWAYS(addr != NULL);
+          llvm::Value *val = llvm_values[word2];
+          ASSERT_ALWAYS(val != NULL);
+          llvm::Value *deref = llvm_builder->CreateLoad(addr, "deref");
+          llvm_builder->CreateStore(val, deref);
           break;
         }
+        case spv::Op::OpBranch:
+        case spv::Op::OpBranchConditional: {
+          // branches reference labels that haven't been created yet
+          // So we just fix this up later
+          deferred_branches.push_back({cur_bb, pCode});
+          // Terminate current basic block
+          cur_bb = NULL;
+          llvm_builder.release();
+          break;
+        }
+#define SIMPLE_LLVM_OP(llvm_op)                                                \
+  ASSERT_ALWAYS(llvm_values[word2] == NULL);                                   \
+  ASSERT_ALWAYS(llvm_values[word3] != NULL);                                   \
+  ASSERT_ALWAYS(llvm_values[word4] != NULL);                                   \
+  llvm_values[word2] =                                                         \
+      llvm_builder->llvm_op(llvm_values[word3], llvm_values[word4]);
+        case spv::Op::OpIEqual: {
+          SIMPLE_LLVM_OP(CreateICmpEQ);
+          break;
+        }
+        case spv::Op::OpINotEqual: {
+          SIMPLE_LLVM_OP(CreateICmpNE);
+          break;
+        }
+        case spv::Op::OpUGreaterThan: {
+          SIMPLE_LLVM_OP(CreateICmpUGT);
+          break;
+        }
+        case spv::Op::OpSGreaterThan: {
+          SIMPLE_LLVM_OP(CreateICmpSGT);
+          break;
+        }
+        case spv::Op::OpUGreaterThanEqual: {
+          SIMPLE_LLVM_OP(CreateICmpUGE);
+          break;
+        }
+        case spv::Op::OpSGreaterThanEqual: {
+          SIMPLE_LLVM_OP(CreateICmpSGE);
+          break;
+        }
+        case spv::Op::OpULessThan: {
+          SIMPLE_LLVM_OP(CreateICmpULT);
+          break;
+        }
+        case spv::Op::OpSLessThan: {
+          SIMPLE_LLVM_OP(CreateICmpSLT);
+          break;
+        }
+        case spv::Op::OpULessThanEqual: {
+          SIMPLE_LLVM_OP(CreateICmpULE);
+          break;
+        }
+        case spv::Op::OpSLessThanEqual: {
+          SIMPLE_LLVM_OP(CreateICmpSLE);
+          break;
+        }
+        case spv::Op::OpIAdd: {
+          SIMPLE_LLVM_OP(CreateAdd);
+          break;
+        }
+        case spv::Op::OpFAdd: {
+          SIMPLE_LLVM_OP(CreateFAdd);
+          break;
+        }
+        case spv::Op::OpISub: {
+          SIMPLE_LLVM_OP(CreateSub);
+          break;
+        }
+        case spv::Op::OpFSub: {
+          SIMPLE_LLVM_OP(CreateFSub);
+          break;
+        }
+        case spv::Op::OpIMul: {
+          SIMPLE_LLVM_OP(CreateMul);
+          break;
+        }
+        case spv::Op::OpFMul: {
+          SIMPLE_LLVM_OP(CreateFMul);
+          break;
+        }
+        case spv::Op::OpUDiv: {
+          SIMPLE_LLVM_OP(CreateUDiv);
+          break;
+        }
+        case spv::Op::OpSDiv: {
+          SIMPLE_LLVM_OP(CreateSDiv);
+          break;
+        }
+        case spv::Op::OpFDiv: {
+          SIMPLE_LLVM_OP(CreateFDiv);
+          break;
+        }
+        case spv::Op::OpUMod: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpSRem: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpSMod: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFRem: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFMod: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpLogicalEqual: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpLogicalNotEqual: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpLogicalOr: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpLogicalAnd: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpLogicalNot: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpSelect: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFOrdEqual: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFUnordEqual: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFOrdNotEqual: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFUnordNotEqual: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFOrdLessThan: {
+          SIMPLE_LLVM_OP(CreateFCmpOLT);
+          break;
+        }
+        case spv::Op::OpFUnordLessThan: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFOrdGreaterThan: {
+          SIMPLE_LLVM_OP(CreateFCmpUGT);
+          break;
+        }
+        case spv::Op::OpFUnordGreaterThan: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFOrdLessThanEqual: {
+          SIMPLE_LLVM_OP(CreateFCmpOLE);
+          break;
+        }
+        case spv::Op::OpFUnordLessThanEqual: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpFOrdGreaterThanEqual: {
+          SIMPLE_LLVM_OP(CreateFCmpOGT);
+          break;
+        }
+        case spv::Op::OpFUnordGreaterThanEqual: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpShiftRightLogical: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpShiftRightArithmetic: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpShiftLeftLogical: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpBitwiseOr: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpBitwiseXor: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpBitwiseAnd: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpNot: {
+          UNIMPLEMENTED_(get_cstr(opcode));
+        }
+        case spv::Op::OpKill: {
+          llvm_builder->CreateCall(kill);
+          break;
+        }
+        case spv::Op::OpVectorTimesScalar: {
+          llvm::Value *vector = llvm_values[word3];
+          llvm::Value *scalar = llvm_values[word4];
+          ASSERT_ALWAYS(vector != NULL && scalar != NULL);
+          llvm::VectorType *vtype =
+              llvm::dyn_cast<llvm::VectorType>(vector->getType());
+          ASSERT_ALWAYS(vtype != NULL);
+          llvm::Value *splat = llvm_builder->CreateVectorSplat(
+              vtype->getVectorNumElements(), scalar);
+          llvm_values[word2] = llvm_builder->CreateFMul(vector, splat);
+          break;
+        }
+        case spv::Op::OpCompositeExtract: {
+          llvm::Value *src = llvm_values[word3];
+          llvm::Type *src_type = src->getType();
+          if (src_type->isArrayTy()) {
+            UNIMPLEMENTED;
+          } else if (src_type->isVectorTy()) {
+            llvm_values[word2] = llvm_builder->CreateExtractElement(src, word4);
+          } else {
+            UNIMPLEMENTED;
+          }
+          break;
+        }
+        case spv::Op::OpCompositeConstruct: {
+          llvm::Type *dst_type = llvm_types[word1];
+          ASSERT_ALWAYS(dst_type != NULL);
+          if (dst_type->isVectorTy()) {
+            llvm::Value *undef = llvm::UndefValue::get(dst_type);
+            llvm::VectorType *vtype =
+                llvm::dyn_cast<llvm::VectorType>(dst_type);
+            ASSERT_ALWAYS(vtype != NULL);
+            llvm::Value *final_val = undef;
+            ito(vtype->getVectorNumElements()) {
+              llvm::Value *src = llvm_values[pCode[3 + i]];
+              ASSERT_ALWAYS(src != NULL);
+              final_val = llvm_builder->CreateInsertElement(final_val, src, i);
+            }
+            llvm_values[word2] = final_val;
+          } else {
+            UNIMPLEMENTED;
+          }
+
+          break;
+        }
+        case spv::Op::OpVectorShuffle: {
+          llvm::Value *op1 = llvm_values[word3];
+          llvm::Value *op2 = llvm_values[word4];
+          ASSERT_ALWAYS(op1 != NULL && op2 != NULL);
+          llvm::VectorType *vtype1 =
+              llvm::dyn_cast<llvm::VectorType>(op1->getType());
+          llvm::VectorType *vtype2 =
+              llvm::dyn_cast<llvm::VectorType>(op2->getType());
+          ASSERT_ALWAYS(vtype1 != NULL && vtype2 != NULL);
+          std::vector<uint32_t> indices;
+          for (uint16_t i = 5; i < WordCount; i++)
+            indices.push_back(pCode[i]);
+          if (vtype1->getVectorNumElements() !=
+              vtype2->getVectorNumElements()) {
+            UNIMPLEMENTED;
+          } else {
+            ASSERT_ALWAYS(llvm_builder && cur_bb != NULL);
+            llvm_values[word2] =
+                llvm_builder->CreateShuffleVector(op1, op2, indices);
+          }
+          break;
+        }
+        case spv::Op::OpExtInst: {
+          spv::GLSLstd450 inst = (spv::GLSLstd450)pCode[4];
+#define ARG(n) (llvm_values[pCode[5 + n]])
+          switch (inst) {
+          case spv::GLSLstd450::GLSLstd450Normalize: {
+            ASSERT_ALWAYS(WordCount == 6);
+            llvm::Value *arg = ARG(0);
+            ASSERT_ALWAYS(arg != NULL);
+            llvm::VectorType *vtype =
+                llvm::dyn_cast<llvm::VectorType>(arg->getType());
+            ASSERT_ALWAYS(vtype != NULL);
+            uint32_t width = vtype->getVectorNumElements();
+            switch (width) {
+            case 2:
+              llvm_values[word2] =
+                  llvm_builder->CreateCall(normalize_f2, {ARG(0)});
+              break;
+            case 3:
+              llvm_values[word2] =
+                  llvm_builder->CreateCall(normalize_f3, {ARG(0)});
+              break;
+            case 4:
+              llvm_values[word2] =
+                  llvm_builder->CreateCall(normalize_f4, {ARG(0)});
+              break;
+            default:
+              UNIMPLEMENTED;
+            }
+
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450Length: {
+            ASSERT_ALWAYS(WordCount == 6);
+            llvm::Value *arg = ARG(0);
+            ASSERT_ALWAYS(arg != NULL);
+            llvm::VectorType *vtype =
+                llvm::dyn_cast<llvm::VectorType>(arg->getType());
+            ASSERT_ALWAYS(vtype != NULL);
+            uint32_t width = vtype->getVectorNumElements();
+            switch (width) {
+            case 2:
+              llvm_values[word2] =
+                  llvm_builder->CreateCall(length_f2, {ARG(0)});
+              break;
+            case 3:
+              llvm_values[word2] =
+                  llvm_builder->CreateCall(length_f3, {ARG(0)});
+              break;
+            case 4:
+              llvm_values[word2] =
+                  llvm_builder->CreateCall(length_f4, {ARG(0)});
+              break;
+            default:
+              UNIMPLEMENTED;
+            }
+
+            break;
+          }
+          default:
+            UNIMPLEMENTED_(get_cstr(inst));
+          }
+#undef ARG
+          break;
+        }
+        case spv::Op::OpReturn: {
+          // Skip
+          break;
+        }
+        case spv::Op::OpSampledImage:
+        case spv::Op::OpImageSampleImplicitLod:
+        case spv::Op::OpImageSampleExplicitLod:
+        case spv::Op::OpImageSampleDrefImplicitLod:
+        case spv::Op::OpImageSampleDrefExplicitLod:
+        case spv::Op::OpImageSampleProjImplicitLod:
+        case spv::Op::OpImageSampleProjExplicitLod:
+        case spv::Op::OpImageSampleProjDrefImplicitLod:
+        case spv::Op::OpImageSampleProjDrefExplicitLod: {
+          llvm::Value *val = llvm_builder->CreateCall(dummy_sample);
+          //          llvm::Value *alloca =
+          //          llvm_builder->CreateAlloca(val->getType());
+          //          llvm_builder->CreateStore(val, alloca);
+          llvm_values[word2] = val;
+          WARNING("skipping %s", get_cstr(opcode));
+          break;
+        }
+        // Skip structured control flow instructions for now
+        case spv::Op::OpLoopMerge:
+        case spv::Op::OpSelectionMerge:
+          break;
         // Skip declarations
         case spv::Op::OpNop:
         case spv::Op::OpUndef:
@@ -795,7 +1206,6 @@ struct Spirv_Builder {
         case spv::Op::OpLine:
         case spv::Op::OpExtension:
         case spv::Op::OpExtInstImport:
-        case spv::Op::OpExtInst:
         case spv::Op::OpMemoryModel:
         case spv::Op::OpEntryPoint:
         case spv::Op::OpExecutionMode:
@@ -847,7 +1257,6 @@ struct Spirv_Builder {
         case spv::Op::OpImageTexelPointer:
         case spv::Op::OpCopyMemory:
         case spv::Op::OpCopyMemorySized:
-
         case spv::Op::OpInBoundsAccessChain:
         case spv::Op::OpPtrAccessChain:
         case spv::Op::OpArrayLength:
@@ -855,21 +1264,9 @@ struct Spirv_Builder {
         case spv::Op::OpInBoundsPtrAccessChain:
         case spv::Op::OpVectorExtractDynamic:
         case spv::Op::OpVectorInsertDynamic:
-        case spv::Op::OpVectorShuffle:
-        case spv::Op::OpCompositeConstruct:
-        case spv::Op::OpCompositeExtract:
         case spv::Op::OpCompositeInsert:
         case spv::Op::OpCopyObject:
         case spv::Op::OpTranspose:
-        case spv::Op::OpSampledImage:
-        case spv::Op::OpImageSampleImplicitLod:
-        case spv::Op::OpImageSampleExplicitLod:
-        case spv::Op::OpImageSampleDrefImplicitLod:
-        case spv::Op::OpImageSampleDrefExplicitLod:
-        case spv::Op::OpImageSampleProjImplicitLod:
-        case spv::Op::OpImageSampleProjExplicitLod:
-        case spv::Op::OpImageSampleProjDrefImplicitLod:
-        case spv::Op::OpImageSampleProjDrefExplicitLod:
         case spv::Op::OpImageFetch:
         case spv::Op::OpImageGather:
         case spv::Op::OpImageDrefGather:
@@ -901,21 +1298,6 @@ struct Spirv_Builder {
         case spv::Op::OpBitcast:
         case spv::Op::OpSNegate:
         case spv::Op::OpFNegate:
-        case spv::Op::OpIAdd:
-        case spv::Op::OpFAdd:
-        case spv::Op::OpISub:
-        case spv::Op::OpFSub:
-        case spv::Op::OpIMul:
-        case spv::Op::OpFMul:
-        case spv::Op::OpUDiv:
-        case spv::Op::OpSDiv:
-        case spv::Op::OpFDiv:
-        case spv::Op::OpUMod:
-        case spv::Op::OpSRem:
-        case spv::Op::OpSMod:
-        case spv::Op::OpFRem:
-        case spv::Op::OpFMod:
-        case spv::Op::OpVectorTimesScalar:
         case spv::Op::OpMatrixTimesScalar:
         case spv::Op::OpVectorTimesMatrix:
         case spv::Op::OpMatrixTimesVector:
@@ -936,41 +1318,6 @@ struct Spirv_Builder {
         case spv::Op::OpLessOrGreater:
         case spv::Op::OpOrdered:
         case spv::Op::OpUnordered:
-        case spv::Op::OpLogicalEqual:
-        case spv::Op::OpLogicalNotEqual:
-        case spv::Op::OpLogicalOr:
-        case spv::Op::OpLogicalAnd:
-        case spv::Op::OpLogicalNot:
-        case spv::Op::OpSelect:
-        case spv::Op::OpIEqual:
-        case spv::Op::OpINotEqual:
-        case spv::Op::OpUGreaterThan:
-        case spv::Op::OpSGreaterThan:
-        case spv::Op::OpUGreaterThanEqual:
-        case spv::Op::OpSGreaterThanEqual:
-        case spv::Op::OpULessThan:
-        case spv::Op::OpSLessThan:
-        case spv::Op::OpULessThanEqual:
-        case spv::Op::OpSLessThanEqual:
-        case spv::Op::OpFOrdEqual:
-        case spv::Op::OpFUnordEqual:
-        case spv::Op::OpFOrdNotEqual:
-        case spv::Op::OpFUnordNotEqual:
-        case spv::Op::OpFOrdLessThan:
-        case spv::Op::OpFUnordLessThan:
-        case spv::Op::OpFOrdGreaterThan:
-        case spv::Op::OpFUnordGreaterThan:
-        case spv::Op::OpFOrdLessThanEqual:
-        case spv::Op::OpFUnordLessThanEqual:
-        case spv::Op::OpFOrdGreaterThanEqual:
-        case spv::Op::OpFUnordGreaterThanEqual:
-        case spv::Op::OpShiftRightLogical:
-        case spv::Op::OpShiftRightArithmetic:
-        case spv::Op::OpShiftLeftLogical:
-        case spv::Op::OpBitwiseOr:
-        case spv::Op::OpBitwiseXor:
-        case spv::Op::OpBitwiseAnd:
-        case spv::Op::OpNot:
         case spv::Op::OpBitFieldInsert:
         case spv::Op::OpBitFieldSExtract:
         case spv::Op::OpBitFieldUExtract:
@@ -1008,13 +1355,7 @@ struct Spirv_Builder {
         case spv::Op::OpAtomicOr:
         case spv::Op::OpAtomicXor:
         case spv::Op::OpPhi:
-        case spv::Op::OpLoopMerge:
-        case spv::Op::OpSelectionMerge:
-        case spv::Op::OpBranch:
-        case spv::Op::OpBranchConditional:
         case spv::Op::OpSwitch:
-        case spv::Op::OpKill:
-        case spv::Op::OpReturn:
         case spv::Op::OpReturnValue:
         case spv::Op::OpUnreachable:
         case spv::Op::OpLifetimeStart:
@@ -1327,7 +1668,44 @@ struct Spirv_Builder {
         }
       }
     finish_function:
+
+      for (auto &item : deferred_branches) {
+        uint32_t const *pCode = item.second;
+        llvm::BasicBlock *bb = item.first;
+        ASSERT_ALWAYS(pCode != NULL && bb != NULL);
+        uint16_t WordCount = pCode[0] >> spv::WordCountShift;
+        spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
+        uint32_t word1 = pCode[1];
+        uint32_t word2 = WordCount > 2 ? pCode[2] : 0;
+        uint32_t word3 = WordCount > 3 ? pCode[3] : 0;
+        uint32_t word4 = WordCount > 4 ? pCode[4] : 0;
+        uint32_t word5 = WordCount > 5 ? pCode[5] : 0;
+        uint32_t word6 = WordCount > 6 ? pCode[6] : 0;
+        uint32_t word7 = WordCount > 7 ? pCode[7] : 0;
+        uint32_t word8 = WordCount > 8 ? pCode[8] : 0;
+        uint32_t word9 = WordCount > 9 ? pCode[9] : 0;
+        switch (opcode) {
+        case spv::Op::OpBranch: {
+          llvm::BasicBlock *dst = llvm_labels[word1];
+          ASSERT_ALWAYS(dst != NULL);
+          llvm::BranchInst::Create(dst, bb);
+          break;
+        }
+        case spv::Op::OpBranchConditional: {
+          llvm::BasicBlock *dst_true = llvm_labels[word2];
+          llvm::BasicBlock *dst_false = llvm_labels[word3];
+          llvm::Value *cond = llvm_values[word1];
+          ASSERT_ALWAYS(dst_true != NULL && dst_false != NULL && cond != NULL);
+          llvm::BranchInst::Create(dst_true, dst_false, cond, bb);
+          break;
+        }
+        default:
+          UNIMPLEMENTED_(opcode);
+        }
+      }
+
       llvm::BasicBlock *exit_bb = llvm::BasicBlock::Create(c, "exit");
+      llvm::CallInst::Create(spv_on_exit, "", exit_bb);
       llvm::ReturnInst::Create(c, NULL, exit_bb);
       exit_bb->insertInto(cur_fun);
       llvm::BranchInst::Create(exit_bb, cur_bb);
@@ -1341,9 +1719,10 @@ struct Spirv_Builder {
     os.flush();
     fprintf(stdout, "%s", str.c_str());
     if (verifyModule(*module, &os)) {
-      fprintf(stdout, "%s", os.str().c_str());
+      fprintf(stderr, "%s", os.str().c_str());
+      exit(1);
     } else {
-      fprintf(stdout, "Module verified!\n");
+//      fprintf(stdout, "Module verified!\n");
     }
   }
   void parse_meta(const uint32_t *pCode, size_t codeSize) {
@@ -1360,6 +1739,7 @@ struct Spirv_Builder {
     const uint32_t *opStart = pCode + 5;
     const uint32_t *opEnd = pCode + codeSize;
     pCode = opStart;
+    uint32_t cur_function = 0;
 #define CLASSIFY(id, TYPE) decl_types.push_back({id, TYPE});
     // First pass
     // Parse Meta data: types, decorations etc

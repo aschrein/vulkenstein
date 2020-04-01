@@ -15,3 +15,15 @@ declare i8 addrspace(2) *@get_uniform_ptr(i32 %set, i32 %binding)
 declare i8 addrspace(0) *@get_uniform_const_ptr(i32 %set, i32 %binding)
 declare i8 addrspace(1) *@get_input_ptr(i32 %id)
 declare i8 addrspace(3) *@get_output_ptr(i32 %id)
+declare void @kill()
+declare <4 x float> @dummy_sample()
+
+declare <2 x float> @normalize_f2(<2 x float> %in)
+declare <3 x float> @normalize_f3(<3 x float> %in)
+declare <4 x float> @normalize_f4(<4 x float> %in)
+
+declare float @length_f2(<2 x float> %in)
+declare float @length_f3(<3 x float> %in)
+declare float @length_f4(<4 x float> %in)
+
+declare void @spv_on_exit()
