@@ -18,10 +18,10 @@ struct UBO {
 #pragma pop
 
 void *get_uniform_ptr(int set, int binding) {
-  uniforms.vec_4.m[0] = 1.0f;
-  uniforms.vec_4.m[1] = 2.0f;
-  uniforms.vec_4.m[2] = 3.0f;
-  uniforms.vec_4.m[3] = 4.0f;
+  uniforms.vec_4.x = 1.0f;
+  uniforms.vec_4.y = 2.0f;
+  uniforms.vec_4.z = 3.0f;
+  uniforms.vec_4.w = 4.0f;
   uniforms.k = 4.0f;
   return &uniforms;
 }
@@ -43,11 +43,16 @@ void spv_on_exit() {/*
   g_output.m[2],
   g_output.m[3]
   );*/
-    TEST_EQ(g_output.m[0], 1.0f);
-    TEST_EQ(g_output.m[1], 4.0f);
-    TEST_EQ(g_output.m[2], 9.0f);
-    TEST_EQ(g_output.m[3], 16.0f);
-
+  vec4 param0 = g_input[0];
+  vec4 param1 = g_input[1];
+  vec4 param2 = g_input[2];
+  vec4 res = (param0 + param1) * uniforms.vec_4 /
+  glm::sqrt(vec4(uniforms.k)) /
+  vec4(1.0) / length(param2) * 2.0f;
+  TEST_EQ(g_output.x, res.x);
+  TEST_EQ(g_output.y, res.y);
+  TEST_EQ(g_output.z, res.z);
+  TEST_EQ(g_output.w, res.w);
   fprintf(stdout, "[SUCCESS]\n");
 }
 

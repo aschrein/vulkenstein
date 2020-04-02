@@ -282,7 +282,16 @@ struct Spirv_Builder {
   // Lifetime must be long enough
   uint32_t const *code;
   size_t code_size;
-
+  auto has_decoration(spv::Decoration spv_dec, uint32_t val_id) -> bool {
+    if (!contains(decorations, val_id))
+      return false;
+    auto &decs = decorations[val_id];
+    for (auto &dec : decs) {
+      if (dec.type == spv_dec)
+        return true;
+    }
+    return false;
+  }
   auto find_decoration(spv::Decoration spv_dec, uint32_t val_id) -> Decoration {
     ASSERT_ALWAYS(contains(decorations, val_id));
     auto &decs = decorations[val_id];
@@ -351,6 +360,10 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_dot_f2);
     LOOKUP_FN(spv_dot_f3);
     LOOKUP_FN(spv_dot_f4);
+    LOOKUP_FN(spv_get_global_invocation_id);
+    LOOKUP_FN(spv_get_work_group_size);
+    LOOKUP_FN(spv_image_read_f4);
+    LOOKUP_FN(spv_image_write_f4);
     LOOKUP_TY(sampler_t);
     LOOKUP_TY(image_t);
     LOOKUP_TY(combined_image_t);
@@ -693,9 +706,21 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(var.storage == spv::StorageClass::StorageClassFunction);
         llvm::Type *llvm_type = llvm_types[var.type_id];
         ASSERT_ALWAYS(llvm_type != NULL);
+        llvm::PointerType *ptr_type =
+            llvm::dyn_cast<llvm::PointerType>(llvm_type);
+
         llvm::Value *llvm_value = llvm_builder->CreateAlloca(
             llvm_type, 0, NULL, get_spv_name(var.id));
+        // SPIRV declares local variables as pointers so we need to allocate
+        // the actual storage for them on the stack
+        ASSERT_ALWAYS(ptr_type != NULL);
+        llvm::Type *pointee_type = ptr_type->getElementType();
+        llvm::Value *pointee_storage = llvm_builder->CreateAlloca(pointee_type);
+        llvm::Value *addr_cast =
+            llvm_builder->CreateAddrSpaceCast(pointee_storage, llvm_type);
+        llvm_builder->CreateStore(addr_cast, llvm_value);
         if (var.init_id != 0) {
+          UNIMPLEMENTED;
           llvm::Value *init_value = llvm_values[var.init_id];
           ASSERT_ALWAYS(init_value != NULL);
           llvm_builder->CreateStore(init_value, llvm_value);
@@ -750,6 +775,34 @@ struct Spirv_Builder {
           break;
         }
         case spv::StorageClass::StorageClassInput: {
+          // Builtin variable: special case
+          if (has_decoration(spv::Decoration::DecorationBuiltIn, var.id)) {
+            spv::BuiltIn builtin_id =
+                (spv::BuiltIn)find_decoration(
+                    spv::Decoration::DecorationBuiltIn, var.id)
+                    .param1;
+            switch (builtin_id) {
+            case spv::BuiltIn::BuiltInGlobalInvocationId: {
+              llvm::VectorType *gid_t =
+                  llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
+              llvm::Value *gid = llvm_builder->CreateAlloca(gid_t);
+              llvm_builder->CreateCall(spv_get_global_invocation_id, {gid});
+              llvm::Value *addr_cast =
+                  llvm_builder->CreateAddrSpaceCast(gid, llvm_type);
+              llvm_builder->CreateStore(addr_cast, llvm_value);
+              break;
+            }
+            case spv::BuiltIn::BuiltInWorkgroupSize: {
+              //              llvm::Value *invoc_id =
+              llvm_builder->CreateCall(spv_get_work_group_size, {llvm_value});
+              //              llvm_builder->CreateStore(invoc_id, llvm_value);
+              break;
+            }
+            default:
+              UNIMPLEMENTED_(get_cstr(builtin_id));
+            }
+            break;
+          }
           uint32_t location =
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
@@ -1295,6 +1348,66 @@ struct Spirv_Builder {
           // Skip
           break;
         }
+        case spv::Op::OpBitcast: {
+          ASSERT_ALWAYS(WordCount == 4);
+          uint32_t res_type_id = word1;
+          uint32_t res_id = word2;
+          uint32_t src_id = word3;
+          llvm::Type *res_type = llvm_types[res_type_id];
+          ASSERT_ALWAYS(res_type != NULL);
+          llvm::Value *src = llvm_values[src_id];
+          ASSERT_ALWAYS(src != NULL);
+          llvm_values[res_id] = llvm_builder->CreateBitCast(src, res_type);
+          break;
+        }
+        case spv::Op::OpImageWrite: {
+          // TODO: handle >4
+          ASSERT_ALWAYS(WordCount == 4);
+          uint32_t image_id = word1;
+          uint32_t coord_id = word2;
+          uint32_t texel_id = word3;
+          llvm::Value *image = llvm_values[image_id];
+          ASSERT_ALWAYS(image != NULL);
+          llvm::Value *coord = llvm_values[coord_id];
+          ASSERT_ALWAYS(coord != NULL);
+          llvm::Value *texel = llvm_values[texel_id];
+          ASSERT_ALWAYS(texel != NULL);
+#define STASH_STACK(name, val)                                                 \
+  llvm::Value *name = llvm_builder->CreateAlloca(val->getType());              \
+  llvm_builder->CreateStore(val, name);
+          STASH_STACK(image_shadow, image);
+          STASH_STACK(coord_shadow, coord);
+          STASH_STACK(texel_shadow, texel);
+#undef STASH_STACK
+          llvm_builder->CreateCall(spv_image_write_f4,
+                                   {image_shadow, coord_shadow, texel_shadow});
+          break;
+        }
+        case spv::Op::OpImageRead: {
+          // TODO: handle >5
+          ASSERT_ALWAYS(WordCount == 5);
+          uint32_t res_type_id = word1;
+          uint32_t res_id = word2;
+          uint32_t image_id = word3;
+          uint32_t coord_id = word4;
+          llvm::Type *res_type = llvm_types[res_type_id];
+          ASSERT_ALWAYS(res_type != NULL);
+          llvm::Value *image = llvm_values[image_id];
+          ASSERT_ALWAYS(image != NULL);
+          llvm::Value *coord = llvm_values[coord_id];
+          ASSERT_ALWAYS(coord != NULL);
+#define STASH_STACK(name, val)                                                 \
+  llvm::Value *name = llvm_builder->CreateAlloca(val->getType());              \
+  llvm_builder->CreateStore(val, name);
+          STASH_STACK(image_shadow, image);
+          STASH_STACK(coord_shadow, coord);
+#undef STASH_STACK
+          llvm::Value *res_shadow = llvm_builder->CreateAlloca(res_type);
+          llvm::Value *call = llvm_builder->CreateCall(
+              spv_image_read_f4, {image_shadow, coord_shadow, res_shadow});
+          llvm_values[res_id] = llvm_builder->CreateLoad(res_shadow);
+          break;
+        }
         case spv::Op::OpSampledImage:
         case spv::Op::OpImageSampleImplicitLod:
         case spv::Op::OpImageSampleExplicitLod:
@@ -1304,13 +1417,14 @@ struct Spirv_Builder {
         case spv::Op::OpImageSampleProjExplicitLod:
         case spv::Op::OpImageSampleProjDrefImplicitLod:
         case spv::Op::OpImageSampleProjDrefExplicitLod: {
-          llvm::Value *val = llvm_builder->CreateCall(dummy_sample);
+          //          llvm::Value *val = llvm_builder->CreateCall(dummy_sample);
           //          llvm::Value *alloca =
           //          llvm_builder->CreateAlloca(val->getType());
           //          llvm_builder->CreateStore(val, alloca);
-          llvm_values[word2] = val;
-          WARNING("skipping %s", get_cstr(opcode));
-          break;
+          //          llvm_values[word2] = val;
+          //          WARNING("skipping %s", get_cstr(opcode));
+          //          break;
+          UNIMPLEMENTED;
         }
         // Skip structured control flow instructions for now
         case spv::Op::OpLoopMerge:
@@ -1392,8 +1506,6 @@ struct Spirv_Builder {
         case spv::Op::OpImageFetch:
         case spv::Op::OpImageGather:
         case spv::Op::OpImageDrefGather:
-        case spv::Op::OpImageRead:
-        case spv::Op::OpImageWrite:
         case spv::Op::OpImage:
         case spv::Op::OpImageQueryFormat:
         case spv::Op::OpImageQueryOrder:
@@ -1417,7 +1529,6 @@ struct Spirv_Builder {
         case spv::Op::OpPtrCastToGeneric:
         case spv::Op::OpGenericCastToPtr:
         case spv::Op::OpGenericCastToPtrExplicit:
-        case spv::Op::OpBitcast:
         case spv::Op::OpSNegate:
         case spv::Op::OpFNegate:
         case spv::Op::OpMatrixTimesScalar:

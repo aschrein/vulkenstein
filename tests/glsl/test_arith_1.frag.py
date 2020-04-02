@@ -18,10 +18,10 @@ struct UBO {
 #pragma pop
 
 void *get_uniform_ptr(int set, int binding) {
-  uniforms.vec_4.m[0] = 1.0f;
-  uniforms.vec_4.m[1] = 2.0f;
-  uniforms.vec_4.m[2] = 3.0f;
-  uniforms.vec_4.m[3] = 4.0f;
+  uniforms.vec_4.x = 1.0f;
+  uniforms.vec_4.y = 2.0f;
+  uniforms.vec_4.z = 3.0f;
+  uniforms.vec_4.w = 4.0f;
   uniforms.k = 3.0f;
   return &uniforms;
 }
@@ -44,24 +44,20 @@ void spv_on_exit() {
   g_output.m[3]
   );*/
   vec3 res = {};
-  res = mul(
-          vec3{g_input[0].m[0], g_input[0].m[1], g_input[0].m[2]},
-          vec3{g_input[1].m[3], g_input[1].m[3], g_input[1].m[3]}
-        );
-  vec2 uniforms_vec_4_xy = vec2{uniforms.vec_4.m[0], uniforms.vec_4.m[1]};
-  vec2 param2_zw = vec2{g_input[2].m[2], g_input[2].m[3]};
-  res = mul(res, spv_dot_f2(&uniforms_vec_4_xy, &param2_zw));
-  vec3 uniforms_kkk = vec3{uniforms.k, uniforms.k, uniforms.k};
-  vec3 param2_xxx = vec3{g_input[2].m[0], g_input[2].m[0], g_input[2].m[0]};
-  res = mul(res, spv_dot_f3(&uniforms_kkk, &param2_xxx));
-  res = mul(res, spv_dot_f4(&g_input[0], &g_input[1]));
-  vec4 param0_param1 = add(g_input[0], g_input[1]);
-  res = mul(res, 1.0f/length_f4(&param0_param1));
+  vec4 param0 = g_input[0];
+  vec4 param1 = g_input[1];
+  vec4 param2 = g_input[2];
+  res =
+  (xyz(param0) * www(param1))
+  * dot(glm::xy(uniforms.vec_4), glm::zw(param2))
+  * dot(vec3(uniforms.k), xxx(param2))
+  * dot(param0, param1)
+  / length(param0 + param1);
 
-  TEST_EQ(g_output.m[0], res.m[0]);
-  TEST_EQ(g_output.m[1], res.m[1]);
-  TEST_EQ(g_output.m[2], res.m[2]);
-  TEST_EQ(g_output.m[3], 1.0f);
+  TEST_EQ(g_output.x, res.x);
+  TEST_EQ(g_output.y, res.y);
+  TEST_EQ(g_output.z, res.z);
+  TEST_EQ(g_output.w, 1.0f);
 
   fprintf(stdout, "[SUCCESS]\n");
 }
