@@ -185,6 +185,11 @@ struct Constant {
     float f32_val;
   };
 };
+struct ConstantComposite {
+  uint32_t id;
+  uint32_t type;
+  std::vector<uint32_t> components;
+};
 struct ArrayTy {
   uint32_t id;
   // could be anything?
@@ -229,6 +234,7 @@ enum class DeclTy {
   PtrTy,
   VectorTy,
   Constant,
+  ConstantComposite,
   ArrayTy,
   ImageTy,
   SamplerTy,
@@ -251,6 +257,7 @@ struct Spirv_Builder {
   std::map<uint32_t, PtrTy> ptr_types;
   std::map<uint32_t, VectorTy> vector_types;
   std::map<uint32_t, Constant> constants;
+  std::map<uint32_t, ConstantComposite> constants_composite;
   std::map<uint32_t, ArrayTy> array_types;
   std::map<uint32_t, ImageTy> images;
   std::map<uint32_t, SamplerTy> samplers;
@@ -340,6 +347,7 @@ struct Spirv_Builder {
     LOOKUP_FN(length_f4);
     LOOKUP_FN(dummy_sample);
     LOOKUP_FN(spv_on_exit);
+    LOOKUP_FN(spv_sqrt);
     LOOKUP_TY(sampler_t);
     LOOKUP_TY(image_t);
     LOOKUP_TY(combined_image_t);
@@ -435,6 +443,21 @@ struct Spirv_Builder {
               llvm::ConstantFP::get(type, llvm::APFloat(c.f32_val));
         else
           llvm_values[c.id] = llvm::ConstantInt::get(type, c.i32_val);
+        break;
+      }
+      case DeclTy::ConstantComposite: {
+        ASSERT_HAS(constants_composite);
+        ConstantComposite c = constants_composite.find(item.first)->second;
+        llvm::Type *type = llvm_types[c.type];
+        ASSERT_ALWAYS(type != NULL && "Constant type must be defined");
+        llvm::SmallVector<llvm::Constant *, 4> llvm_elems;
+        ito(c.components.size()) {
+          llvm::Value *val = llvm_values[c.components[i]];
+          llvm::Constant *cnst = llvm::dyn_cast<llvm::Constant>(val);
+          ASSERT_ALWAYS(cnst != NULL);
+          llvm_elems.push_back(cnst);
+        }
+        llvm_values[c.id] = llvm::ConstantVector::get(llvm_elems);
         break;
       }
       case DeclTy::Variable: {
@@ -1116,22 +1139,49 @@ struct Spirv_Builder {
             llvm::VectorType *vtype =
                 llvm::dyn_cast<llvm::VectorType>(arg->getType());
             ASSERT_ALWAYS(vtype != NULL);
+            llvm::Value *alloca = llvm_builder->CreateAlloca(vtype);
+            llvm_builder->CreateStore(arg, alloca);
             uint32_t width = vtype->getVectorNumElements();
             switch (width) {
             case 2:
               llvm_values[word2] =
-                  llvm_builder->CreateCall(normalize_f2, {ARG(0)});
+                  llvm_builder->CreateCall(normalize_f2, {alloca});
               break;
             case 3:
               llvm_values[word2] =
-                  llvm_builder->CreateCall(normalize_f3, {ARG(0)});
+                  llvm_builder->CreateCall(normalize_f3, {alloca});
               break;
             case 4:
               llvm_values[word2] =
-                  llvm_builder->CreateCall(normalize_f4, {ARG(0)});
+                  llvm_builder->CreateCall(normalize_f4, {alloca});
               break;
             default:
               UNIMPLEMENTED;
+            }
+
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450Sqrt: {
+            ASSERT_ALWAYS(WordCount == 6);
+            llvm::Value *arg = ARG(0);
+            ASSERT_ALWAYS(arg != NULL);
+            llvm::VectorType *vtype =
+                llvm::dyn_cast<llvm::VectorType>(arg->getType());
+            if (vtype != NULL) {
+
+              ASSERT_ALWAYS(vtype != NULL);
+              uint32_t width = vtype->getVectorNumElements();
+              llvm::Value *prev = arg;
+              ito(width) {
+                llvm::Value *elem = llvm_builder->CreateExtractElement(arg, i);
+                llvm::Value *sqrt = llvm_builder->CreateCall(spv_sqrt, {elem});
+                prev = llvm_builder->CreateInsertElement(prev, sqrt, i);
+              }
+              llvm_values[word2] = prev;
+            } else {
+              llvm::Type *type = arg->getType();
+              ASSERT_ALWAYS(type->isFloatTy());
+              llvm_values[word2] = llvm_builder->CreateCall(spv_sqrt, {arg});
             }
 
             break;
@@ -1143,19 +1193,21 @@ struct Spirv_Builder {
             llvm::VectorType *vtype =
                 llvm::dyn_cast<llvm::VectorType>(arg->getType());
             ASSERT_ALWAYS(vtype != NULL);
+            llvm::Value *alloca = llvm_builder->CreateAlloca(vtype);
+            llvm_builder->CreateStore(arg, alloca);
             uint32_t width = vtype->getVectorNumElements();
             switch (width) {
             case 2:
               llvm_values[word2] =
-                  llvm_builder->CreateCall(length_f2, {ARG(0)});
+                  llvm_builder->CreateCall(length_f2, {alloca});
               break;
             case 3:
               llvm_values[word2] =
-                  llvm_builder->CreateCall(length_f3, {ARG(0)});
+                  llvm_builder->CreateCall(length_f3, {alloca});
               break;
             case 4:
               llvm_values[word2] =
-                  llvm_builder->CreateCall(length_f4, {ARG(0)});
+                  llvm_builder->CreateCall(length_f4, {alloca});
               break;
             default:
               UNIMPLEMENTED;
@@ -1722,7 +1774,7 @@ struct Spirv_Builder {
       fprintf(stderr, "%s", os.str().c_str());
       exit(1);
     } else {
-//      fprintf(stdout, "Module verified!\n");
+      //      fprintf(stdout, "Module verified!\n");
     }
   }
   void parse_meta(const uint32_t *pCode, size_t codeSize) {
@@ -1986,6 +2038,16 @@ struct Spirv_Builder {
         CLASSIFY(c.id, DeclTy::Constant);
         break;
       }
+      case spv::Op::OpConstantComposite: {
+        ConstantComposite c;
+        c.id = word2;
+        c.type = word1;
+        ASSERT_ALWAYS(WordCount > 3);
+        ito(WordCount - 3) { c.components.push_back(pCode[i + 3]); }
+        constants_composite[c.id] = c;
+        CLASSIFY(c.id, DeclTy::ConstantComposite);
+        break;
+      }
       // TODO: Do we care about those?
       case spv::Op::OpCapability:
       case spv::Op::OpExtension:
@@ -1997,7 +2059,6 @@ struct Spirv_Builder {
         // SKIP
         break;
       // Trap those
-      case spv::Op::OpConstantComposite:
       case spv::Op::OpUndef:
       case spv::Op::OpSourceContinued:
       case spv::Op::OpString:

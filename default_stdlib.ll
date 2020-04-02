@@ -18,12 +18,14 @@ declare i8 addrspace(3) *@get_output_ptr(i32 %id)
 declare void @kill()
 declare <4 x float> @dummy_sample()
 
-declare <2 x float> @normalize_f2(<2 x float> %in)
-declare <3 x float> @normalize_f3(<3 x float> %in)
-declare <4 x float> @normalize_f4(<4 x float> %in)
+declare <2 x float> @normalize_f2(<2 x float> *%in)
+declare <3 x float> @normalize_f3(<3 x float> *%in)
+declare <4 x float> @normalize_f4(<4 x float> *%in)
 
-declare float @length_f2(<2 x float> %in)
-declare float @length_f3(<3 x float> %in)
-declare float @length_f4(<4 x float> %in)
+declare float @length_f2(<2 x float> *%in)
+declare float @length_f3(<3 x float> *%in)
+declare float @length_f4(<4 x float> *%in)
+
+declare float @spv_sqrt(float %in)
 
 declare void @spv_on_exit()
