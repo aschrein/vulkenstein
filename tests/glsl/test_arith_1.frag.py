@@ -7,7 +7,7 @@ extern "C"{
 vec4 g_input[3] = {
 {1.0f, 2.0f, 3.0f, 4.0f},
 {1.0f, 2.0f, 3.0f, 4.0f},
-{1.0f, 1.0f, 1.0f, 1.0f},
+{2.0f, 1.0f, 2.0f, 1.0f},
 };
 
 #pragma pack(1)
@@ -22,7 +22,7 @@ void *get_uniform_ptr(int set, int binding) {
   uniforms.vec_4.m[1] = 2.0f;
   uniforms.vec_4.m[2] = 3.0f;
   uniforms.vec_4.m[3] = 4.0f;
-  uniforms.k = 4.0f;
+  uniforms.k = 3.0f;
   return &uniforms;
 }
 
@@ -36,17 +36,32 @@ void *get_output_ptr(int id) {
   return &g_output;
 }
 
-void spv_on_exit() {/*
-  fprintf(stdout, "[%f, %f, %f, %f]\n",
+void spv_on_exit() {
+  /*fprintf(stdout, "[%f, %f, %f, %f]\n",
   g_output.m[0],
   g_output.m[1],
   g_output.m[2],
   g_output.m[3]
   );*/
-    TEST_EQ(g_output.m[0], 1.0f);
-    TEST_EQ(g_output.m[1], 4.0f);
-    TEST_EQ(g_output.m[2], 9.0f);
-    TEST_EQ(g_output.m[3], 16.0f);
+  vec3 res = {};
+  res = mul(
+          vec3{g_input[0].m[0], g_input[0].m[1], g_input[0].m[2]},
+          vec3{g_input[1].m[3], g_input[1].m[3], g_input[1].m[3]}
+        );
+  vec2 uniforms_vec_4_xy = vec2{uniforms.vec_4.m[0], uniforms.vec_4.m[1]};
+  vec2 param2_zw = vec2{g_input[2].m[2], g_input[2].m[3]};
+  res = mul(res, spv_dot_f2(&uniforms_vec_4_xy, &param2_zw));
+  vec3 uniforms_kkk = vec3{uniforms.k, uniforms.k, uniforms.k};
+  vec3 param2_xxx = vec3{g_input[2].m[0], g_input[2].m[0], g_input[2].m[0]};
+  res = mul(res, spv_dot_f3(&uniforms_kkk, &param2_xxx));
+  res = mul(res, spv_dot_f4(&g_input[0], &g_input[1]));
+  vec4 param0_param1 = add(g_input[0], g_input[1]);
+  res = mul(res, 1.0f/length_f4(&param0_param1));
+
+  TEST_EQ(g_output.m[0], res.m[0]);
+  TEST_EQ(g_output.m[1], res.m[1]);
+  TEST_EQ(g_output.m[2], res.m[2]);
+  TEST_EQ(g_output.m[3], 1.0f);
 
   fprintf(stdout, "[SUCCESS]\n");
 }
@@ -69,9 +84,14 @@ layout(set = 0, binding = 0, std140) uniform UBO {
 layout(location = 0) out vec4 result0;
 
 void main() {
-  result0 = (param0 + param1) * uniforms.vec_4 /
-  sqrt(vec4(uniforms.k)) /
-  vec4(1.0) / length(param2) * 2.0;
+  result0.xyz =
+  (param0.xyz * param1.www)
+  * dot(uniforms.vec_4.xy, param2.zw)
+  * dot(vec3(uniforms.k), param2.xxx)
+  * dot(param0, param1)
+  / length(param0 + param1)
+  ;
+  result0.w = 1.0;
 }
 """
 shader_filename = "shader.frag.glsl"

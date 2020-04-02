@@ -22,6 +22,10 @@ declare <2 x float> @normalize_f2(<2 x float> *%in)
 declare <3 x float> @normalize_f3(<3 x float> *%in)
 declare <4 x float> @normalize_f4(<4 x float> *%in)
 
+declare float @spv_dot_f2(<2 x float> *%a, <2 x float> *%b)
+declare float @spv_dot_f3(<3 x float> *%a, <3 x float> *%b)
+declare float @spv_dot_f4(<4 x float> *%a, <4 x float> *%b)
+
 declare float @length_f2(<2 x float> *%in)
 declare float @length_f3(<3 x float> *%in)
 declare float @length_f4(<4 x float> *%in)

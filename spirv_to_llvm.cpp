@@ -348,6 +348,9 @@ struct Spirv_Builder {
     LOOKUP_FN(dummy_sample);
     LOOKUP_FN(spv_on_exit);
     LOOKUP_FN(spv_sqrt);
+    LOOKUP_FN(spv_dot_f2);
+    LOOKUP_FN(spv_dot_f3);
+    LOOKUP_FN(spv_dot_f4);
     LOOKUP_TY(sampler_t);
     LOOKUP_TY(image_t);
     LOOKUP_TY(combined_image_t);
@@ -1118,13 +1121,80 @@ struct Spirv_Builder {
           std::vector<uint32_t> indices;
           for (uint16_t i = 5; i < WordCount; i++)
             indices.push_back(pCode[i]);
+          // In LLVM shufflevector must have both operands of the same type
+          // In SPIRV operands may be of different types
+          // Handle the different size case by creating one big vector and
+          // construct the final vector by extracting elements from it
           if (vtype1->getVectorNumElements() !=
               vtype2->getVectorNumElements()) {
-            UNIMPLEMENTED;
+            uint32_t total_width =
+                vtype1->getVectorNumElements() + vtype2->getVectorNumElements();
+            llvm::VectorType *new_vtype = llvm::VectorType::get(
+                vtype1->getVectorElementType(), total_width);
+            // Create a dummy super vector and appedn op1 and op2 elements to it
+            llvm::Value *prev = llvm::UndefValue::get(new_vtype);
+            ito(vtype1->getVectorNumElements()) {
+              llvm::Value *extr = llvm_builder->CreateExtractElement(op1, i);
+              prev = llvm_builder->CreateInsertElement(prev, extr, i);
+            }
+            uint32_t offset = vtype1->getVectorNumElements();
+            ito(vtype2->getVectorNumElements()) {
+              llvm::Value *extr = llvm_builder->CreateExtractElement(op2, i);
+              prev = llvm_builder->CreateInsertElement(prev, extr, i + offset);
+            }
+            // Now we need to emit a chain of extact elements to make up the
+            // result
+            llvm::VectorType *res_type = llvm::VectorType::get(
+                vtype1->getVectorElementType(), (uint32_t)indices.size());
+            llvm::Value *res = llvm::UndefValue::get(res_type);
+            ito(indices.size()) {
+              llvm::Value *elem =
+                  llvm_builder->CreateExtractElement(prev, indices[i]);
+              res = llvm_builder->CreateInsertElement(res, elem, i);
+            }
+            llvm_values[word2] = res;
           } else {
             ASSERT_ALWAYS(llvm_builder && cur_bb != NULL);
             llvm_values[word2] =
                 llvm_builder->CreateShuffleVector(op1, op2, indices);
+          }
+          break;
+        }
+        case spv::Op::OpDot: {
+          uint32_t res_id = word2;
+          uint32_t op1_id = word3;
+          uint32_t op2_id = word4;
+          llvm::Value *op1_val = llvm_values[op1_id];
+          ASSERT_ALWAYS(op1_val != NULL);
+          llvm::VectorType *op1_vtype =
+              llvm::dyn_cast<llvm::VectorType>(op1_val->getType());
+          ASSERT_ALWAYS(op1_vtype != NULL);
+          llvm::Value *op2_val = llvm_values[op2_id];
+          ASSERT_ALWAYS(op2_val != NULL);
+          llvm::VectorType *op2_vtype =
+              llvm::dyn_cast<llvm::VectorType>(op2_val->getType());
+          ASSERT_ALWAYS(op2_vtype != NULL);
+          ASSERT_ALWAYS(op1_vtype->getVectorNumElements() ==
+                        op2_vtype->getVectorNumElements());
+          llvm::Value *alloca1 = llvm_builder->CreateAlloca(op1_vtype);
+          llvm::Value *alloca2 = llvm_builder->CreateAlloca(op2_vtype);
+          llvm_builder->CreateStore(op1_val, alloca1);
+          llvm_builder->CreateStore(op2_val, alloca2);
+          switch (op1_vtype->getVectorNumElements()) {
+          case 2:
+            llvm_values[res_id] =
+                llvm_builder->CreateCall(spv_dot_f2, {alloca1, alloca2});
+            break;
+          case 3:
+            llvm_values[res_id] =
+                llvm_builder->CreateCall(spv_dot_f3, {alloca1, alloca2});
+            break;
+          case 4:
+            llvm_values[res_id] =
+                llvm_builder->CreateCall(spv_dot_f4, {alloca1, alloca2});
+            break;
+          default:
+            UNIMPLEMENTED;
           }
           break;
         }
@@ -1355,7 +1425,6 @@ struct Spirv_Builder {
         case spv::Op::OpMatrixTimesVector:
         case spv::Op::OpMatrixTimesMatrix:
         case spv::Op::OpOuterProduct:
-        case spv::Op::OpDot:
         case spv::Op::OpIAddCarry:
         case spv::Op::OpISubBorrow:
         case spv::Op::OpUMulExtended:
