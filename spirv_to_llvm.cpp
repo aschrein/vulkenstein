@@ -313,21 +313,23 @@ struct Spirv_Builder {
   }
 
   void build_llvm_module() {
+    // Rename main -> shader_entry to avoid compilation errors and confusion
+    // TODO: Cleanup
+    {
+      auto names_copy = names;
+      for (auto &item : names_copy) {
+        if (strcmp(item.second.c_str(), "main") == 0) {
+          names[item.first] = "shader_entry";
+        }
+      }
+    }
     llvm::LLVMContext *context = new llvm::LLVMContext();
     auto &c = *context;
     llvm::SMDiagnostic error;
     auto mbuf = llvm::MemoryBuffer::getMemBuffer(
         llvm::StringRef((char *)llvm_stdlib_bc, llvm_stdlib_bc_len), "", false);
     llvm::Module *module = llvm::parseIR(*mbuf.get(), error, c).release();
-
-    //    module->setDataLayout(NULL);
     ASSERT_ALWAYS(module);
-    //    {
-    //      llvm::Function *func = LOOKUP_DECL("sample_2d_f4");
-    //      ASSERT_ALWAYS(func);
-    //      func->dump();
-    //    }
-
     llvm::install_fatal_error_handler(&llvm_fatal);
 
     const uint32_t *pCode = this->code;
@@ -721,9 +723,9 @@ struct Spirv_Builder {
         llvm_builder->CreateStore(addr_cast, llvm_value);
         if (var.init_id != 0) {
           UNIMPLEMENTED;
-          llvm::Value *init_value = llvm_values[var.init_id];
-          ASSERT_ALWAYS(init_value != NULL);
-          llvm_builder->CreateStore(init_value, llvm_value);
+          //          llvm::Value *init_value = llvm_values[var.init_id];
+          //          ASSERT_ALWAYS(init_value != NULL);
+          //          llvm_builder->CreateStore(init_value, llvm_value);
         }
         llvm_values[var.id] = llvm_value;
       }
@@ -783,6 +785,8 @@ struct Spirv_Builder {
                     .param1;
             switch (builtin_id) {
             case spv::BuiltIn::BuiltInGlobalInvocationId: {
+              // We need to append the value of this argument to the parameter
+              // list of the current function
               llvm::VectorType *gid_t =
                   llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
               llvm::Value *gid = llvm_builder->CreateAlloca(gid_t);
@@ -838,7 +842,6 @@ struct Spirv_Builder {
       for (uint32_t const *pCode : item.second) {
         uint16_t WordCount = pCode[0] >> spv::WordCountShift;
         spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
-        //        dump(opcode);dump("\n");
         uint32_t word1 = pCode[1];
         uint32_t word2 = WordCount > 2 ? pCode[2] : 0;
         uint32_t word3 = WordCount > 3 ? pCode[3] : 0;
@@ -1932,7 +1935,7 @@ struct Spirv_Builder {
           break;
         }
         default:
-          UNIMPLEMENTED_(opcode);
+          UNIMPLEMENTED_(get_cstr(opcode));
         }
       }
 
@@ -1998,7 +2001,6 @@ struct Spirv_Builder {
         break;
       }
       case spv::Op::OpEntryPoint: {
-        // we'll do this in a final pass once we have the function resolved
         entries.push_back(pCode);
         break;
       }

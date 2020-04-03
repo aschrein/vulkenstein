@@ -3,7 +3,12 @@ r"""
 #include <stdlib.cpp>
 
 extern "C"{
+// Reference to the SPIRV module entry point(main only for now)
+void shader_entry();
 
+void test_launch() {
+  shader_entry();
+}
 vec4 g_input[3] = {
 {1.0f, 2.0f, 3.0f, 4.0f},
 {1.0f, 2.0f, 3.0f, 4.0f},

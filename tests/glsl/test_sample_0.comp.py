@@ -4,6 +4,12 @@ r"""
 
 extern "C"{
 
+// Reference to the SPIRV module entry point(main only for now)
+void shader_entry();
+
+void test_launch() {
+  shader_entry();
+}
 
 void spv_get_global_invocation_id(ivec3 *out) {
   *out = ivec3{0, 0, 0};

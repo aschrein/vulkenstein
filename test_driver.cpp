@@ -13,7 +13,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "[ERROR] dlopen: %s\n", dlerror());
     exit(1);
   }
-  main_t func = (main_t)dlsym(myso, "main");
+  main_t func = (main_t)dlsym(myso, "test_launch");
+  ASSERT_ALWAYS(func != NULL);
   func();
   dlclose(myso);
   return 0;

@@ -4,7 +4,11 @@ r"""
 #include <stdio.h>
 
 extern "C"{
+void shader_entry();
 
+void test_launch() {
+  shader_entry();
+}
 float g_input[2] = {1.0f, 2.0f};
 
 struct mat4 {float m[16];};
