@@ -21,17 +21,41 @@ endfunction()
 str_to_list("${LLVM_LIBRARY_LIST}" LLVM_LIBRARY_LIST)
 message(STATUS "LLVM_LIBRARY_LIST:" ${LLVM_LIBRARY_LIST})
 
+# ATTENTION: COPY PASTE
+# SIMD1 | sed 's/llvm_stdlib/llvm_stdlib_1/g'
 add_custom_command(
-OUTPUT llvm_stdlib.h
+OUTPUT llvm_stdlib_1.h
 DEPENDS ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll
-COMMAND python3 ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll
-                  > llvm_stdlib.ll &&
-                  ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib.ll -o llvm_stdlib.bc &&
-                  xxd -i llvm_stdlib.bc > llvm_stdlib.h
-) 
+COMMAND python3 ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll 1
+                  > llvm_stdlib_1.ll &&
+                  ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_1.ll -o llvm_stdlib_1.bc &&
+                  xxd -i llvm_stdlib_1.bc  > llvm_stdlib_1.h
+)
+# SIMD4
+add_custom_command(
+OUTPUT llvm_stdlib_4.h
+DEPENDS ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll
+COMMAND python3 ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll 4
+                  > llvm_stdlib_4.ll &&
+                  ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_4.ll -o llvm_stdlib_4.bc &&
+                  xxd -i llvm_stdlib_4.bc > llvm_stdlib_4.h
+)
+# SIMD64
+add_custom_command(
+OUTPUT llvm_stdlib_64.h
+DEPENDS ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll
+COMMAND python3 ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll 64
+                  > llvm_stdlib_64.ll &&
+                  ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_64.ll -o llvm_stdlib_64.bc &&
+                  xxd -i llvm_stdlib_64.bc > llvm_stdlib_64.h
+)
+### END OF COPY PASTE
+
 add_executable(s2l
 spirv_to_llvm.cpp
-llvm_stdlib.h
+llvm_stdlib_1.h
+llvm_stdlib_4.h
+llvm_stdlib_64.h
 )
 target_include_directories(s2l
   PRIVATE

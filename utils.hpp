@@ -15,6 +15,7 @@
     }                                                                          \
   }
 #define ASSERT_DEBUG(x) ASSERT_ALWAYS(x)
+#define NOTNULL(x) ASSERT_ALWAYS((x) != NULL)
 
 template <typename F> struct __Defer__ {
   F f;
