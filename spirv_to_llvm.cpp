@@ -298,6 +298,12 @@ struct Spirv_Builder {
   // Offsets for private variables
   std::map<uint32_t, uint32_t> private_offsets;
   uint32_t private_storage_size = 0;
+  // Offsets for input variables
+  std::vector<uint32_t> input_offsets;
+  uint32_t input_storage_size = 0;
+  // Offsets for ouput variables
+  std::vector<uint32_t> output_offsets;
+  uint32_t output_storage_size = 0;
   // Lifetime must be long enough
   uint32_t const *code;
   size_t code_size;
@@ -825,11 +831,12 @@ struct Spirv_Builder {
 
           ASSERT_ALWAYS(location >= 0);
           ito(subgroup_size) {
-            llvm::Value *pc_ptr = llvm_builder->CreateCall(
-                get_output_ptr,
-                {llvm_get_constant_i32(i), llvm_get_constant_i32(location)});
+            llvm::Value *pc_ptr = llvm_builder->CreateCall(get_output_ptr);
+            llvm::Value *offset = llvm_builder->CreateGEP(
+                pc_ptr, llvm_get_constant_i32(i * output_storage_size +
+                                              output_offsets[location]));
             llvm_values_per_lane[i][var.id] = llvm_builder->CreateBitCast(
-                pc_ptr, llvm_type, get_spv_name(var.id));
+                offset, llvm_type, get_spv_name(var.id));
           }
 
           break;
@@ -880,11 +887,12 @@ struct Spirv_Builder {
                   .param1;
           ASSERT_ALWAYS(location >= 0);
           ito(subgroup_size) {
-            llvm::Value *pc_ptr = llvm_builder->CreateCall(
-                get_input_ptr,
-                {llvm_get_constant_i32(i), llvm_get_constant_i32(location)});
+            llvm::Value *pc_ptr = llvm_builder->CreateCall(get_input_ptr);
+            llvm::Value *offset = llvm_builder->CreateGEP(
+                pc_ptr, llvm_get_constant_i32(i * input_storage_size +
+                                              input_offsets[location]));
             llvm::Value *llvm_value = llvm_builder->CreateBitCast(
-                pc_ptr, llvm_type, get_spv_name(var.id));
+                offset, llvm_type, get_spv_name(var.id));
             llvm_values_per_lane[i][var.id] = llvm_value;
           }
 
@@ -2140,6 +2148,21 @@ struct Spirv_Builder {
           c, llvm::ConstantInt::get(c, llvm::APInt(32, private_storage_size)),
           bb);
     }
+    // TODO(aschrein): investigate why LLVM removes code after tail calls in
+    // this module.
+    // Disable tail call crap
+    {
+      for (auto &fun : module->functions()) {
+        for (auto &bb : fun) {
+          for (auto &inst : bb) {
+            llvm::CallInst *call = llvm::dyn_cast<llvm::CallInst>(&inst);
+            if (call != NULL) {
+              call->setTailCallKind(llvm::CallInst::TailCallKind::TCK_NoTail);
+            }
+          }
+        }
+      }
+    }
     std::string str;
     llvm::raw_string_ostream os(str);
     str.clear();
@@ -3105,6 +3128,11 @@ struct Spirv_Builder {
     for (auto &item : decl_types) {
       decl_types_table[item.first] = item.second;
     }
+    auto get_pointee_size = [&](uint32_t ptr_type_id) {
+      ASSERT_ALWAYS(decl_types_table[ptr_type_id] == DeclTy::PtrTy);
+      PtrTy ptr_type = ptr_types[ptr_type_id];
+      return get_size(ptr_type.target_id);
+    };
     for (auto &item : decl_types) {
       uint32_t type_id = item.first;
       switch (item.second) {
@@ -3127,8 +3155,8 @@ struct Spirv_Builder {
         break;
       }
       case DeclTy::Function:
-      case DeclTy::Variable:
       case DeclTy::Constant:
+      case DeclTy::Variable:
       case DeclTy::ConstantComposite:
         break;
       case DeclTy::ImageTy:
@@ -3139,6 +3167,65 @@ struct Spirv_Builder {
       default:
         type_sizes[type_id] = get_size(type_id);
       }
+    }
+    // Calculate the layout of the input and ouput data needed for optimal work
+    // of the shader
+    {
+      std::vector<uint32_t> inputs;
+      std::vector<uint32_t> outputs;
+      uint32_t max_input_location = 0;
+      uint32_t max_output_location = 0;
+      for (auto &item : decl_types) {
+        if (item.second == DeclTy::Variable) {
+          Variable var = variables[item.first];
+          ASSERT_ALWAYS(var.id > 0);
+          if (var.storage == spv::StorageClass::StorageClassInput) {
+            uint32_t location =
+                find_decoration(spv::Decoration::DecorationLocation, var.id)
+                    .param1;
+            if (inputs.size() <= location) {
+              inputs.resize(location + 1);
+            }
+            inputs[location] = var.id;
+            max_input_location = std::max(max_input_location, location);
+          } else if (var.storage == spv::StorageClass::StorageClassOutput) {
+            uint32_t location =
+                find_decoration(spv::Decoration::DecorationLocation, var.id)
+                    .param1;
+            if (outputs.size() <= location) {
+              outputs.resize(location + 1);
+            }
+            outputs[location] = var.id;
+            max_output_location = std::max(max_output_location, location);
+          }
+        }
+      }
+      uint32_t input_offset = 0;
+      uint32_t output_offset = 0;
+      input_offsets.resize(max_input_location + 1);
+      output_offsets.resize(max_output_location + 1);
+      for (uint32_t id : inputs) {
+        if (id > 0) {
+          Variable var = variables[id];
+          uint32_t location =
+              find_decoration(spv::Decoration::DecorationLocation, var.id)
+                  .param1;
+          input_offsets[location] = input_offset;
+          input_offset += get_pointee_size(var.type_id);
+        }
+      }
+      for (uint32_t id : outputs) {
+        if (id > 0) {
+          Variable var = variables[id];
+          uint32_t location =
+              find_decoration(spv::Decoration::DecorationLocation, var.id)
+                  .param1;
+          output_offsets[location] = output_offset;
+          output_offset += get_pointee_size(var.type_id);
+        }
+      }
+      output_storage_size = output_offset;
+      input_storage_size = input_offset;
     }
     for (auto &item : global_variables) {
       Variable var = variables[item];

@@ -16,34 +16,34 @@ declare void @spv_dummy_combined_image_t_use(%combined_image_t )
 declare void @spv_image_read_f4(%image_t *%cimg, <2 x i32> *%in_coord, <4 x float> *%out_data)
 declare void @spv_image_write_f4(%image_t *%cimg, <2 x i32> *%in_coord, <4 x float> *%in_data)
 
-declare i8 *@get_push_constant_ptr() #1
-declare i8 *@get_uniform_ptr(i32 %set, i32 %binding) #1
-declare i8 *@get_uniform_const_ptr(i32 %set, i32 %binding) #1
-declare i8 *@get_storage_ptr(i32 %set, i32 %binding) #1
-declare i8 *@get_input_ptr(i32 %lane_id, i32 %id) #1
-declare i8 *@get_output_ptr(i32 %lane_id, i32 %id) #1
-declare i8 *@get_private_ptr(i32 %lane_id) #1
+declare i8 *@get_push_constant_ptr() #0
+declare i8 *@get_uniform_ptr(i32 %set, i32 %binding) #0
+declare i8 *@get_uniform_const_ptr(i32 %set, i32 %binding) #0
+declare i8 *@get_storage_ptr(i32 %set, i32 %binding) #0
+declare i8 *@get_input_ptr() #0
+declare i8 *@get_output_ptr() #0
+declare i8 *@get_private_ptr() #0
 
 declare void @kill(%mask_t %mask)
 declare <4 x float> @dummy_sample()
 
-declare <2 x float> @normalize_f2(<2 x float> *%in) #1
-declare <3 x float> @normalize_f3(<3 x float> *%in) #1
-declare <4 x float> @normalize_f4(<4 x float> *%in) #1
+declare <2 x float> @normalize_f2(<2 x float> *%in) #0
+declare <3 x float> @normalize_f3(<3 x float> *%in) #0
+declare <4 x float> @normalize_f4(<4 x float> *%in) #0
 
-declare float @spv_dot_f2(<2 x float> *%a, <2 x float> *%b) #1
-declare float @spv_dot_f3(<3 x float> *%a, <3 x float> *%b) #1
-declare float @spv_dot_f4(<4 x float> *%a, <4 x float> *%b) #1
+declare float @spv_dot_f2(<2 x float> *%a, <2 x float> *%b) #0
+declare float @spv_dot_f3(<3 x float> *%a, <3 x float> *%b) #0
+declare float @spv_dot_f4(<4 x float> *%a, <4 x float> *%b) #0
 
-declare float @length_f2(<2 x float> *%in) #1
-declare float @length_f3(<3 x float> *%in) #1
-declare float @length_f4(<4 x float> *%in) #1
+declare float @length_f2(<2 x float> *%in) #0
+declare float @length_f3(<3 x float> *%in) #0
+declare float @length_f4(<4 x float> *%in) #0
 
-declare void @spv_get_global_invocation_id(i32 %lane_id, <3 x i32> *%out) #1
-declare void @spv_get_work_group_size(<3 x i32> *%out) #1
+declare void @spv_get_global_invocation_id(i32 %lane_id, <3 x i32> *%out) #0
+declare void @spv_get_work_group_size(<3 x i32> *%out) #0
 
-declare float @spv_sqrt(float %in) #1
+declare float @spv_sqrt(float %in) #0
 
-declare void @spv_on_exit() #1
+declare void @spv_on_exit() #0
 
-attributes #1 = { nounwind readnone speculatable }
+attributes #0 = { nounwind readnone speculatable }
