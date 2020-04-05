@@ -57,8 +57,8 @@ template <typename T> struct std::vector<T> copy(std::vector<T> const &in) {
   return in;
 }
 
-template <typename K, typename V>
-bool contains(std::map<K, V> const &in, K const &key) {
+template <typename M, typename K>
+bool contains(M const &in, K const &key) {
   return in.find(key) != in.end();
 }
 
@@ -341,6 +341,7 @@ struct Spirv_Builder {
     auto &c = *context;
     llvm::SMDiagnostic error;
     llvm::Module *module = NULL;
+    // Load the stdlib for a given subgroup size
     switch (subgroup_size) {
     case 1: {
       auto mbuf = llvm::MemoryBuffer::getMemBuffer(
@@ -367,10 +368,16 @@ struct Spirv_Builder {
       UNIMPLEMENTED;
     };
     ASSERT_ALWAYS(module);
+    defer(delete module; delete context;);
+
     llvm::install_fatal_error_handler(&llvm_fatal);
+    auto llvm_get_constant_i32 = [&c](uint32_t a) {
+      return llvm::ConstantInt::get(llvm::IntegerType::getInt32Ty(c), a);
+    };
 
     const uint32_t *pCode = this->code;
-    const uint32_t idbound = pCode[3];
+    // The maximal number of IDs in this module
+    const uint32_t ID_bound = pCode[3];
     auto get_spv_name = [this](uint32_t id) -> std::string {
       if (names.find(id) == names.end()) {
         names[id] = "spv__" + std::to_string(id);
@@ -451,22 +458,22 @@ struct Spirv_Builder {
     // So in LLVM IR we need to manually insert paddings
     std::map<llvm::Type *, std::vector<uint32_t>> member_reloc;
     // Global type table
-    std::vector<llvm::Type *> llvm_types(idbound);
+    std::vector<llvm::Type *> llvm_types(ID_bound);
     // Global value table (constants and global values)
     // Each function creates a copy that inherits the global
     // table
-    std::vector<llvm::Value *> llvm_values(idbound);
+    std::vector<llvm::Value *> llvm_global_values(ID_bound);
 
-    auto wave_local_t = [&](llvm::Type *ty) {
-      return llvm::ArrayType::get(ty, subgroup_size);
-    };
+    //    auto wave_local_t = [&](llvm::Type *ty) {
+    //      return llvm::ArrayType::get(ty, subgroup_size);
+    //    };
 
     // Map spirv types to llvm types
     char name_buf[0x100];
     for (auto &item : this->decl_types) {
       ASSERT_ALWAYS(llvm_types[item.first] == NULL &&
                     "Types must have unique ids");
-      ASSERT_ALWAYS(llvm_values[item.first] == NULL &&
+      ASSERT_ALWAYS(llvm_global_values[item.first] == NULL &&
                     "Values must have unique ids");
 #define ASSERT_HAS(table) ASSERT_ALWAYS(table.find(item.first) != table.end());
       // Skip this declaration in this pass
@@ -494,7 +501,7 @@ struct Spirv_Builder {
         llvm::FunctionType *fun_type =
             llvm::dyn_cast<llvm::FunctionType>(llvm_types[fun.function_type]);
         ASSERT_ALWAYS(fun_type != NULL && "Function type must be defined");
-        llvm_values[fun.id] =
+        llvm_global_values[fun.id] =
             llvm::Function::Create(fun_type, llvm::GlobalValue::ExternalLinkage,
                                    get_spv_name(fun.id), module);
         break;
@@ -513,7 +520,7 @@ struct Spirv_Builder {
         ArrayTy type = array_types.find(item.first)->second;
         llvm::Type *elem_t = llvm_types[type.member_id];
         ASSERT_ALWAYS(elem_t != NULL && "Element type must be defined");
-        llvm::Value *width_value = llvm_values[type.width_id];
+        llvm::Value *width_value = llvm_global_values[type.width_id];
         ASSERT_ALWAYS(width_value != NULL && "Array width must be defined");
         llvm::ConstantInt *constant =
             llvm::dyn_cast<llvm::ConstantInt>(width_value);
@@ -541,10 +548,10 @@ struct Spirv_Builder {
           UNIMPLEMENTED;
         }
         if (type->isFloatTy())
-          llvm_values[c.id] =
+          llvm_global_values[c.id] =
               llvm::ConstantFP::get(type, llvm::APFloat(c.f32_val));
         else {
-          llvm_values[c.id] = llvm::ConstantInt::get(type, c.i32_val);
+          llvm_global_values[c.id] = llvm::ConstantInt::get(type, c.i32_val);
         }
         break;
       }
@@ -555,12 +562,12 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(type != NULL && "Constant type must be defined");
         llvm::SmallVector<llvm::Constant *, 4> llvm_elems;
         ito(c.components.size()) {
-          llvm::Value *val = llvm_values[c.components[i]];
+          llvm::Value *val = llvm_global_values[c.components[i]];
           llvm::Constant *cnst = llvm::dyn_cast<llvm::Constant>(val);
           ASSERT_ALWAYS(cnst != NULL);
           llvm_elems.push_back(cnst);
         }
-        llvm_values[c.id] = llvm::ConstantVector::get(llvm_elems);
+        llvm_global_values[c.id] = llvm::ConstantVector::get(llvm_elems);
         break;
       }
       case DeclTy::Variable: {
@@ -693,14 +700,13 @@ struct Spirv_Builder {
       }
       if (skip)
         continue;
-      ASSERT_ALWAYS(
-          (llvm_values[item.first] != NULL || llvm_types[item.first] != NULL) &&
-          "eh there must be a type or value at the end!");
+      ASSERT_ALWAYS((llvm_global_values[item.first] != NULL ||
+                     llvm_types[item.first] != NULL) &&
+                    "eh there must be a type or value at the end!");
     }
 
     // Second pass:
     // Emit instructions
-    auto &llvm_values_copy = llvm_values;
     for (auto &item : instructions) {
       // Control flow specific tracking
       struct BranchCond {
@@ -716,20 +722,26 @@ struct Spirv_Builder {
       int32_t cur_continue_id = -1;
       std::vector<BranchCond> deferred_branches;
       std::map<uint32_t, llvm::BasicBlock *> llvm_labels;
-      std::set<llvm::Value *> uniforms;
       ///////////////////////////////////////////////
       uint32_t func_id = item.first;
-      NOTNULL(llvm_values[func_id]);
+      NOTNULL(llvm_global_values[func_id]);
       llvm::Function *cur_fun =
-          llvm::dyn_cast<llvm::Function>(llvm_values[func_id]);
+          llvm::dyn_cast<llvm::Function>(llvm_global_values[func_id]);
       NOTNULL(cur_fun);
+      // @llvm/allocas
       llvm::BasicBlock *cur_bb =
           llvm::BasicBlock::Create(c, "allocas", cur_fun, NULL);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
-      // @allocas
-      // Make a local copy of llvm_values to make global->local shadows
-      auto llvm_values = copy(llvm_values_copy);
+
+      // TODO(aschrein) maybe do something more optimal?
+      // Each lane has it's own value table(quick and dirty way but will help me
+      // advance)
+      std::vector<std::vector<llvm::Value *>> llvm_values_per_lane(
+          subgroup_size);
+      ito(subgroup_size) llvm_values_per_lane[i].resize(ID_bound);
+
+      // @llvm/local_variables
       auto &locals = local_variables[func_id];
       for (auto &var_id : locals) {
         ASSERT_ALWAYS(variables.find(var_id) != variables.end());
@@ -744,35 +756,40 @@ struct Spirv_Builder {
             llvm::dyn_cast<llvm::PointerType>(llvm_type);
         NOTNULL(ptr_type);
 
-        llvm::Type *pointee_type = wave_local_t(ptr_type->getElementType());
-
-        llvm::Value *llvm_value = llvm_builder->CreateAlloca(
-            pointee_type, 0, NULL, get_spv_name(var.id));
+        llvm::Type *pointee_type = ptr_type->getElementType();
+        ito(subgroup_size) {
+          llvm::Value *llvm_value = llvm_builder->CreateAlloca(
+              pointee_type, 0, NULL, get_spv_name(var.id));
+          llvm_values_per_lane[i][var.id] = llvm_value;
+        }
         if (var.init_id != 0) {
           UNIMPLEMENTED;
         }
-        llvm_values[var.id] = llvm_value;
       }
 
       // Make shadow variables for global state(push_constants, uniforms,
       // samplers etc)
+      // @llvm/global_variables
       for (auto &var_id : global_variables) {
         ASSERT_ALWAYS(variables.find(var_id) != variables.end());
         Variable var = variables.find(var_id)->second;
         ASSERT_ALWAYS(var.storage != spv::StorageClass::StorageClassFunction);
         llvm::Type *llvm_type = llvm_types[var.type_id];
         ASSERT_ALWAYS(llvm_type != NULL);
-        llvm::Value *llvm_value = NULL;
 
         switch (var.storage) {
         case spv::StorageClass::StorageClassPrivate: {
-          llvm::Value *pc_ptr = llvm_builder->CreateCall(get_private_ptr);
-          ASSERT_ALWAYS(contains(private_offsets, var_id));
-          uint32_t offset = private_offsets[var_id];
-          llvm::Value *pc_ptr_offset = llvm_builder->CreateGEP(
-              pc_ptr, llvm::ConstantInt::get(c, llvm::APInt(32, offset)));
-          llvm_value = llvm_builder->CreateBitCast(pc_ptr_offset, llvm_type,
-                                                   get_spv_name(var.id));
+          ito(subgroup_size) {
+            llvm::Value *pc_ptr = llvm_builder->CreateCall(
+                get_private_ptr, {llvm_get_constant_i32(i)});
+            ASSERT_ALWAYS(contains(private_offsets, var_id));
+            uint32_t offset = private_offsets[var_id];
+            llvm::Value *pc_ptr_offset = llvm_builder->CreateGEP(
+                pc_ptr, llvm::ConstantInt::get(c, llvm::APInt(32, offset)));
+            llvm::Value *llvm_value = llvm_builder->CreateBitCast(
+                pc_ptr_offset, llvm_type, get_spv_name(var.id));
+            llvm_values_per_lane[i][var.id] = llvm_value;
+          }
           break;
         }
         case spv::StorageClass::StorageClassUniformConstant:
@@ -795,8 +812,9 @@ struct Spirv_Builder {
                         : get_storage_ptr,
               {llvm_builder->getInt32((uint32_t)set),
                llvm_builder->getInt32((uint32_t)binding)});
-          llvm_value = llvm_builder->CreateBitCast(pc_ptr, llvm_type,
-                                                   get_spv_name(var.id));
+          llvm::Value *llvm_value = llvm_builder->CreateBitCast(
+              pc_ptr, llvm_type, get_spv_name(var.id));
+          ito(subgroup_size) { llvm_values_per_lane[i][var.id] = llvm_value; }
           break;
         }
         case spv::StorageClass::StorageClassOutput: {
@@ -805,12 +823,14 @@ struct Spirv_Builder {
                   .param1;
 
           ASSERT_ALWAYS(location >= 0);
-          llvm::Value *pc_ptr = llvm_builder->CreateCall(
-              get_output_ptr, {
-                                  llvm_builder->getInt32((uint32_t)location),
-                              });
-          llvm_value = llvm_builder->CreateBitCast(pc_ptr, llvm_type,
-                                                   get_spv_name(var.id));
+          ito(subgroup_size) {
+            llvm::Value *pc_ptr = llvm_builder->CreateCall(
+                get_output_ptr,
+                {llvm_get_constant_i32(i), llvm_get_constant_i32(location)});
+            llvm_values_per_lane[i][var.id] = llvm_builder->CreateBitCast(
+                pc_ptr, llvm_type, get_spv_name(var.id));
+          }
+
           break;
         }
         case spv::StorageClass::StorageClassInput: {
@@ -826,24 +846,26 @@ struct Spirv_Builder {
               // list of the current function
               llvm::VectorType *gid_t =
                   llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
-              llvm_value =
-                  llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
-              llvm_builder->CreateCall(spv_get_global_invocation_id,
-                                       {llvm_value});
-              llvm::Value *addr_cast =
-                  llvm_builder->CreateAddrSpaceCast(llvm_value, llvm_type);
-              llvm_builder->CreateStore(addr_cast, llvm_value);
+              ito(subgroup_size) {
+                llvm::Value *llvm_value = llvm_builder->CreateAlloca(
+                    gid_t, NULL, get_spv_name(var.id));
+                llvm_builder->CreateCall(
+                    spv_get_global_invocation_id,
+                    {llvm_get_constant_i32(i), llvm_value});
+                llvm_values_per_lane[i][var.id] = llvm_value;
+              }
+
               break;
             }
             case spv::BuiltIn::BuiltInWorkgroupSize: {
               llvm::VectorType *gid_t =
                   llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
-              llvm_value =
+              llvm::Value *llvm_value =
                   llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
               llvm_builder->CreateCall(spv_get_work_group_size, {llvm_value});
-              llvm::Value *addr_cast =
-                  llvm_builder->CreateAddrSpaceCast(llvm_value, llvm_type);
-              llvm_builder->CreateStore(addr_cast, llvm_value);
+              ito(subgroup_size) {
+                llvm_values_per_lane[i][var.id] = llvm_value;
+              }
               break;
             }
             default:
@@ -851,22 +873,27 @@ struct Spirv_Builder {
             }
             break;
           }
+          // Pipeline input
           uint32_t location =
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
           ASSERT_ALWAYS(location >= 0);
-          llvm::Value *pc_ptr = llvm_builder->CreateCall(
-              get_input_ptr, {
-                                 llvm_builder->getInt32((uint32_t)location),
-                             });
-          llvm_value = llvm_builder->CreateBitCast(pc_ptr, llvm_type,
-                                                   get_spv_name(var.id));
+          ito(subgroup_size) {
+            llvm::Value *pc_ptr = llvm_builder->CreateCall(
+                get_input_ptr,
+                {llvm_get_constant_i32(i), llvm_get_constant_i32(location)});
+            llvm::Value *llvm_value = llvm_builder->CreateBitCast(
+                pc_ptr, llvm_type, get_spv_name(var.id));
+            llvm_values_per_lane[i][var.id] = llvm_value;
+          }
+
           break;
         }
         case spv::StorageClass::StorageClassPushConstant: {
           llvm::Value *pc_ptr = llvm_builder->CreateCall(get_push_constant_ptr);
-          llvm_value = llvm_builder->CreateBitCast(pc_ptr, llvm_type,
-                                                   get_spv_name(var.id));
+          llvm::Value *llvm_value = llvm_builder->CreateBitCast(
+              pc_ptr, llvm_type, get_spv_name(var.id));
+          ito(subgroup_size) { llvm_values_per_lane[i][var.id] = llvm_value; }
           break;
         }
         default:
@@ -876,10 +903,27 @@ struct Spirv_Builder {
         if (var.init_id != 0) {
           UNIMPLEMENTED;
         }
-        NOTNULL(llvm_value);
-        uniforms.insert(llvm_value);
-        llvm_values[var.id] = llvm_value;
       }
+      module->dump();
+//      auto get_lane_value = [&](llvm::Value *val, uint32_t lane_id) {
+//        if (contains(uniforms, val))
+//          return val;
+//        // For literal types just return the value
+//        if (val->getType()->isArrayTy() == false &&
+//            val->getType()->isPointerTy() == false)
+//          return val;
+//        if (val->getType()->isArrayTy()) {
+//          ASSERT_ALWAYS(val->getType()->isArrayTy() &&
+//                        val->getType()->getArrayNumElements() == subgroup_size);
+//          return llvm_builder->CreateExtractValue(val, {lane_id});
+//        } else {
+//          llvm::PointerType *ptr_type = llvm::dyn_cast<llvm::PointerType>(val);
+//          NOTNULL(ptr_type);
+
+//          llvm::Type *pointee_type = wave_local_t(ptr_type->getElementType());
+//        }
+//      };
+#if 0
       for (uint32_t const *pCode : item.second) {
         uint16_t WordCount = pCode[0] >> spv::WordCountShift;
         spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
@@ -2001,6 +2045,7 @@ struct Spirv_Builder {
         }
         }
       }
+      // @llvm/finish_function
       for (auto &cb : deferred_branches) {
         llvm::BasicBlock *bb = cb.bb;
         ASSERT_ALWAYS(bb != NULL);
@@ -2036,8 +2081,9 @@ struct Spirv_Builder {
       }
     finish_function:
       continue;
+#endif
     }
-
+    // @llvm/finish_module
     // Make a function that returns the size of private space required by this
     // module
     {
@@ -2051,7 +2097,6 @@ struct Spirv_Builder {
           c, llvm::ConstantInt::get(c, llvm::APInt(32, private_storage_size)),
           bb);
     }
-    // @llvm/print
     std::string str;
     llvm::raw_string_ostream os(str);
     str.clear();
@@ -2073,7 +2118,7 @@ struct Spirv_Builder {
     ASSERT_ALWAYS(pCode[1] <= spv::Version);
 
     const uint32_t generator = pCode[2];
-    const uint32_t idbound = pCode[3];
+    const uint32_t ID_bound = pCode[3];
 
     ASSERT_ALWAYS(pCode[4] == 0);
 
