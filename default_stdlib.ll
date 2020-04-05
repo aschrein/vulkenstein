@@ -3,6 +3,7 @@
 %combined_image_t = type { i32 }
 %image_t = type { i32 }
 %sampler_t = type { i32 }
+%mask_t = type i64
 
 declare void @spv_dummy_sampler_t_use(%sampler_t )
 declare void @spv_dummy_combined_image_t_use(%combined_image_t )
@@ -23,7 +24,7 @@ declare i8 *@get_input_ptr(i32 %lane_id, i32 %id) #1
 declare i8 *@get_output_ptr(i32 %lane_id, i32 %id) #1
 declare i8 *@get_private_ptr(i32 %lane_id) #1
 
-declare void @kill()
+declare void @kill(%mask_t %mask)
 declare <4 x float> @dummy_sample()
 
 declare <2 x float> @normalize_f2(<2 x float> *%in) #1

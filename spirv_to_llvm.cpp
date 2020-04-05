@@ -739,7 +739,8 @@ struct Spirv_Builder {
       // advance)
       std::vector<std::vector<llvm::Value *>> llvm_values_per_lane(
           subgroup_size);
-      ito(subgroup_size) llvm_values_per_lane[i].resize(ID_bound);
+      // Copy global constants into each lane
+      ito(subgroup_size) llvm_values_per_lane[i] = copy(llvm_global_values);
 
       // @llvm/local_variables
       auto &locals = local_variables[func_id];
@@ -904,26 +905,27 @@ struct Spirv_Builder {
           UNIMPLEMENTED;
         }
       }
-      module->dump();
-//      auto get_lane_value = [&](llvm::Value *val, uint32_t lane_id) {
-//        if (contains(uniforms, val))
-//          return val;
-//        // For literal types just return the value
-//        if (val->getType()->isArrayTy() == false &&
-//            val->getType()->isPointerTy() == false)
-//          return val;
-//        if (val->getType()->isArrayTy()) {
-//          ASSERT_ALWAYS(val->getType()->isArrayTy() &&
-//                        val->getType()->getArrayNumElements() == subgroup_size);
-//          return llvm_builder->CreateExtractValue(val, {lane_id});
-//        } else {
-//          llvm::PointerType *ptr_type = llvm::dyn_cast<llvm::PointerType>(val);
-//          NOTNULL(ptr_type);
+      //      auto get_lane_value = [&](llvm::Value *val, uint32_t lane_id) {
+      //        if (contains(uniforms, val))
+      //          return val;
+      //        // For literal types just return the value
+      //        if (val->getType()->isArrayTy() == false &&
+      //            val->getType()->isPointerTy() == false)
+      //          return val;
+      //        if (val->getType()->isArrayTy()) {
+      //          ASSERT_ALWAYS(val->getType()->isArrayTy() &&
+      //                        val->getType()->getArrayNumElements() ==
+      //                        subgroup_size);
+      //          return llvm_builder->CreateExtractValue(val, {lane_id});
+      //        } else {
+      //          llvm::PointerType *ptr_type =
+      //          llvm::dyn_cast<llvm::PointerType>(val); NOTNULL(ptr_type);
 
-//          llvm::Type *pointee_type = wave_local_t(ptr_type->getElementType());
-//        }
-//      };
-#if 0
+      //          llvm::Type *pointee_type =
+      //          wave_local_t(ptr_type->getElementType());
+      //        }
+      //      };
+
       for (uint32_t const *pCode : item.second) {
         uint16_t WordCount = pCode[0] >> spv::WordCountShift;
         spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
@@ -954,73 +956,80 @@ struct Spirv_Builder {
         }
         case spv::Op::OpAccessChain: {
           ASSERT_ALWAYS(cur_bb != NULL);
-          llvm::Value *base = llvm_values[word3];
-          ASSERT_ALWAYS(base != NULL);
+          kto(subgroup_size) {
+            llvm::Value *base = llvm_values_per_lane[k][word3];
+            ASSERT_ALWAYS(base != NULL);
 
-          std::vector<llvm::Value *> indices = {};
+            std::vector<llvm::Value *> indices = {};
 
-          for (uint32_t i = 4; i < WordCount; i++) {
-            llvm::Value *index_val = llvm_values[pCode[i]];
-            ASSERT_ALWAYS(index_val != NULL);
-            indices.push_back(index_val);
-          }
-
-          llvm::Type *result_type = llvm_types[word1];
-          NOTNULL(result_type);
-          llvm::Value *val = base;
-          //
-          ito(indices.size()) {
-            llvm::Value *index_val = indices[i];
-            NOTNULL(index_val);
-            llvm::Type *pointee_type = val->getType()->getPointerElementType();
-            NOTNULL(pointee_type);
-            if (pointee_type->isStructTy()) {
-              llvm::StructType *struct_type =
-                  llvm::dyn_cast<llvm::StructType>(pointee_type);
-              NOTNULL(struct_type);
-              llvm::ConstantInt *integer =
-                  llvm::dyn_cast<llvm::ConstantInt>(index_val);
-              ASSERT_ALWAYS(
-                  integer != NULL &&
-                  "Access chain index must be OpConstant for structures");
-              uint32_t cval = (uint32_t)integer->getLimitedValue();
-              uint32_t struct_member_id = cval;
-              if (contains(member_reloc, pointee_type)) {
-                std::vector<uint32_t> const &reloc_table =
-                    member_reloc[pointee_type];
-                struct_member_id = reloc_table[cval];
-              }
-              llvm::Type *member_type =
-                  struct_type->getElementType(struct_member_id);
-              val = llvm_builder->CreateGEP(
-                  val, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
-                                               (uint32_t)0),
-                        llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
-                                               (uint32_t)struct_member_id)});
-            } else {
-              llvm::Value *gep = llvm_builder->CreateGEP(val, index_val);
-              val = gep;
+            for (uint32_t i = 4; i < WordCount; i++) {
+              llvm::Value *index_val = llvm_values_per_lane[k][pCode[i]];
+              ASSERT_ALWAYS(index_val != NULL);
+              indices.push_back(index_val);
             }
+
+            llvm::Type *result_type = llvm_types[word1];
+            NOTNULL(result_type);
+            llvm::Value *val = base;
+            //
+            ito(indices.size()) {
+              llvm::Value *index_val = indices[i];
+              NOTNULL(index_val);
+              llvm::Type *pointee_type =
+                  val->getType()->getPointerElementType();
+              NOTNULL(pointee_type);
+              if (pointee_type->isStructTy()) {
+                llvm::StructType *struct_type =
+                    llvm::dyn_cast<llvm::StructType>(pointee_type);
+                NOTNULL(struct_type);
+                llvm::ConstantInt *integer =
+                    llvm::dyn_cast<llvm::ConstantInt>(index_val);
+                ASSERT_ALWAYS(
+                    integer != NULL &&
+                    "Access chain index must be OpConstant for structures");
+                uint32_t cval = (uint32_t)integer->getLimitedValue();
+                uint32_t struct_member_id = cval;
+                if (contains(member_reloc, pointee_type)) {
+                  std::vector<uint32_t> const &reloc_table =
+                      member_reloc[pointee_type];
+                  struct_member_id = reloc_table[cval];
+                }
+                llvm::Type *member_type =
+                    struct_type->getElementType(struct_member_id);
+                val = llvm_builder->CreateGEP(
+                    val, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
+                                                 (uint32_t)0),
+                          llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
+                                                 (uint32_t)struct_member_id)});
+              } else {
+                llvm::Value *gep = llvm_builder->CreateGEP(val, index_val);
+                val = gep;
+              }
+            }
+            // SPIRV allows implicit reinterprets of pointers?
+            llvm_values_per_lane[k][word2] =
+                llvm_builder->CreateBitCast(val, result_type);
           }
-          // SPIRV allows implicit reinterprets of pointers?
-          llvm_values[word2] = llvm_builder->CreateBitCast(val, result_type);
-          ;
           break;
         }
         case spv::Op::OpLoad: {
           ASSERT_ALWAYS(cur_bb != NULL);
-          llvm::Value *addr = llvm_values[word3];
-          ASSERT_ALWAYS(addr != NULL);
-          llvm_values[word2] = llvm_builder->CreateLoad(addr);
+          kto(subgroup_size) {
+            llvm::Value *addr = llvm_values_per_lane[k][word3];
+            ASSERT_ALWAYS(addr != NULL);
+            llvm_values_per_lane[k][word2] = llvm_builder->CreateLoad(addr);
+          }
           break;
         }
         case spv::Op::OpStore: {
           ASSERT_ALWAYS(cur_bb != NULL);
-          llvm::Value *addr = llvm_values[word1];
-          ASSERT_ALWAYS(addr != NULL);
-          llvm::Value *val = llvm_values[word2];
-          ASSERT_ALWAYS(val != NULL);
-          llvm_builder->CreateStore(val, addr);
+          kto(subgroup_size) {
+            llvm::Value *addr = llvm_values_per_lane[k][word1];
+            ASSERT_ALWAYS(addr != NULL);
+            llvm::Value *val = llvm_values_per_lane[k][word2];
+            ASSERT_ALWAYS(val != NULL);
+            llvm_builder->CreateStore(val, addr);
+          }
           break;
         }
         // Skip structured control flow instructions for now
@@ -1055,11 +1064,13 @@ struct Spirv_Builder {
           break;
         }
 #define SIMPLE_LLVM_OP(llvm_op)                                                \
-  ASSERT_ALWAYS(llvm_values[word2] == NULL);                                   \
-  ASSERT_ALWAYS(llvm_values[word3] != NULL);                                   \
-  ASSERT_ALWAYS(llvm_values[word4] != NULL);                                   \
-  llvm_values[word2] =                                                         \
-      llvm_builder->llvm_op(llvm_values[word3], llvm_values[word4]);
+  kto(subgroup_size) {                                                         \
+    ASSERT_ALWAYS(llvm_values_per_lane[k][word2] == NULL);                     \
+    ASSERT_ALWAYS(llvm_values_per_lane[k][word3] != NULL);                     \
+    ASSERT_ALWAYS(llvm_values_per_lane[k][word4] != NULL);                     \
+    llvm_values_per_lane[k][word2] = llvm_builder->llvm_op(                    \
+        llvm_values_per_lane[k][word3], llvm_values_per_lane[k][word4]);       \
+  };
         case spv::Op::OpIEqual: {
           SIMPLE_LLVM_OP(CreateICmpEQ);
           break;
@@ -1230,229 +1241,249 @@ struct Spirv_Builder {
         case spv::Op::OpNot: {
           UNIMPLEMENTED_(get_cstr(opcode));
         }
+#undef SIMPLE_LLVM_OP
         case spv::Op::OpKill: {
-          llvm_builder->CreateCall(kill);
+          llvm_builder->CreateCall(kill, {llvm_get_constant_i32((uint32_t)~0)});
           break;
         }
         case spv::Op::OpVectorTimesScalar: {
-          llvm::Value *vector = llvm_values[word3];
-          llvm::Value *scalar = llvm_values[word4];
-          ASSERT_ALWAYS(vector != NULL && scalar != NULL);
-          llvm::VectorType *vtype =
-              llvm::dyn_cast<llvm::VectorType>(vector->getType());
-          ASSERT_ALWAYS(vtype != NULL);
-          llvm::Value *splat = llvm_builder->CreateVectorSplat(
-              vtype->getVectorNumElements(), scalar);
-          llvm_values[word2] = llvm_builder->CreateFMul(vector, splat);
+          kto(subgroup_size) {
+            llvm::Value *vector = llvm_values_per_lane[k][word3];
+            llvm::Value *scalar = llvm_values_per_lane[k][word4];
+            ASSERT_ALWAYS(vector != NULL && scalar != NULL);
+            llvm::VectorType *vtype =
+                llvm::dyn_cast<llvm::VectorType>(vector->getType());
+            ASSERT_ALWAYS(vtype != NULL);
+            llvm::Value *splat = llvm_builder->CreateVectorSplat(
+                vtype->getVectorNumElements(), scalar);
+            llvm_values_per_lane[k][word2] =
+                llvm_builder->CreateFMul(vector, splat);
+          }
           break;
         }
         case spv::Op::OpCompositeExtract: {
-          llvm::Value *src = llvm_values[word3];
-          llvm::Type *src_type = src->getType();
-          if (src_type->isArrayTy()) {
-            UNIMPLEMENTED;
-          } else if (src_type->isVectorTy()) {
-            llvm_values[word2] = llvm_builder->CreateExtractElement(src, word4);
-          } else {
-            UNIMPLEMENTED;
+          kto(subgroup_size) {
+            llvm::Value *src = llvm_values_per_lane[k][word3];
+            llvm::Type *src_type = src->getType();
+            if (src_type->isArrayTy()) {
+              UNIMPLEMENTED;
+            } else if (src_type->isVectorTy()) {
+              llvm_values_per_lane[k][word2] =
+                  llvm_builder->CreateExtractElement(src, word4);
+            } else {
+              UNIMPLEMENTED;
+            }
           }
           break;
         }
         case spv::Op::OpCompositeConstruct: {
-          llvm::Type *dst_type = llvm_types[word1];
-          ASSERT_ALWAYS(dst_type != NULL);
-          if (dst_type->isVectorTy()) {
-            llvm::Value *undef = llvm::UndefValue::get(dst_type);
-            llvm::VectorType *vtype =
-                llvm::dyn_cast<llvm::VectorType>(dst_type);
-            ASSERT_ALWAYS(vtype != NULL);
-            llvm::Value *final_val = undef;
-            ito(vtype->getVectorNumElements()) {
-              llvm::Value *src = llvm_values[pCode[3 + i]];
-              ASSERT_ALWAYS(src != NULL);
-              final_val = llvm_builder->CreateInsertElement(final_val, src, i);
+          kto(subgroup_size) {
+            llvm::Type *dst_type = llvm_types[word1];
+            ASSERT_ALWAYS(dst_type != NULL);
+            if (dst_type->isVectorTy()) {
+              llvm::Value *undef = llvm::UndefValue::get(dst_type);
+              llvm::VectorType *vtype =
+                  llvm::dyn_cast<llvm::VectorType>(dst_type);
+              ASSERT_ALWAYS(vtype != NULL);
+              llvm::Value *final_val = undef;
+              ito(vtype->getVectorNumElements()) {
+                llvm::Value *src = llvm_values_per_lane[k][pCode[3 + i]];
+                ASSERT_ALWAYS(src != NULL);
+                final_val =
+                    llvm_builder->CreateInsertElement(final_val, src, i);
+              }
+              llvm_values_per_lane[k][word2] = final_val;
+            } else {
+              UNIMPLEMENTED;
             }
-            llvm_values[word2] = final_val;
-          } else {
-            UNIMPLEMENTED;
           }
-
           break;
         }
         case spv::Op::OpVectorShuffle: {
-          llvm::Value *op1 = llvm_values[word3];
-          llvm::Value *op2 = llvm_values[word4];
-          ASSERT_ALWAYS(op1 != NULL && op2 != NULL);
-          llvm::VectorType *vtype1 =
-              llvm::dyn_cast<llvm::VectorType>(op1->getType());
-          llvm::VectorType *vtype2 =
-              llvm::dyn_cast<llvm::VectorType>(op2->getType());
-          ASSERT_ALWAYS(vtype1 != NULL && vtype2 != NULL);
-          std::vector<uint32_t> indices;
-          for (uint16_t i = 5; i < WordCount; i++)
-            indices.push_back(pCode[i]);
-          // In LLVM shufflevector must have both operands of the same type
-          // In SPIRV operands may be of different types
-          // Handle the different size case by creating one big vector and
-          // construct the final vector by extracting elements from it
-          if (vtype1->getVectorNumElements() !=
-              vtype2->getVectorNumElements()) {
-            uint32_t total_width =
-                vtype1->getVectorNumElements() + vtype2->getVectorNumElements();
-            llvm::VectorType *new_vtype = llvm::VectorType::get(
-                vtype1->getVectorElementType(), total_width);
-            // Create a dummy super vector and appedn op1 and op2 elements to it
-            llvm::Value *prev = llvm::UndefValue::get(new_vtype);
-            ito(vtype1->getVectorNumElements()) {
-              llvm::Value *extr = llvm_builder->CreateExtractElement(op1, i);
-              prev = llvm_builder->CreateInsertElement(prev, extr, i);
+          kto(subgroup_size) {
+            llvm::Value *op1 = llvm_values_per_lane[k][word3];
+            llvm::Value *op2 = llvm_values_per_lane[k][word4];
+            ASSERT_ALWAYS(op1 != NULL && op2 != NULL);
+            llvm::VectorType *vtype1 =
+                llvm::dyn_cast<llvm::VectorType>(op1->getType());
+            llvm::VectorType *vtype2 =
+                llvm::dyn_cast<llvm::VectorType>(op2->getType());
+            ASSERT_ALWAYS(vtype1 != NULL && vtype2 != NULL);
+            std::vector<uint32_t> indices;
+            for (uint16_t i = 5; i < WordCount; i++)
+              indices.push_back(pCode[i]);
+            // In LLVM shufflevector must have both operands of the same type
+            // In SPIRV operands may be of different types
+            // Handle the different size case by creating one big vector and
+            // construct the final vector by extracting elements from it
+            if (vtype1->getVectorNumElements() !=
+                vtype2->getVectorNumElements()) {
+              uint32_t total_width = vtype1->getVectorNumElements() +
+                                     vtype2->getVectorNumElements();
+              llvm::VectorType *new_vtype = llvm::VectorType::get(
+                  vtype1->getVectorElementType(), total_width);
+              // Create a dummy super vector and appedn op1 and op2 elements to
+              // it
+              llvm::Value *prev = llvm::UndefValue::get(new_vtype);
+              ito(vtype1->getVectorNumElements()) {
+                llvm::Value *extr = llvm_builder->CreateExtractElement(op1, i);
+                prev = llvm_builder->CreateInsertElement(prev, extr, i);
+              }
+              uint32_t offset = vtype1->getVectorNumElements();
+              ito(vtype2->getVectorNumElements()) {
+                llvm::Value *extr = llvm_builder->CreateExtractElement(op2, i);
+                prev =
+                    llvm_builder->CreateInsertElement(prev, extr, i + offset);
+              }
+              // Now we need to emit a chain of extact elements to make up the
+              // result
+              llvm::VectorType *res_type = llvm::VectorType::get(
+                  vtype1->getVectorElementType(), (uint32_t)indices.size());
+              llvm::Value *res = llvm::UndefValue::get(res_type);
+              ito(indices.size()) {
+                llvm::Value *elem =
+                    llvm_builder->CreateExtractElement(prev, indices[i]);
+                res = llvm_builder->CreateInsertElement(res, elem, i);
+              }
+              llvm_values_per_lane[k][word2] = res;
+            } else {
+              ASSERT_ALWAYS(llvm_builder && cur_bb != NULL);
+              llvm_values_per_lane[k][word2] =
+                  llvm_builder->CreateShuffleVector(op1, op2, indices);
             }
-            uint32_t offset = vtype1->getVectorNumElements();
-            ito(vtype2->getVectorNumElements()) {
-              llvm::Value *extr = llvm_builder->CreateExtractElement(op2, i);
-              prev = llvm_builder->CreateInsertElement(prev, extr, i + offset);
-            }
-            // Now we need to emit a chain of extact elements to make up the
-            // result
-            llvm::VectorType *res_type = llvm::VectorType::get(
-                vtype1->getVectorElementType(), (uint32_t)indices.size());
-            llvm::Value *res = llvm::UndefValue::get(res_type);
-            ito(indices.size()) {
-              llvm::Value *elem =
-                  llvm_builder->CreateExtractElement(prev, indices[i]);
-              res = llvm_builder->CreateInsertElement(res, elem, i);
-            }
-            llvm_values[word2] = res;
-          } else {
-            ASSERT_ALWAYS(llvm_builder && cur_bb != NULL);
-            llvm_values[word2] =
-                llvm_builder->CreateShuffleVector(op1, op2, indices);
           }
           break;
         }
         case spv::Op::OpDot: {
-          uint32_t res_id = word2;
-          uint32_t op1_id = word3;
-          uint32_t op2_id = word4;
-          llvm::Value *op1_val = llvm_values[op1_id];
-          ASSERT_ALWAYS(op1_val != NULL);
-          llvm::VectorType *op1_vtype =
-              llvm::dyn_cast<llvm::VectorType>(op1_val->getType());
-          ASSERT_ALWAYS(op1_vtype != NULL);
-          llvm::Value *op2_val = llvm_values[op2_id];
-          ASSERT_ALWAYS(op2_val != NULL);
-          llvm::VectorType *op2_vtype =
-              llvm::dyn_cast<llvm::VectorType>(op2_val->getType());
-          ASSERT_ALWAYS(op2_vtype != NULL);
-          ASSERT_ALWAYS(op1_vtype->getVectorNumElements() ==
-                        op2_vtype->getVectorNumElements());
-          llvm::Value *alloca1 = llvm_builder->CreateAlloca(op1_vtype);
-          llvm::Value *alloca2 = llvm_builder->CreateAlloca(op2_vtype);
-          llvm_builder->CreateStore(op1_val, alloca1);
-          llvm_builder->CreateStore(op2_val, alloca2);
-          switch (op1_vtype->getVectorNumElements()) {
-          case 2:
-            llvm_values[res_id] =
-                llvm_builder->CreateCall(spv_dot_f2, {alloca1, alloca2});
-            break;
-          case 3:
-            llvm_values[res_id] =
-                llvm_builder->CreateCall(spv_dot_f3, {alloca1, alloca2});
-            break;
-          case 4:
-            llvm_values[res_id] =
-                llvm_builder->CreateCall(spv_dot_f4, {alloca1, alloca2});
-            break;
-          default:
-            UNIMPLEMENTED;
+          kto(subgroup_size) {
+            uint32_t res_id = word2;
+            uint32_t op1_id = word3;
+            uint32_t op2_id = word4;
+            llvm::Value *op1_val = llvm_values_per_lane[k][op1_id];
+            ASSERT_ALWAYS(op1_val != NULL);
+            llvm::VectorType *op1_vtype =
+                llvm::dyn_cast<llvm::VectorType>(op1_val->getType());
+            ASSERT_ALWAYS(op1_vtype != NULL);
+            llvm::Value *op2_val = llvm_values_per_lane[k][op2_id];
+            ASSERT_ALWAYS(op2_val != NULL);
+            llvm::VectorType *op2_vtype =
+                llvm::dyn_cast<llvm::VectorType>(op2_val->getType());
+            ASSERT_ALWAYS(op2_vtype != NULL);
+            ASSERT_ALWAYS(op1_vtype->getVectorNumElements() ==
+                          op2_vtype->getVectorNumElements());
+            llvm::Value *alloca1 = llvm_builder->CreateAlloca(op1_vtype);
+            llvm::Value *alloca2 = llvm_builder->CreateAlloca(op2_vtype);
+            llvm_builder->CreateStore(op1_val, alloca1);
+            llvm_builder->CreateStore(op2_val, alloca2);
+            switch (op1_vtype->getVectorNumElements()) {
+            case 2:
+              llvm_values_per_lane[k][res_id] =
+                  llvm_builder->CreateCall(spv_dot_f2, {alloca1, alloca2});
+              break;
+            case 3:
+              llvm_values_per_lane[k][res_id] =
+                  llvm_builder->CreateCall(spv_dot_f3, {alloca1, alloca2});
+              break;
+            case 4:
+              llvm_values_per_lane[k][res_id] =
+                  llvm_builder->CreateCall(spv_dot_f4, {alloca1, alloca2});
+              break;
+            default:
+              UNIMPLEMENTED;
+            }
           }
           break;
         }
         case spv::Op::OpExtInst: {
           spv::GLSLstd450 inst = (spv::GLSLstd450)pCode[4];
-#define ARG(n) (llvm_values[pCode[5 + n]])
           switch (inst) {
           case spv::GLSLstd450::GLSLstd450Normalize: {
             ASSERT_ALWAYS(WordCount == 6);
-            llvm::Value *arg = ARG(0);
-            ASSERT_ALWAYS(arg != NULL);
-            llvm::VectorType *vtype =
-                llvm::dyn_cast<llvm::VectorType>(arg->getType());
-            ASSERT_ALWAYS(vtype != NULL);
-            llvm::Value *alloca = llvm_builder->CreateAlloca(vtype);
-            llvm_builder->CreateStore(arg, alloca);
-            uint32_t width = vtype->getVectorNumElements();
-            switch (width) {
-            case 2:
-              llvm_values[word2] =
-                  llvm_builder->CreateCall(normalize_f2, {alloca});
-              break;
-            case 3:
-              llvm_values[word2] =
-                  llvm_builder->CreateCall(normalize_f3, {alloca});
-              break;
-            case 4:
-              llvm_values[word2] =
-                  llvm_builder->CreateCall(normalize_f4, {alloca});
-              break;
-            default:
-              UNIMPLEMENTED;
+            kto(subgroup_size) {
+              llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
+              ASSERT_ALWAYS(arg != NULL);
+              llvm::VectorType *vtype =
+                  llvm::dyn_cast<llvm::VectorType>(arg->getType());
+              ASSERT_ALWAYS(vtype != NULL);
+              llvm::Value *alloca = llvm_builder->CreateAlloca(vtype);
+              llvm_builder->CreateStore(arg, alloca);
+              uint32_t width = vtype->getVectorNumElements();
+              switch (width) {
+              case 2:
+                llvm_values_per_lane[k][word2] =
+                    llvm_builder->CreateCall(normalize_f2, {alloca});
+                break;
+              case 3:
+                llvm_values_per_lane[k][word2] =
+                    llvm_builder->CreateCall(normalize_f3, {alloca});
+                break;
+              case 4:
+                llvm_values_per_lane[k][word2] =
+                    llvm_builder->CreateCall(normalize_f4, {alloca});
+                break;
+              default:
+                UNIMPLEMENTED;
+              }
             }
-
             break;
           }
           case spv::GLSLstd450::GLSLstd450Sqrt: {
             ASSERT_ALWAYS(WordCount == 6);
-            llvm::Value *arg = ARG(0);
-            ASSERT_ALWAYS(arg != NULL);
-            llvm::VectorType *vtype =
-                llvm::dyn_cast<llvm::VectorType>(arg->getType());
-            if (vtype != NULL) {
+            kto(subgroup_size) {
+              llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
+              ASSERT_ALWAYS(arg != NULL);
+              llvm::VectorType *vtype =
+                  llvm::dyn_cast<llvm::VectorType>(arg->getType());
+              if (vtype != NULL) {
 
-              ASSERT_ALWAYS(vtype != NULL);
-              uint32_t width = vtype->getVectorNumElements();
-              llvm::Value *prev = arg;
-              ito(width) {
-                llvm::Value *elem = llvm_builder->CreateExtractElement(arg, i);
-                llvm::Value *sqrt = llvm_builder->CreateCall(spv_sqrt, {elem});
-                prev = llvm_builder->CreateInsertElement(prev, sqrt, i);
+                ASSERT_ALWAYS(vtype != NULL);
+                uint32_t width = vtype->getVectorNumElements();
+                llvm::Value *prev = arg;
+                ito(width) {
+                  llvm::Value *elem =
+                      llvm_builder->CreateExtractElement(arg, i);
+                  llvm::Value *sqrt =
+                      llvm_builder->CreateCall(spv_sqrt, {elem});
+                  prev = llvm_builder->CreateInsertElement(prev, sqrt, i);
+                }
+                llvm_values_per_lane[k][word2] = prev;
+              } else {
+                llvm::Type *type = arg->getType();
+                ASSERT_ALWAYS(type->isFloatTy());
+                llvm_values_per_lane[k][word2] =
+                    llvm_builder->CreateCall(spv_sqrt, {arg});
               }
-              llvm_values[word2] = prev;
-            } else {
-              llvm::Type *type = arg->getType();
-              ASSERT_ALWAYS(type->isFloatTy());
-              llvm_values[word2] = llvm_builder->CreateCall(spv_sqrt, {arg});
             }
-
             break;
           }
           case spv::GLSLstd450::GLSLstd450Length: {
             ASSERT_ALWAYS(WordCount == 6);
-            llvm::Value *arg = ARG(0);
-            ASSERT_ALWAYS(arg != NULL);
-            llvm::VectorType *vtype =
-                llvm::dyn_cast<llvm::VectorType>(arg->getType());
-            ASSERT_ALWAYS(vtype != NULL);
-            llvm::Value *alloca = llvm_builder->CreateAlloca(vtype);
-            llvm_builder->CreateStore(arg, alloca);
-            uint32_t width = vtype->getVectorNumElements();
-            switch (width) {
-            case 2:
-              llvm_values[word2] =
-                  llvm_builder->CreateCall(length_f2, {alloca});
-              break;
-            case 3:
-              llvm_values[word2] =
-                  llvm_builder->CreateCall(length_f3, {alloca});
-              break;
-            case 4:
-              llvm_values[word2] =
-                  llvm_builder->CreateCall(length_f4, {alloca});
-              break;
-            default:
-              UNIMPLEMENTED;
+            kto(subgroup_size) {
+              llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
+              ASSERT_ALWAYS(arg != NULL);
+              llvm::VectorType *vtype =
+                  llvm::dyn_cast<llvm::VectorType>(arg->getType());
+              ASSERT_ALWAYS(vtype != NULL);
+              llvm::Value *alloca = llvm_builder->CreateAlloca(vtype);
+              llvm_builder->CreateStore(arg, alloca);
+              uint32_t width = vtype->getVectorNumElements();
+              switch (width) {
+              case 2:
+                llvm_values_per_lane[k][word2] =
+                    llvm_builder->CreateCall(length_f2, {alloca});
+                break;
+              case 3:
+                llvm_values_per_lane[k][word2] =
+                    llvm_builder->CreateCall(length_f3, {alloca});
+                break;
+              case 4:
+                llvm_values_per_lane[k][word2] =
+                    llvm_builder->CreateCall(length_f4, {alloca});
+                break;
+              default:
+                UNIMPLEMENTED;
+              }
             }
-
             break;
           }
           default:
@@ -1462,19 +1493,21 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpReturnValue: {
-          // Check that this is not an entry as they don't return values
-          // usually, right?
-          ASSERT_ALWAYS(!contains(entries, item.first));
-          uint32_t ret_value_id = word1;
-          llvm::Value *ret_value = llvm_values[ret_value_id];
-          NOTNULL(ret_value);
-          llvm::ReturnInst::Create(c, ret_value, cur_bb);
-          // Terminate current basic block
-          cur_bb = NULL;
-          llvm_builder.release();
-          cur_merge_id = -1;
-          cur_continue_id = -1;
-          break;
+          UNIMPLEMENTED;
+          //          // Check that this is not an entry as they don't return
+          //          values
+          //          // usually, right?
+          //          ASSERT_ALWAYS(!contains(entries, item.first));
+          //          uint32_t ret_value_id = word1;
+          //          llvm::Value *ret_value = llvm_values[ret_value_id];
+          //          NOTNULL(ret_value);
+          //          llvm::ReturnInst::Create(c, ret_value, cur_bb);
+          //          // Terminate current basic block
+          //          cur_bb = NULL;
+          //          llvm_builder.release();
+          //          cur_merge_id = -1;
+          //          cur_continue_id = -1;
+          //          break;
         }
         case spv::Op::OpReturn: {
           NOTNULL(cur_bb);
@@ -1490,14 +1523,17 @@ struct Spirv_Builder {
         }
         case spv::Op::OpBitcast: {
           ASSERT_ALWAYS(WordCount == 4);
-          uint32_t res_type_id = word1;
-          uint32_t res_id = word2;
-          uint32_t src_id = word3;
-          llvm::Type *res_type = llvm_types[res_type_id];
-          ASSERT_ALWAYS(res_type != NULL);
-          llvm::Value *src = llvm_values[src_id];
-          ASSERT_ALWAYS(src != NULL);
-          llvm_values[res_id] = llvm_builder->CreateBitCast(src, res_type);
+          kto(subgroup_size) {
+            uint32_t res_type_id = word1;
+            uint32_t res_id = word2;
+            uint32_t src_id = word3;
+            llvm::Type *res_type = llvm_types[res_type_id];
+            ASSERT_ALWAYS(res_type != NULL);
+            llvm::Value *src = llvm_values_per_lane[k][src_id];
+            ASSERT_ALWAYS(src != NULL);
+            llvm_values_per_lane[k][res_id] =
+                llvm_builder->CreateBitCast(src, res_type);
+          }
           break;
         }
         case spv::Op::OpImageWrite: {
@@ -1506,21 +1542,23 @@ struct Spirv_Builder {
           uint32_t image_id = word1;
           uint32_t coord_id = word2;
           uint32_t texel_id = word3;
-          llvm::Value *image = llvm_values[image_id];
-          ASSERT_ALWAYS(image != NULL);
-          llvm::Value *coord = llvm_values[coord_id];
-          ASSERT_ALWAYS(coord != NULL);
-          llvm::Value *texel = llvm_values[texel_id];
-          ASSERT_ALWAYS(texel != NULL);
+          kto(subgroup_size) {
+            llvm::Value *image = llvm_values_per_lane[k][image_id];
+            ASSERT_ALWAYS(image != NULL);
+            llvm::Value *coord = llvm_values_per_lane[k][coord_id];
+            ASSERT_ALWAYS(coord != NULL);
+            llvm::Value *texel = llvm_values_per_lane[k][texel_id];
+            ASSERT_ALWAYS(texel != NULL);
 #define STASH_STACK(name, val)                                                 \
   llvm::Value *name = llvm_builder->CreateAlloca(val->getType());              \
   llvm_builder->CreateStore(val, name);
-          STASH_STACK(image_shadow, image);
-          STASH_STACK(coord_shadow, coord);
-          STASH_STACK(texel_shadow, texel);
+            STASH_STACK(image_shadow, image);
+            STASH_STACK(coord_shadow, coord);
+            STASH_STACK(texel_shadow, texel);
 #undef STASH_STACK
-          llvm_builder->CreateCall(spv_image_write_f4,
-                                   {image_shadow, coord_shadow, texel_shadow});
+            llvm_builder->CreateCall(
+                spv_image_write_f4, {image_shadow, coord_shadow, texel_shadow});
+          }
           break;
         }
         case spv::Op::OpImageRead: {
@@ -1530,39 +1568,45 @@ struct Spirv_Builder {
           uint32_t res_id = word2;
           uint32_t image_id = word3;
           uint32_t coord_id = word4;
-          llvm::Type *res_type = llvm_types[res_type_id];
-          ASSERT_ALWAYS(res_type != NULL);
-          llvm::Value *image = llvm_values[image_id];
-          ASSERT_ALWAYS(image != NULL);
-          llvm::Value *coord = llvm_values[coord_id];
-          ASSERT_ALWAYS(coord != NULL);
+          kto(subgroup_size) {
+            llvm::Type *res_type = llvm_types[res_type_id];
+            ASSERT_ALWAYS(res_type != NULL);
+            llvm::Value *image = llvm_values_per_lane[k][image_id];
+            ASSERT_ALWAYS(image != NULL);
+            llvm::Value *coord = llvm_values_per_lane[k][coord_id];
+            ASSERT_ALWAYS(coord != NULL);
 #define STASH_STACK(name, val)                                                 \
   llvm::Value *name = llvm_builder->CreateAlloca(val->getType());              \
   llvm_builder->CreateStore(val, name);
-          STASH_STACK(image_shadow, image);
-          STASH_STACK(coord_shadow, coord);
+            STASH_STACK(image_shadow, image);
+            STASH_STACK(coord_shadow, coord);
 #undef STASH_STACK
-          llvm::Value *res_shadow = llvm_builder->CreateAlloca(res_type);
-          llvm::Value *call = llvm_builder->CreateCall(
-              spv_image_read_f4, {image_shadow, coord_shadow, res_shadow});
-          llvm_values[res_id] = llvm_builder->CreateLoad(res_shadow);
+            llvm::Value *res_shadow = llvm_builder->CreateAlloca(res_type);
+            llvm::Value *call = llvm_builder->CreateCall(
+                spv_image_read_f4, {image_shadow, coord_shadow, res_shadow});
+            llvm_values_per_lane[k][res_id] =
+                llvm_builder->CreateLoad(res_shadow);
+          }
           break;
         }
         case spv::Op::OpFunctionCall: {
           uint32_t fun_id = word3;
           uint32_t res_id = word2;
-          llvm::Value *fun_value = llvm_values[fun_id];
-          NOTNULL(fun_value);
-          llvm::Function *target_fun =
-              llvm::dyn_cast<llvm::Function>(fun_value);
-          NOTNULL(target_fun);
-          llvm::SmallVector<llvm::Value *, 4> args;
-          for (int i = 4; i < WordCount; i++) {
-            llvm::Value *arg = llvm_values[pCode[i]];
-            NOTNULL(arg);
-            args.push_back(arg);
+          kto(subgroup_size) {
+            llvm::Value *fun_value = llvm_values_per_lane[k][fun_id];
+            NOTNULL(fun_value);
+            llvm::Function *target_fun =
+                llvm::dyn_cast<llvm::Function>(fun_value);
+            NOTNULL(target_fun);
+            llvm::SmallVector<llvm::Value *, 4> args;
+            for (int i = 4; i < WordCount; i++) {
+              llvm::Value *arg = llvm_values_per_lane[k][pCode[i]];
+              NOTNULL(arg);
+              args.push_back(arg);
+            }
+            llvm_values_per_lane[k][res_id] =
+                llvm_builder->CreateCall(target_fun, args);
           }
-          llvm_values[res_id] = llvm_builder->CreateCall(target_fun, args);
           break;
         }
         case spv::Op::OpSampledImage:
@@ -2046,42 +2090,41 @@ struct Spirv_Builder {
         }
       }
       // @llvm/finish_function
-      for (auto &cb : deferred_branches) {
-        llvm::BasicBlock *bb = cb.bb;
-        ASSERT_ALWAYS(bb != NULL);
-        uint16_t WordCount = pCode[0] >> spv::WordCountShift;
-        spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
-        uint32_t word1 = pCode[1];
-        uint32_t word2 = WordCount > 2 ? pCode[2] : 0;
-        uint32_t word3 = WordCount > 3 ? pCode[3] : 0;
-        uint32_t word4 = WordCount > 4 ? pCode[4] : 0;
-        uint32_t word5 = WordCount > 5 ? pCode[5] : 0;
-        uint32_t word6 = WordCount > 6 ? pCode[6] : 0;
-        uint32_t word7 = WordCount > 7 ? pCode[7] : 0;
-        uint32_t word8 = WordCount > 8 ? pCode[8] : 0;
-        uint32_t word9 = WordCount > 9 ? pCode[9] : 0;
-        switch (opcode) {
-        case spv::Op::OpBranch: {
-          llvm::BasicBlock *dst = llvm_labels[word1];
-          ASSERT_ALWAYS(dst != NULL);
-          llvm::BranchInst::Create(dst, bb);
-          break;
-        }
-        case spv::Op::OpBranchConditional: {
-          llvm::BasicBlock *dst_true = llvm_labels[word2];
-          llvm::BasicBlock *dst_false = llvm_labels[word3];
-          llvm::Value *cond = llvm_values[word1];
-          ASSERT_ALWAYS(dst_true != NULL && dst_false != NULL && cond != NULL);
-          llvm::BranchInst::Create(dst_true, dst_false, cond, bb);
-          break;
-        }
-        default:
-          UNIMPLEMENTED_(get_cstr(opcode));
-        }
-      }
+      //      for (auto &cb : deferred_branches) {
+      //        llvm::BasicBlock *bb = cb.bb;
+      //        ASSERT_ALWAYS(bb != NULL);
+      //        uint16_t WordCount = pCode[0] >> spv::WordCountShift;
+      //        spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
+      //        uint32_t word1 = pCode[1];
+      //        uint32_t word2 = WordCount > 2 ? pCode[2] : 0;
+      //        uint32_t word3 = WordCount > 3 ? pCode[3] : 0;
+      //        uint32_t word4 = WordCount > 4 ? pCode[4] : 0;
+      //        uint32_t word5 = WordCount > 5 ? pCode[5] : 0;
+      //        uint32_t word6 = WordCount > 6 ? pCode[6] : 0;
+      //        uint32_t word7 = WordCount > 7 ? pCode[7] : 0;
+      //        uint32_t word8 = WordCount > 8 ? pCode[8] : 0;
+      //        uint32_t word9 = WordCount > 9 ? pCode[9] : 0;
+      //        switch (opcode) {
+      //        case spv::Op::OpBranch: {
+      //          llvm::BasicBlock *dst = llvm_labels[word1];
+      //          ASSERT_ALWAYS(dst != NULL);
+      //          llvm::BranchInst::Create(dst, bb);
+      //          break;
+      //        }
+      //        case spv::Op::OpBranchConditional: {
+      //          llvm::BasicBlock *dst_true = llvm_labels[word2];
+      //          llvm::BasicBlock *dst_false = llvm_labels[word3];
+      //          llvm::Value *cond = llvm_values[word1];
+      //          ASSERT_ALWAYS(dst_true != NULL && dst_false != NULL && cond !=
+      //          NULL); llvm::BranchInst::Create(dst_true, dst_false, cond,
+      //          bb); break;
+      //        }
+      //        default:
+      //          UNIMPLEMENTED_(get_cstr(opcode));
+      //        }
+      //      }
     finish_function:
       continue;
-#endif
     }
     // @llvm/finish_module
     // Make a function that returns the size of private space required by this
