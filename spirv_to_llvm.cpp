@@ -64,7 +64,7 @@ bool contains(std::map<K, V> const &in, K const &key) {
 
 #define UNIMPLEMENTED_(s)                                                      \
   {                                                                            \
-    fprintf(stderr, "UNIMPLEMENTED %s: %s:%i\n", s, __FILE__, __LINE__);       \
+    fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);        \
     (void)(*(int *)(void *)(0) = 0);                                           \
     exit(1);                                                                   \
   }
@@ -301,6 +301,7 @@ struct Spirv_Builder {
   // Lifetime must be long enough
   uint32_t const *code;
   size_t code_size;
+
   //////////////////////////////
   //          METHODS         //
   //////////////////////////////
@@ -504,9 +505,7 @@ struct Spirv_Builder {
         PtrTy type = ptr_types.find(item.first)->second;
         llvm::Type *elem_t = llvm_types[type.target_id];
         ASSERT_ALWAYS(elem_t != NULL && "Pointer target type must be defined");
-        // Just map storage class to address space
-        llvm_types[type.id] =
-            llvm::PointerType::get(elem_t, (uint32_t)type.storage_class);
+        llvm_types[type.id] = llvm::PointerType::get(elem_t, 0);
         break;
       }
       case DeclTy::ArrayTy: {
@@ -717,6 +716,7 @@ struct Spirv_Builder {
       int32_t cur_continue_id = -1;
       std::vector<BranchCond> deferred_branches;
       std::map<uint32_t, llvm::BasicBlock *> llvm_labels;
+      std::set<llvm::Value *> uniforms;
       ///////////////////////////////////////////////
       uint32_t func_id = item.first;
       NOTNULL(llvm_values[func_id]);
@@ -737,26 +737,19 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(var.storage == spv::StorageClass::StorageClassFunction);
         llvm::Type *llvm_type = llvm_types[var.type_id];
         NOTNULL(llvm_type);
-        llvm::Value *llvm_value = llvm_builder->CreateAlloca(
-            llvm_type, 0, NULL, get_spv_name(var.id));
+
         // SPIRV declares local variables as pointers so we need to allocate
         // the actual storage for them on the stack
         llvm::PointerType *ptr_type =
             llvm::dyn_cast<llvm::PointerType>(llvm_type);
         NOTNULL(ptr_type);
-        {
-          llvm::Type *pointee_type = wave_local_t(ptr_type->getElementType());
-          llvm::Value *pointee_storage =
-              llvm_builder->CreateAlloca(pointee_type);
-          llvm::Value *addr_cast =
-              llvm_builder->CreateAddrSpaceCast(pointee_storage, llvm_type);
-          llvm_builder->CreateStore(addr_cast, llvm_value);
-        }
+
+        llvm::Type *pointee_type = wave_local_t(ptr_type->getElementType());
+
+        llvm::Value *llvm_value = llvm_builder->CreateAlloca(
+            pointee_type, 0, NULL, get_spv_name(var.id));
         if (var.init_id != 0) {
           UNIMPLEMENTED;
-          //          llvm::Value *init_value = llvm_values[var.init_id];
-          //          ASSERT_ALWAYS(init_value != NULL);
-          //          llvm_builder->CreateStore(init_value, llvm_value);
         }
         llvm_values[var.id] = llvm_value;
       }
@@ -769,8 +762,8 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(var.storage != spv::StorageClass::StorageClassFunction);
         llvm::Type *llvm_type = llvm_types[var.type_id];
         ASSERT_ALWAYS(llvm_type != NULL);
-        llvm::Value *llvm_value = llvm_builder->CreateAlloca(
-            llvm_type, 0, NULL, get_spv_name(var.id));
+        llvm::Value *llvm_value = NULL;
+
         switch (var.storage) {
         case spv::StorageClass::StorageClassPrivate: {
           llvm::Value *pc_ptr = llvm_builder->CreateCall(get_private_ptr);
@@ -778,9 +771,8 @@ struct Spirv_Builder {
           uint32_t offset = private_offsets[var_id];
           llvm::Value *pc_ptr_offset = llvm_builder->CreateGEP(
               pc_ptr, llvm::ConstantInt::get(c, llvm::APInt(32, offset)));
-          llvm::Value *cast =
-              llvm_builder->CreateBitCast(pc_ptr_offset, llvm_type);
-          llvm_builder->CreateStore(cast, llvm_value);
+          llvm_value = llvm_builder->CreateBitCast(pc_ptr_offset, llvm_type,
+                                                   get_spv_name(var.id));
           break;
         }
         case spv::StorageClass::StorageClassUniformConstant:
@@ -803,8 +795,8 @@ struct Spirv_Builder {
                         : get_storage_ptr,
               {llvm_builder->getInt32((uint32_t)set),
                llvm_builder->getInt32((uint32_t)binding)});
-          llvm::Value *cast = llvm_builder->CreateBitCast(pc_ptr, llvm_type);
-          llvm_builder->CreateStore(cast, llvm_value);
+          llvm_value = llvm_builder->CreateBitCast(pc_ptr, llvm_type,
+                                                   get_spv_name(var.id));
           break;
         }
         case spv::StorageClass::StorageClassOutput: {
@@ -817,8 +809,8 @@ struct Spirv_Builder {
               get_output_ptr, {
                                   llvm_builder->getInt32((uint32_t)location),
                               });
-          llvm::Value *cast = llvm_builder->CreateBitCast(pc_ptr, llvm_type);
-          llvm_builder->CreateStore(cast, llvm_value);
+          llvm_value = llvm_builder->CreateBitCast(pc_ptr, llvm_type,
+                                                   get_spv_name(var.id));
           break;
         }
         case spv::StorageClass::StorageClassInput: {
@@ -834,17 +826,24 @@ struct Spirv_Builder {
               // list of the current function
               llvm::VectorType *gid_t =
                   llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
-              llvm::Value *gid = llvm_builder->CreateAlloca(gid_t);
-              llvm_builder->CreateCall(spv_get_global_invocation_id, {gid});
+              llvm_value =
+                  llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
+              llvm_builder->CreateCall(spv_get_global_invocation_id,
+                                       {llvm_value});
               llvm::Value *addr_cast =
-                  llvm_builder->CreateAddrSpaceCast(gid, llvm_type);
+                  llvm_builder->CreateAddrSpaceCast(llvm_value, llvm_type);
               llvm_builder->CreateStore(addr_cast, llvm_value);
               break;
             }
             case spv::BuiltIn::BuiltInWorkgroupSize: {
-              //              llvm::Value *invoc_id =
+              llvm::VectorType *gid_t =
+                  llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
+              llvm_value =
+                  llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
               llvm_builder->CreateCall(spv_get_work_group_size, {llvm_value});
-              //              llvm_builder->CreateStore(invoc_id, llvm_value);
+              llvm::Value *addr_cast =
+                  llvm_builder->CreateAddrSpaceCast(llvm_value, llvm_type);
+              llvm_builder->CreateStore(addr_cast, llvm_value);
               break;
             }
             default:
@@ -860,17 +859,14 @@ struct Spirv_Builder {
               get_input_ptr, {
                                  llvm_builder->getInt32((uint32_t)location),
                              });
-          llvm::Value *cast = llvm_builder->CreateBitCast(pc_ptr, llvm_type);
-          llvm_builder->CreateStore(cast, llvm_value);
+          llvm_value = llvm_builder->CreateBitCast(pc_ptr, llvm_type,
+                                                   get_spv_name(var.id));
           break;
         }
         case spv::StorageClass::StorageClassPushConstant: {
           llvm::Value *pc_ptr = llvm_builder->CreateCall(get_push_constant_ptr);
-          llvm::Value *cast = llvm_builder->CreateBitCast(pc_ptr, llvm_type);
-          llvm_builder->CreateStore(cast, llvm_value);
-          break;
-        }
-        case spv::StorageClass::StorageClassFunction: {
+          llvm_value = llvm_builder->CreateBitCast(pc_ptr, llvm_type,
+                                                   get_spv_name(var.id));
           break;
         }
         default:
@@ -880,9 +876,10 @@ struct Spirv_Builder {
         if (var.init_id != 0) {
           UNIMPLEMENTED;
         }
+        NOTNULL(llvm_value);
+        uniforms.insert(llvm_value);
         llvm_values[var.id] = llvm_value;
       }
-      goto finish_function;
       for (uint32_t const *pCode : item.second) {
         uint16_t WordCount = pCode[0] >> spv::WordCountShift;
         spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
@@ -915,53 +912,62 @@ struct Spirv_Builder {
           ASSERT_ALWAYS(cur_bb != NULL);
           llvm::Value *base = llvm_values[word3];
           ASSERT_ALWAYS(base != NULL);
-          llvm::Value *deref = llvm_builder->CreateLoad(base, "deref");
-          llvm::PointerType *ptr_type =
-              llvm::dyn_cast<llvm::PointerType>(deref->getType());
-          ASSERT_ALWAYS(ptr_type != NULL);
-          llvm::Type *pointee_type = ptr_type->getPointerElementType();
-          ASSERT_ALWAYS(pointee_type != NULL);
-          std::vector<llvm::Value *> indices = {
-              llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), 0)};
-          if (contains(member_reloc, pointee_type)) {
-            std::vector<uint32_t> const &reloc_table =
-                member_reloc[pointee_type];
-            for (uint32_t i = 4; i < WordCount; i++) {
-              llvm::Value *index_val = llvm_values[pCode[i]];
-              ASSERT_ALWAYS(index_val != NULL);
+
+          std::vector<llvm::Value *> indices = {};
+
+          for (uint32_t i = 4; i < WordCount; i++) {
+            llvm::Value *index_val = llvm_values[pCode[i]];
+            ASSERT_ALWAYS(index_val != NULL);
+            indices.push_back(index_val);
+          }
+
+          llvm::Type *result_type = llvm_types[word1];
+          NOTNULL(result_type);
+          llvm::Value *val = base;
+          //
+          ito(indices.size()) {
+            llvm::Value *index_val = indices[i];
+            NOTNULL(index_val);
+            llvm::Type *pointee_type = val->getType()->getPointerElementType();
+            NOTNULL(pointee_type);
+            if (pointee_type->isStructTy()) {
+              llvm::StructType *struct_type =
+                  llvm::dyn_cast<llvm::StructType>(pointee_type);
+              NOTNULL(struct_type);
               llvm::ConstantInt *integer =
                   llvm::dyn_cast<llvm::ConstantInt>(index_val);
               ASSERT_ALWAYS(
                   integer != NULL &&
                   "Access chain index must be OpConstant for structures");
               uint32_t cval = (uint32_t)integer->getLimitedValue();
-              indices.push_back(llvm::ConstantInt::get(
-                  llvm::Type::getInt32Ty(c), reloc_table[cval]));
-            }
-          } else {
-            for (uint32_t i = 4; i < WordCount; i++) {
-              llvm::Value *index_val = llvm_values[pCode[i]];
-              ASSERT_ALWAYS(index_val != NULL);
-              indices.push_back(index_val);
+              uint32_t struct_member_id = cval;
+              if (contains(member_reloc, pointee_type)) {
+                std::vector<uint32_t> const &reloc_table =
+                    member_reloc[pointee_type];
+                struct_member_id = reloc_table[cval];
+              }
+              llvm::Type *member_type =
+                  struct_type->getElementType(struct_member_id);
+              val = llvm_builder->CreateGEP(
+                  val, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
+                                               (uint32_t)0),
+                        llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
+                                               (uint32_t)struct_member_id)});
+            } else {
+              llvm::Value *gep = llvm_builder->CreateGEP(val, index_val);
+              val = gep;
             }
           }
-
-          llvm::Value *val = llvm_builder->CreateGEP(deref, indices);
-          llvm::Value *alloca = llvm_builder->CreateAlloca(val->getType(), 0,
-                                                           NULL, "stack_proxy");
-          llvm_values[word2] = alloca;
-          llvm_builder->CreateStore(val, alloca);
+          // SPIRV allows implicit reinterprets of pointers?
+          llvm_values[word2] = llvm_builder->CreateBitCast(val, result_type);
+          ;
           break;
         }
         case spv::Op::OpLoad: {
           ASSERT_ALWAYS(cur_bb != NULL);
           llvm::Value *addr = llvm_values[word3];
           ASSERT_ALWAYS(addr != NULL);
-          llvm::PointerType *ptr_type =
-              llvm::dyn_cast<llvm::PointerType>(addr->getType());
-          ASSERT_ALWAYS(ptr_type != NULL);
-          llvm::Value *deref = llvm_builder->CreateLoad(addr, "deref");
-          llvm_values[word2] = llvm_builder->CreateLoad(deref);
+          llvm_values[word2] = llvm_builder->CreateLoad(addr);
           break;
         }
         case spv::Op::OpStore: {
@@ -970,8 +976,7 @@ struct Spirv_Builder {
           ASSERT_ALWAYS(addr != NULL);
           llvm::Value *val = llvm_values[word2];
           ASSERT_ALWAYS(val != NULL);
-          llvm::Value *deref = llvm_builder->CreateLoad(addr, "deref");
-          llvm_builder->CreateStore(val, deref);
+          llvm_builder->CreateStore(val, addr);
           break;
         }
         // Skip structured control flow instructions for now
@@ -1412,8 +1417,31 @@ struct Spirv_Builder {
 #undef ARG
           break;
         }
+        case spv::Op::OpReturnValue: {
+          // Check that this is not an entry as they don't return values
+          // usually, right?
+          ASSERT_ALWAYS(!contains(entries, item.first));
+          uint32_t ret_value_id = word1;
+          llvm::Value *ret_value = llvm_values[ret_value_id];
+          NOTNULL(ret_value);
+          llvm::ReturnInst::Create(c, ret_value, cur_bb);
+          // Terminate current basic block
+          cur_bb = NULL;
+          llvm_builder.release();
+          cur_merge_id = -1;
+          cur_continue_id = -1;
+          break;
+        }
         case spv::Op::OpReturn: {
-          // Skip
+          NOTNULL(cur_bb);
+          if (contains(entries, item.first))
+            llvm::CallInst::Create(spv_on_exit, "", cur_bb);
+          llvm::ReturnInst::Create(c, NULL, cur_bb);
+          // Terminate current basic block
+          cur_bb = NULL;
+          llvm_builder.release();
+          cur_merge_id = -1;
+          cur_continue_id = -1;
           break;
         }
         case spv::Op::OpBitcast: {
@@ -1476,6 +1504,23 @@ struct Spirv_Builder {
           llvm_values[res_id] = llvm_builder->CreateLoad(res_shadow);
           break;
         }
+        case spv::Op::OpFunctionCall: {
+          uint32_t fun_id = word3;
+          uint32_t res_id = word2;
+          llvm::Value *fun_value = llvm_values[fun_id];
+          NOTNULL(fun_value);
+          llvm::Function *target_fun =
+              llvm::dyn_cast<llvm::Function>(fun_value);
+          NOTNULL(target_fun);
+          llvm::SmallVector<llvm::Value *, 4> args;
+          for (int i = 4; i < WordCount; i++) {
+            llvm::Value *arg = llvm_values[pCode[i]];
+            NOTNULL(arg);
+            args.push_back(arg);
+          }
+          llvm_values[res_id] = llvm_builder->CreateCall(target_fun, args);
+          break;
+        }
         case spv::Op::OpSampledImage:
         case spv::Op::OpImageSampleImplicitLod:
         case spv::Op::OpImageSampleExplicitLod:
@@ -1485,13 +1530,7 @@ struct Spirv_Builder {
         case spv::Op::OpImageSampleProjExplicitLod:
         case spv::Op::OpImageSampleProjDrefImplicitLod:
         case spv::Op::OpImageSampleProjDrefExplicitLod: {
-          //          llvm::Value *val = llvm_builder->CreateCall(dummy_sample);
-          //          llvm::Value *alloca =
-          //          llvm_builder->CreateAlloca(val->getType());
-          //          llvm_builder->CreateStore(val, alloca);
-          //          llvm_values[word2] = val;
-          //          WARNING("skipping %s", get_cstr(opcode));
-          //          break;
+          module->dump();
           UNIMPLEMENTED;
         }
         // Skip declarations
@@ -1552,7 +1591,6 @@ struct Spirv_Builder {
         case spv::Op::OpGroupMemberDecorate:
           break;
         // Not implemented
-        case spv::Op::OpFunctionCall:
         case spv::Op::OpVariable:
         case spv::Op::OpImageTexelPointer:
         case spv::Op::OpCopyMemory:
@@ -1652,7 +1690,6 @@ struct Spirv_Builder {
         case spv::Op::OpAtomicXor:
         case spv::Op::OpPhi:
         case spv::Op::OpSwitch:
-        case spv::Op::OpReturnValue:
         case spv::Op::OpUnreachable:
         case spv::Op::OpLifetimeStart:
         case spv::Op::OpLifetimeStop:
@@ -1959,6 +1996,7 @@ struct Spirv_Builder {
         case spv::Op::OpSubgroupAvcSicGetPackedSkcLumaSumThresholdINTEL:
         case spv::Op::OpSubgroupAvcSicGetInterRawSadsINTEL:
         case spv::Op::OpMax: {
+          module->dump();
           UNIMPLEMENTED_(get_cstr(opcode));
         }
         }
@@ -1997,13 +2035,11 @@ struct Spirv_Builder {
         }
       }
     finish_function:
-      llvm::BasicBlock *exit_bb = llvm::BasicBlock::Create(c, "exit");
-      llvm::CallInst::Create(spv_on_exit, "", exit_bb);
-      llvm::ReturnInst::Create(c, NULL, exit_bb);
-      exit_bb->insertInto(cur_fun);
-      llvm::BranchInst::Create(exit_bb, cur_bb);
+      continue;
     }
 
+    // Make a function that returns the size of private space required by this
+    // module
     {
       llvm::Function *get_private_size = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),

@@ -10,7 +10,7 @@
 #define ASSERT_ALWAYS(x)                                                       \
   {                                                                            \
     if (!(x)) {                                                                \
-      fprintf(stderr, "[FAIL] at %s:%i %s\n", __FILE__, __LINE__, #x);         \
+      fprintf(stderr, "%s:%i [FAIL] at %s\n", __FILE__, __LINE__, #x);         \
       (void)(*(volatile int *)(NULL) = 0);                                     \
     }                                                                          \
   }
