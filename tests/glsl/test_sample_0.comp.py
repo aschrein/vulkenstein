@@ -11,11 +11,11 @@ void test_launch() {
   shader_entry();
 }
 
-void spv_get_global_invocation_id(ivec3 *out) {
-  *out = ivec3{0, 0, 0};
+int3 spv_get_global_invocation_id(void *state, uint32_t lane_id) {
+  return (int3)(0, 0, 0);
 }
 
-void spv_get_work_group_size(ivec3 *out) {
+void spv_get_work_group_size(void *state) {
   *out = ivec3{1, 1, 1};
 }
 

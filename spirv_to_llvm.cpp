@@ -419,7 +419,6 @@ struct Spirv_Builder {
     LOOKUP_FN(length_f3);
     LOOKUP_FN(length_f4);
     LOOKUP_FN(dummy_sample);
-    LOOKUP_FN(spv_on_exit);
     LOOKUP_FN(spv_sqrt);
     LOOKUP_FN(spv_dot_f2);
     LOOKUP_FN(spv_dot_f3);
@@ -892,12 +891,13 @@ struct Spirv_Builder {
               llvm::VectorType *gid_t =
                   llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
               ito(opt_subgroup_size) {
-                llvm::Value *llvm_value = llvm_builder->CreateAlloca(
+                llvm::Value *alloca = llvm_builder->CreateAlloca(
                     gid_t, NULL, get_spv_name(var.id));
-                llvm_builder->CreateCall(
+                llvm::Value *gid = llvm_builder->CreateCall(
                     spv_get_global_invocation_id,
-                    {state_ptr, llvm_get_constant_i32(i), llvm_value});
-                llvm_values_per_lane[i][var.id] = llvm_value;
+                    {state_ptr, llvm_get_constant_i32(i)});
+                llvm_builder->CreateStore(gid, alloca);
+                llvm_values_per_lane[i][var.id] = alloca;
               }
 
               break;
@@ -905,12 +905,13 @@ struct Spirv_Builder {
             case spv::BuiltIn::BuiltInWorkgroupSize: {
               llvm::VectorType *gid_t =
                   llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
-              llvm::Value *llvm_value =
+              llvm::Value *alloca =
                   llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
-              llvm_builder->CreateCall(spv_get_work_group_size,
-                                       {state_ptr, llvm_value});
+              llvm::Value *gid = llvm_builder->CreateCall(
+                  spv_get_work_group_size, {state_ptr});
+              llvm_builder->CreateStore(gid, alloca);
               ito(opt_subgroup_size) {
-                llvm_values_per_lane[i][var.id] = llvm_value;
+                llvm_values_per_lane[i][var.id] = alloca;
               }
               break;
             }
@@ -928,7 +929,8 @@ struct Spirv_Builder {
           llvm::ArrayType *array_type = llvm::ArrayType::get(
               llvm_type->getPointerElementType(), opt_subgroup_size);
           llvm::Value *offset = llvm_builder->CreateGEP(
-              input_ptr, llvm_get_constant_i32(input_offsets[location] * opt_subgroup_size));
+              input_ptr, llvm_get_constant_i32(input_offsets[location] *
+                                               opt_subgroup_size));
           llvm::Value *type_cast = llvm_builder->CreateBitCast(
               offset, llvm::PointerType::get(array_type, 0),
               get_spv_name(var.id));
@@ -1556,7 +1558,6 @@ struct Spirv_Builder {
               llvm::Value *deref = llvm_builder->CreateLoad(ds.value_ptr);
               llvm_builder->CreateStore(deref, cast);
             }
-            llvm_builder->CreateCall(spv_on_exit, state_ptr);
           }
           llvm::ReturnInst::Create(c, NULL, cur_bb);
           // Terminate current basic block

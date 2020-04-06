@@ -17,19 +17,21 @@ python3 $INPUT && \
 spirv-dis --raw-id shader.spv -o shader.spv.S && \
 s2l shader.spv $WAVE_WIDTH > shader.ll && \
 llvm-as shader.ll -o shader.bc && \
-clang -DWAVE_WIDTH="$WAVE_WIDTH" -g -I$SCRIPTPATH stdlib.cpp -fPIC -c -o shader_stdlib.o && \
+clang -emit-llvm -DWAVE_WIDTH="$WAVE_WIDTH" -g -I$SCRIPTPATH stdlib.cpp -S -o shader_stdlib.bc && \
+llvm-link shader.bc shader_stdlib.bc -o shader.bc && \
+opt -early-cse --amdgpu-load-store-vectorizer --load-store-vectorizer \
+    --interleaved-load-combine --vector-combine --instnamer shader.bc -o shader.bc && \
 opt -strip -O3  shader.bc -o shader.bc && \
 llvm-dis shader.bc -o shader.opt.ll && \
 llc -mattr=+avx2 -O3 --relocation-model=pic --mtriple=x86_64-unknown-linux-gnu -filetype=obj shader.bc -o shader.o && \
 objdump -D -M intel shader.o > shader.S && \
-clang shader.o shader_stdlib.o -shared -fPIC -o shader.so && \
+clang shader.o -shared -fPIC -o shader.so && \
 clang++ -g $SCRIPTPATH/test_driver.cpp -o test_driver -ldl && \
 ./test_driver shader.so && \
 exit 0
 exit 1
 
-opt -early-cse --amdgpu-load-store-vectorizer --load-store-vectorizer \
-    --interleaved-load-combine --vector-combine --instnamer shader.bc -o shader.bc && \
+
 
 -Wl,--unresolved-symbols=ignore-all
 -fPIE -pie
@@ -39,6 +41,8 @@ llc:
 
 optimal options:
 -early-cse --amdgpu-load-store-vectorizer --load-store-vectorizer  --interleaved-load-combine --vector-combine --instnamer
+
+clang -DWAVE_WIDTH="$WAVE_WIDTH" -g -I$SCRIPTPATH stdlib.cpp -fPIC -c -o shader_stdlib.o && \
 
 clang -emit-llvm -g -I$SCRIPTPATH stdlib.cpp -S -o shader_stdlib.bc && \
 llvm-link shader.bc shader_stdlib.bc -o shader.bc && \

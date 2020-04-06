@@ -40,11 +40,9 @@ declare float @length_f2(<2 x float> *%in) #0
 declare float @length_f3(<3 x float> *%in) #0
 declare float @length_f4(<4 x float> *%in) #0
 
-declare void @spv_get_global_invocation_id(%state_t *, i32 %lane_id, <3 x i32> *%out) #0
-declare void @spv_get_work_group_size(%state_t *, <3 x i32> *%out) #0
+declare <3 x i32> @spv_get_global_invocation_id(%state_t *, i32 %lane_id) #0
+declare <3 x i32> @spv_get_work_group_size(%state_t *) #0
 
 declare float @spv_sqrt(float %in) #0
-
-declare void @spv_on_exit(%state_t *)
 
 attributes #0 = { nounwind readnone speculatable }
