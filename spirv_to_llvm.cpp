@@ -925,17 +925,15 @@ struct Spirv_Builder {
                   .param1;
           ASSERT_ALWAYS(location >= 0);
           ASSERT_ALWAYS(llvm_type->isPointerTy());
-         llvm::ArrayType *array_type = llvm::ArrayType::get(
+          llvm::ArrayType *array_type = llvm::ArrayType::get(
               llvm_type->getPointerElementType(), opt_subgroup_size);
-          llvm::Value *type_cast = llvm_builder->CreateBitCast(
-              input_ptr, llvm::PointerType::get(array_type, 0),
-              get_spv_name(var.id));
-
           llvm::Value *offset = llvm_builder->CreateGEP(
-              type_cast, llvm_get_constant_i32(input_offsets[location]));
-
+              input_ptr, llvm_get_constant_i32(input_offsets[location] * opt_subgroup_size));
+          llvm::Value *type_cast = llvm_builder->CreateBitCast(
+              offset, llvm::PointerType::get(array_type, 0),
+              get_spv_name(var.id));
           llvm::Value *vector_load =
-              llvm_builder->CreateLoad(array_type, offset);
+              llvm_builder->CreateLoad(array_type, type_cast);
           llvm::Value *alloca = llvm_builder->CreateAlloca(array_type);
           llvm_builder->CreateStore(vector_load, alloca);
 
@@ -3313,7 +3311,10 @@ struct Spirv_Builder {
   }
 };
 int main(int argc, char **argv) {
-  ASSERT_ALWAYS(argc == 2);
+  ASSERT_ALWAYS(argc == 3);
+  uint32_t subgroup_size = (uint32_t)atoi(argv[2]);
+  ASSERT_ALWAYS(subgroup_size == 1 || subgroup_size == 4 ||
+                subgroup_size == 64);
   size_t size;
   auto *bytes = read_file(argv[1], &size);
   defer(tl_free(bytes));
@@ -3321,6 +3322,7 @@ int main(int argc, char **argv) {
   const uint32_t *pCode = (uint32_t *)bytes;
   size_t codeSize = size / 4;
   Spirv_Builder builder;
+  builder.opt_subgroup_size = subgroup_size;
   builder.parse_meta(pCode, codeSize);
   builder.build_llvm_module_vectorized();
 }

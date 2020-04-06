@@ -9,9 +9,12 @@ using namespace glm;
 
 extern "C" {
 
-struct GPU_State {
-
-};
+typedef float float4 __attribute__((ext_vector_type(4)))
+__attribute__((aligned(16)));
+typedef int32_t int4 __attribute__((ext_vector_type(4)))
+__attribute__((aligned(16)));
+typedef int32_t int3 __attribute__((ext_vector_type(3)))
+__attribute__((aligned(16)));
 
 // stack allocated struct passed per each entry invocation
 struct Invocation_Info {
@@ -20,7 +23,7 @@ struct Invocation_Info {
   ivec3 work_group_size;
   int subgroup_size; // eventually we'd want to emulate subgroup extension and
                      // dFdx etc
-  GPU_State *gpu_state;
+  //  GPU_State *gpu_state;
 };
 
 float spv_sqrt(float a) { return sqrtf(a); }
@@ -40,8 +43,8 @@ float spv_dot_f4(vec4 *a, vec4 *b) { return glm::dot(*a, *b); }
   }
 #define TEST_EQ(a, b)                                                          \
   if ((a) != (b)) {                                                            \
-    std::cerr << "FAIL at " << __FILE__ << ":" << __LINE__ << " " << (a)       \
-              << " != " << (b) << "\n";                                        \
+    std::cerr << __FILE__ << ":" << __LINE__ << " FAILED: " << #a              \
+              << " != " << #b << " -> " << (a) << " != " << (b) << "\n";       \
     exit(1);                                                                   \
   }
 }

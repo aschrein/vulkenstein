@@ -2,17 +2,12 @@ stdlib = \
 r"""
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.cpp>
 
 extern "C"{
-void shader_entry();
 
-void test_launch() {
-  shader_entry();
-}
-float g_input[2] = {1.0f, 2.0f};
-
-struct mat4 {float m[16];};
-struct vec4 {float m[4];};
+float g_input[2][WAVE_WIDTH] = {};
+vec4 g_output[WAVE_WIDTH] = {};
 
 #pragma pack(1)
 struct UBO {
@@ -22,34 +17,44 @@ struct UBO {
 } uniforms;
 #pragma pop
 
-void *get_uniform_ptr(int set, int binding) {
-  uniforms.vec_4.m[0] = 2.0f;
-  uniforms.vec_4.m[1] = 2.0f;
-  uniforms.vec_4.m[2] = 3.0f;
-  uniforms.vec_4.m[3] = 4.0f;
+void *get_uniform_ptr(void *state, int set, int binding) {
   return &uniforms;
 }
 
-void *get_input_ptr(int id) {
-  return &g_input[id];
+void *get_input_ptr(void *state) {
+  return (void*)(&g_input[0]);
 }
 
-vec4 g_output;
-
-void *get_output_ptr(int id) {
+void *get_output_ptr(void *state, int id) {
   return &g_output;
 }
 
-#define TEST(x) if (!(x)) {fprintf(stderr, "FAIL\n"); exit(1);}
+void spv_on_exit(void *state) {
+}
 
-void spv_on_exit() {
-  TEST(
-    g_output.m[0] == 6.0f &&
-    g_output.m[1] == 6.0f &&
-    g_output.m[2] == 9.0f &&
-    g_output.m[3] == 12.0f
-  );
+void shader_entry(void *);
 
+void test_launch() {
+  for (int i = 0; i < WAVE_WIDTH; i++) {
+    g_input[0][i] = (float)i;
+    g_input[1][i] = (float)i + 1.0f;
+  }
+
+  uniforms.vec_4[0] = 2.0f;
+  uniforms.vec_4[1] = 2.0f;
+  uniforms.vec_4[2] = 3.0f;
+  uniforms.vec_4[3] = 4.0f;
+
+  shader_entry(NULL);
+
+  for (int i = 0; i < WAVE_WIDTH; i++) {
+    //fprintf(stdout, "[%f %f %f %f]\n", g_output[i].x, g_output[i].y, g_output[i].z, g_output[i].w);
+    //fprintf(stdout, "[(%f+%f)*%f]\n", g_input[0][i], g_input[1][i], uniforms.vec_4.x);
+    TEST_EQ(g_output[i].x, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.x);
+    TEST_EQ(g_output[i].y, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.y);
+    TEST_EQ(g_output[i].z, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.z);
+    TEST_EQ(g_output[i].w, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.w);
+  }
   fprintf(stdout, "[SUCCESS]\n");
 }
 
