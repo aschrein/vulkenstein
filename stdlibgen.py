@@ -95,10 +95,10 @@ define %float{{N}}_t @spv_mat{{K}}x{{N}}_soa_times_float{{N}}(%float{{K}}x{{N}}_
 }
 """)
 
-module += utils.render(M=subgroup_size)
-for N in [2, 3, 4]:
-  for K in [2, 3, 4]:
-    module += mat_times_vec.render(M=subgroup_size, N=N, K=K)
+#module += utils.render(M=subgroup_size)
+#for N in [2, 3, 4]:
+#  for K in [2, 3, 4]:
+#    module += mat_times_vec.render(M=subgroup_size, N=N, K=K)
 init_funs = Template(\
 """
 define <{{N}} x {{type}}> \

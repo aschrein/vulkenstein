@@ -16,7 +16,7 @@ s2l shader.spv > shader.ll && \
 llvm-as shader.ll -o shader.bc && \
 g++ -g -I$SCRIPTPATH stdlib.cpp -fPIC -c -o shader_stdlib.o && \
 opt -early-cse --amdgpu-load-store-vectorizer --load-store-vectorizer  --interleaved-load-combine --vector-combine --instnamer shader.bc -o shader.bc && \
-opt -O3  shader.bc -o shader.bc && \
+opt -strip -O3  shader.bc -o shader.bc && \
 llvm-dis shader.bc -o shader.opt.ll && \
 llc --relocation-model=pic --mtriple=x86_64-unknown-linux-gnu -filetype=obj shader.bc -o shader.o && \
 objdump -D -M intel shader.o > shader.S && \
