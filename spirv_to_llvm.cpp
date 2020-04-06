@@ -263,7 +263,12 @@ struct Entry {
 #include "spv_dump.hpp"
 
 struct Spirv_Builder {
-  uint32_t subgroup_size = 4;
+  //////////////////////
+  //     Options      //
+  //////////////////////
+  bool opt_force_alignment = true;
+  uint32_t opt_subgroup_size = 4;
+
   //////////////////////
   // Meta information //
   //////////////////////
@@ -299,9 +304,11 @@ struct Spirv_Builder {
   std::map<uint32_t, uint32_t> private_offsets;
   uint32_t private_storage_size = 0;
   // Offsets for input variables
+  std::vector<uint32_t> input_sizes;
   std::vector<uint32_t> input_offsets;
   uint32_t input_storage_size = 0;
   // Offsets for ouput variables
+  std::vector<uint32_t> output_sizes;
   std::vector<uint32_t> output_offsets;
   uint32_t output_storage_size = 0;
   // Lifetime must be long enough
@@ -348,7 +355,7 @@ struct Spirv_Builder {
     llvm::SMDiagnostic error;
     llvm::Module *module = NULL;
     // Load the stdlib for a given subgroup size
-    switch (subgroup_size) {
+    switch (opt_subgroup_size) {
     case 1: {
       auto mbuf = llvm::MemoryBuffer::getMemBuffer(
           llvm::StringRef((char *)llvm_stdlib_1_bc, llvm_stdlib_1_bc_len), "",
@@ -380,7 +387,9 @@ struct Spirv_Builder {
     auto llvm_get_constant_i32 = [&c](uint32_t a) {
       return llvm::ConstantInt::get(llvm::IntegerType::getInt32Ty(c), a);
     };
-
+    auto llvm_get_constant_i64 = [&c](uint64_t a) {
+      return llvm::ConstantInt::get(llvm::IntegerType::getInt64Ty(c), a);
+    };
     const uint32_t *pCode = this->code;
     // The maximal number of IDs in this module
     const uint32_t ID_bound = pCode[3];
@@ -394,7 +403,7 @@ struct Spirv_Builder {
 
     // Initialize framework functions
 
-    // These operate on [subgroup_size] arrays of data
+    // These operate on [opt_subgroup_size] arrays of data
 
     LOOKUP_FN(get_push_constant_ptr);
     LOOKUP_FN(get_uniform_ptr);
@@ -420,6 +429,10 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_get_work_group_size);
     LOOKUP_FN(spv_image_read_f4);
     LOOKUP_FN(spv_image_write_f4);
+    llvm::Type *state_t = llvm::Type::getInt8Ty(c);
+    // Force 64 bit pointers
+    llvm::Type *llvm_int_ptr_t = llvm::Type::getInt64Ty(c);
+    llvm::Type *state_t_ptr = llvm::PointerType::get(state_t, 0);
 
     // Vector types for a given subgroup size
 
@@ -471,7 +484,7 @@ struct Spirv_Builder {
     std::vector<llvm::Value *> llvm_global_values(ID_bound);
 
     //    auto wave_local_t = [&](llvm::Type *ty) {
-    //      return llvm::ArrayType::get(ty, subgroup_size);
+    //      return llvm::ArrayType::get(ty, opt_subgroup_size);
     //    };
 
     // Map spirv types to llvm types
@@ -492,6 +505,8 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(ret_type != NULL &&
                       "Function must have a return type defined");
         llvm::SmallVector<llvm::Type *, 16> args;
+        // Prepend state_t* to each function type
+        args.push_back(state_t_ptr);
         for (auto &param_id : type.params) {
           llvm::Type *arg_type = llvm_types[param_id];
           ASSERT_ALWAYS(arg_type != NULL &&
@@ -734,19 +749,44 @@ struct Spirv_Builder {
       llvm::Function *cur_fun =
           llvm::dyn_cast<llvm::Function>(llvm_global_values[func_id]);
       NOTNULL(cur_fun);
+      llvm::Value *state_ptr = cur_fun->arg_begin();
+      state_ptr->setName("state_ptr");
+      // Check that the first parameter is state_t*
+      ASSERT_ALWAYS(state_ptr->getType() == state_t_ptr);
       // @llvm/allocas
       llvm::BasicBlock *cur_bb =
           llvm::BasicBlock::Create(c, "allocas", cur_fun, NULL);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
-
+      auto llvm_maybe_align = [&](llvm::Value *ptr) {
+        NOTNULL(ptr);
+        if (false) {
+          NOTNULL(cur_bb);
+          ASSERT_ALWAYS(ptr->getType()->isPointerTy());
+          llvm::Value *int_ptr =
+              llvm_builder->CreatePtrToInt(ptr, llvm_int_ptr_t);
+          // Aling to 16 bytes
+          llvm::Value *aligned_int = llvm_builder->CreateAnd(
+              int_ptr, llvm_get_constant_i64((uint64_t)~0xfULL));
+          return llvm_builder->CreateIntToPtr(aligned_int, ptr->getType());
+          // TODO(aschrein): Investigate ptrmask intrinsic approach
+          //          llvm::Value *ptr_mask =
+          //          llvm_get_constant_i64((uint64_t)~0xfULL); auto
+          //          *mask_call = llvm_builder->CreateIntrinsic(
+          //              llvm::Intrinsic::ptrmask,
+          //              {out_t, ptr->getType(), ptr_mask->getType()},
+          //              {ptr, ptr_mask});
+          //          return llvm::dyn_cast<llvm::Value>(mask_call);
+        }
+        return ptr;
+      };
       // TODO(aschrein) maybe do something more optimal?
       // Each lane has it's own value table(quick and dirty way but will help me
       // advance)
       std::vector<std::vector<llvm::Value *>> llvm_values_per_lane(
-          subgroup_size);
+          opt_subgroup_size);
       // Copy global constants into each lane
-      ito(subgroup_size) llvm_values_per_lane[i] = copy(llvm_global_values);
+      ito(opt_subgroup_size) llvm_values_per_lane[i] = copy(llvm_global_values);
 
       // @llvm/local_variables
       auto &locals = local_variables[func_id];
@@ -764,7 +804,7 @@ struct Spirv_Builder {
         NOTNULL(ptr_type);
 
         llvm::Type *pointee_type = ptr_type->getElementType();
-        ito(subgroup_size) {
+        ito(opt_subgroup_size) {
           llvm::Value *llvm_value = llvm_builder->CreateAlloca(
               pointee_type, 0, NULL, get_spv_name(var.id));
           llvm_values_per_lane[i][var.id] = llvm_value;
@@ -786,9 +826,10 @@ struct Spirv_Builder {
 
         switch (var.storage) {
         case spv::StorageClass::StorageClassPrivate: {
-          ito(subgroup_size) {
+          ito(opt_subgroup_size) {
             llvm::Value *pc_ptr = llvm_builder->CreateCall(
-                get_private_ptr, {llvm_get_constant_i32(i)});
+                get_private_ptr, {state_ptr, llvm_get_constant_i32(i)});
+            pc_ptr = llvm_maybe_align(pc_ptr);
             ASSERT_ALWAYS(contains(private_offsets, var_id));
             uint32_t offset = private_offsets[var_id];
             llvm::Value *pc_ptr_offset = llvm_builder->CreateGEP(
@@ -817,11 +858,14 @@ struct Spirv_Builder {
                   : var.storage == spv::StorageClass::StorageClassUniform
                         ? get_uniform_ptr
                         : get_storage_ptr,
-              {llvm_builder->getInt32((uint32_t)set),
+              {state_ptr, llvm_builder->getInt32((uint32_t)set),
                llvm_builder->getInt32((uint32_t)binding)});
+          pc_ptr = llvm_maybe_align(pc_ptr);
           llvm::Value *llvm_value = llvm_builder->CreateBitCast(
               pc_ptr, llvm_type, get_spv_name(var.id));
-          ito(subgroup_size) { llvm_values_per_lane[i][var.id] = llvm_value; }
+          ito(opt_subgroup_size) {
+            llvm_values_per_lane[i][var.id] = llvm_value;
+          }
           break;
         }
         case spv::StorageClass::StorageClassOutput: {
@@ -830,11 +874,15 @@ struct Spirv_Builder {
                   .param1;
 
           ASSERT_ALWAYS(location >= 0);
-          ito(subgroup_size) {
-            llvm::Value *pc_ptr = llvm_builder->CreateCall(get_output_ptr);
+          ito(opt_subgroup_size) {
+            llvm::Value *pc_ptr =
+                llvm_builder->CreateCall(get_output_ptr, state_ptr);
+            pc_ptr = llvm_maybe_align(pc_ptr);
             llvm::Value *offset = llvm_builder->CreateGEP(
-                pc_ptr, llvm_get_constant_i32(i * output_storage_size +
-                                              output_offsets[location]));
+                pc_ptr, llvm_get_constant_i32(i * output_sizes[location] +
+                                              output_offsets[location] *
+                                                  opt_subgroup_size));
+
             llvm_values_per_lane[i][var.id] = llvm_builder->CreateBitCast(
                 offset, llvm_type, get_spv_name(var.id));
           }
@@ -854,12 +902,12 @@ struct Spirv_Builder {
               // list of the current function
               llvm::VectorType *gid_t =
                   llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
-              ito(subgroup_size) {
+              ito(opt_subgroup_size) {
                 llvm::Value *llvm_value = llvm_builder->CreateAlloca(
                     gid_t, NULL, get_spv_name(var.id));
                 llvm_builder->CreateCall(
                     spv_get_global_invocation_id,
-                    {llvm_get_constant_i32(i), llvm_value});
+                    {state_ptr, llvm_get_constant_i32(i), llvm_value});
                 llvm_values_per_lane[i][var.id] = llvm_value;
               }
 
@@ -870,8 +918,9 @@ struct Spirv_Builder {
                   llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
               llvm::Value *llvm_value =
                   llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
-              llvm_builder->CreateCall(spv_get_work_group_size, {llvm_value});
-              ito(subgroup_size) {
+              llvm_builder->CreateCall(spv_get_work_group_size,
+                                       {state_ptr, llvm_value});
+              ito(opt_subgroup_size) {
                 llvm_values_per_lane[i][var.id] = llvm_value;
               }
               break;
@@ -886,11 +935,15 @@ struct Spirv_Builder {
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
           ASSERT_ALWAYS(location >= 0);
-          ito(subgroup_size) {
-            llvm::Value *pc_ptr = llvm_builder->CreateCall(get_input_ptr);
+          ito(opt_subgroup_size) {
+            llvm::Value *pc_ptr =
+                llvm_builder->CreateCall(get_input_ptr, state_ptr);
+            pc_ptr = llvm_maybe_align(pc_ptr);
             llvm::Value *offset = llvm_builder->CreateGEP(
-                pc_ptr, llvm_get_constant_i32(i * input_storage_size +
-                                              input_offsets[location]));
+                pc_ptr, llvm_get_constant_i32(i * input_sizes[location] +
+                                              input_offsets[location] *
+                                                  opt_subgroup_size));
+
             llvm::Value *llvm_value = llvm_builder->CreateBitCast(
                 offset, llvm_type, get_spv_name(var.id));
             llvm_values_per_lane[i][var.id] = llvm_value;
@@ -899,10 +952,14 @@ struct Spirv_Builder {
           break;
         }
         case spv::StorageClass::StorageClassPushConstant: {
-          llvm::Value *pc_ptr = llvm_builder->CreateCall(get_push_constant_ptr);
+          llvm::Value *pc_ptr =
+              llvm_builder->CreateCall(get_push_constant_ptr, state_ptr);
+          pc_ptr = llvm_maybe_align(pc_ptr);
           llvm::Value *llvm_value = llvm_builder->CreateBitCast(
               pc_ptr, llvm_type, get_spv_name(var.id));
-          ito(subgroup_size) { llvm_values_per_lane[i][var.id] = llvm_value; }
+          ito(opt_subgroup_size) {
+            llvm_values_per_lane[i][var.id] = llvm_value;
+          }
           break;
         }
         default:
@@ -923,7 +980,7 @@ struct Spirv_Builder {
       //        if (val->getType()->isArrayTy()) {
       //          ASSERT_ALWAYS(val->getType()->isArrayTy() &&
       //                        val->getType()->getArrayNumElements() ==
-      //                        subgroup_size);
+      //                        opt_subgroup_size);
       //          return llvm_builder->CreateExtractValue(val, {lane_id});
       //        } else {
       //          llvm::PointerType *ptr_type =
@@ -964,7 +1021,7 @@ struct Spirv_Builder {
         }
         case spv::Op::OpAccessChain: {
           ASSERT_ALWAYS(cur_bb != NULL);
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Value *base = llvm_values_per_lane[k][word3];
             ASSERT_ALWAYS(base != NULL);
 
@@ -1022,7 +1079,7 @@ struct Spirv_Builder {
         }
         case spv::Op::OpLoad: {
           ASSERT_ALWAYS(cur_bb != NULL);
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Value *addr = llvm_values_per_lane[k][word3];
             ASSERT_ALWAYS(addr != NULL);
             llvm_values_per_lane[k][word2] = llvm_builder->CreateLoad(addr);
@@ -1031,7 +1088,7 @@ struct Spirv_Builder {
         }
         case spv::Op::OpStore: {
           ASSERT_ALWAYS(cur_bb != NULL);
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Value *addr = llvm_values_per_lane[k][word1];
             ASSERT_ALWAYS(addr != NULL);
             llvm::Value *val = llvm_values_per_lane[k][word2];
@@ -1072,7 +1129,7 @@ struct Spirv_Builder {
           break;
         }
 #define SIMPLE_LLVM_OP(llvm_op)                                                \
-  kto(subgroup_size) {                                                         \
+  kto(opt_subgroup_size) {                                                     \
     ASSERT_ALWAYS(llvm_values_per_lane[k][word2] == NULL);                     \
     ASSERT_ALWAYS(llvm_values_per_lane[k][word3] != NULL);                     \
     ASSERT_ALWAYS(llvm_values_per_lane[k][word4] != NULL);                     \
@@ -1251,11 +1308,12 @@ struct Spirv_Builder {
         }
 #undef SIMPLE_LLVM_OP
         case spv::Op::OpKill: {
-          llvm_builder->CreateCall(kill, {llvm_get_constant_i32((uint32_t)~0)});
+          llvm_builder->CreateCall(
+              kill, {state_ptr, llvm_get_constant_i32((uint32_t)~0)});
           break;
         }
         case spv::Op::OpVectorTimesScalar: {
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Value *vector = llvm_values_per_lane[k][word3];
             llvm::Value *scalar = llvm_values_per_lane[k][word4];
             ASSERT_ALWAYS(vector != NULL && scalar != NULL);
@@ -1270,7 +1328,7 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpCompositeExtract: {
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Value *src = llvm_values_per_lane[k][word3];
             llvm::Type *src_type = src->getType();
             if (src_type->isArrayTy()) {
@@ -1285,7 +1343,7 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpCompositeConstruct: {
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Type *dst_type = llvm_types[word1];
             ASSERT_ALWAYS(dst_type != NULL);
             if (dst_type->isVectorTy()) {
@@ -1308,7 +1366,7 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpVectorShuffle: {
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Value *op1 = llvm_values_per_lane[k][word3];
             llvm::Value *op2 = llvm_values_per_lane[k][word4];
             ASSERT_ALWAYS(op1 != NULL && op2 != NULL);
@@ -1363,7 +1421,7 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpDot: {
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             uint32_t res_id = word2;
             uint32_t op1_id = word3;
             uint32_t op2_id = word4;
@@ -1407,7 +1465,7 @@ struct Spirv_Builder {
           switch (inst) {
           case spv::GLSLstd450::GLSLstd450Normalize: {
             ASSERT_ALWAYS(WordCount == 6);
-            kto(subgroup_size) {
+            kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
               ASSERT_ALWAYS(arg != NULL);
               llvm::VectorType *vtype =
@@ -1437,7 +1495,7 @@ struct Spirv_Builder {
           }
           case spv::GLSLstd450::GLSLstd450Sqrt: {
             ASSERT_ALWAYS(WordCount == 6);
-            kto(subgroup_size) {
+            kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
               ASSERT_ALWAYS(arg != NULL);
               llvm::VectorType *vtype =
@@ -1466,7 +1524,7 @@ struct Spirv_Builder {
           }
           case spv::GLSLstd450::GLSLstd450Length: {
             ASSERT_ALWAYS(WordCount == 6);
-            kto(subgroup_size) {
+            kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
               ASSERT_ALWAYS(arg != NULL);
               llvm::VectorType *vtype =
@@ -1520,7 +1578,7 @@ struct Spirv_Builder {
         case spv::Op::OpReturn: {
           NOTNULL(cur_bb);
           if (contains(entries, item.first))
-            llvm::CallInst::Create(spv_on_exit, "", cur_bb);
+            llvm_builder->CreateCall(spv_on_exit, state_ptr);
           llvm::ReturnInst::Create(c, NULL, cur_bb);
           // Terminate current basic block
           cur_bb = NULL;
@@ -1531,7 +1589,7 @@ struct Spirv_Builder {
         }
         case spv::Op::OpBitcast: {
           ASSERT_ALWAYS(WordCount == 4);
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             uint32_t res_type_id = word1;
             uint32_t res_id = word2;
             uint32_t src_id = word3;
@@ -1550,7 +1608,7 @@ struct Spirv_Builder {
           uint32_t image_id = word1;
           uint32_t coord_id = word2;
           uint32_t texel_id = word3;
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Value *image = llvm_values_per_lane[k][image_id];
             ASSERT_ALWAYS(image != NULL);
             llvm::Value *coord = llvm_values_per_lane[k][coord_id];
@@ -1576,7 +1634,7 @@ struct Spirv_Builder {
           uint32_t res_id = word2;
           uint32_t image_id = word3;
           uint32_t coord_id = word4;
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Type *res_type = llvm_types[res_type_id];
             ASSERT_ALWAYS(res_type != NULL);
             llvm::Value *image = llvm_values_per_lane[k][image_id];
@@ -1600,13 +1658,15 @@ struct Spirv_Builder {
         case spv::Op::OpFunctionCall: {
           uint32_t fun_id = word3;
           uint32_t res_id = word2;
-          kto(subgroup_size) {
+          kto(opt_subgroup_size) {
             llvm::Value *fun_value = llvm_values_per_lane[k][fun_id];
             NOTNULL(fun_value);
             llvm::Function *target_fun =
                 llvm::dyn_cast<llvm::Function>(fun_value);
             NOTNULL(target_fun);
             llvm::SmallVector<llvm::Value *, 4> args;
+            // Prepend state *
+            args.push_back(state_ptr);
             for (int i = 4; i < WordCount; i++) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[i]];
               NOTNULL(arg);
@@ -2155,10 +2215,23 @@ struct Spirv_Builder {
       for (auto &fun : module->functions()) {
         for (auto &bb : fun) {
           for (auto &inst : bb) {
-            llvm::CallInst *call = llvm::dyn_cast<llvm::CallInst>(&inst);
-            if (call != NULL) {
+            if (auto *call = llvm::dyn_cast<llvm::CallInst>(&inst)) {
               call->setTailCallKind(llvm::CallInst::TailCallKind::TCK_NoTail);
             }
+            //            if (opt_force_alignment) {
+            //              if (auto *alloca =
+            //              llvm::dyn_cast<llvm::AllocaInst>(&inst)) {
+            //                alloca->setAlignment(llvm::MaybeAlign(16));
+            //              }
+            //              if (auto *load =
+            //              llvm::dyn_cast<llvm::LoadInst>(&inst)) {
+            //                load->setAlignment(llvm::MaybeAlign(16));
+            //              }
+            //              if (auto *store =
+            //              llvm::dyn_cast<llvm::StoreInst>(&inst)) {
+            //                store->setAlignment(llvm::MaybeAlign(16));
+            //              }
+            //            }
           }
         }
       }
@@ -3175,6 +3248,7 @@ struct Spirv_Builder {
       std::vector<uint32_t> outputs;
       uint32_t max_input_location = 0;
       uint32_t max_output_location = 0;
+      // First pass figure out the number of input/output slots
       for (auto &item : decl_types) {
         if (item.second == DeclTy::Variable) {
           Variable var = variables[item.first];
@@ -3203,7 +3277,9 @@ struct Spirv_Builder {
       uint32_t input_offset = 0;
       uint32_t output_offset = 0;
       input_offsets.resize(max_input_location + 1);
+      input_sizes.resize(max_input_location + 1);
       output_offsets.resize(max_output_location + 1);
+      output_sizes.resize(max_output_location + 1);
       for (uint32_t id : inputs) {
         if (id > 0) {
           Variable var = variables[id];
@@ -3211,7 +3287,9 @@ struct Spirv_Builder {
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
           input_offsets[location] = input_offset;
-          input_offset += get_pointee_size(var.type_id);
+          uint32_t size = (uint32_t)get_pointee_size(var.type_id);
+          input_sizes[location] = size;
+          input_offset += size;
         }
       }
       for (uint32_t id : outputs) {
@@ -3221,7 +3299,9 @@ struct Spirv_Builder {
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
           output_offsets[location] = output_offset;
-          output_offset += get_pointee_size(var.type_id);
+          uint32_t size = (uint32_t)get_pointee_size(var.type_id);
+          output_sizes[location] = size;
+          output_offset += size;
         }
       }
       output_storage_size = output_offset;

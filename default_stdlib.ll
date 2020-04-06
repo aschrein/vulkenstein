@@ -4,6 +4,7 @@
 %image_t = type { i32 }
 %sampler_t = type { i32 }
 %mask_t = type i64
+%state_t = type i8
 
 declare void @spv_dummy_sampler_t_use(%sampler_t )
 declare void @spv_dummy_combined_image_t_use(%combined_image_t )
@@ -16,15 +17,15 @@ declare void @spv_dummy_combined_image_t_use(%combined_image_t )
 declare void @spv_image_read_f4(%image_t *%cimg, <2 x i32> *%in_coord, <4 x float> *%out_data)
 declare void @spv_image_write_f4(%image_t *%cimg, <2 x i32> *%in_coord, <4 x float> *%in_data)
 
-declare i8 *@get_push_constant_ptr() #0
-declare i8 *@get_uniform_ptr(i32 %set, i32 %binding) #0
-declare i8 *@get_uniform_const_ptr(i32 %set, i32 %binding) #0
-declare i8 *@get_storage_ptr(i32 %set, i32 %binding) #0
-declare i8 *@get_input_ptr() #0
-declare i8 *@get_output_ptr() #0
-declare i8 *@get_private_ptr() #0
+declare align 16 i8 *@get_push_constant_ptr(%state_t *) #0
+declare align 16 i8 *@get_uniform_ptr(%state_t *, i32 %set, i32 %binding) #0
+declare align 16 i8 *@get_uniform_const_ptr(%state_t *, i32 %set, i32 %binding) #0
+declare align 16 i8 *@get_storage_ptr(%state_t *, i32 %set, i32 %binding) #0
+declare align 16 i8 *@get_input_ptr(%state_t *) #0
+declare align 16 i8 *@get_output_ptr(%state_t *) #0
+declare align 16 i8 *@get_private_ptr(%state_t *) #0
 
-declare void @kill(%mask_t %mask)
+declare void @kill(%state_t *, %mask_t %mask)
 declare <4 x float> @dummy_sample()
 
 declare <2 x float> @normalize_f2(<2 x float> *%in) #0
@@ -39,11 +40,11 @@ declare float @length_f2(<2 x float> *%in) #0
 declare float @length_f3(<3 x float> *%in) #0
 declare float @length_f4(<4 x float> *%in) #0
 
-declare void @spv_get_global_invocation_id(i32 %lane_id, <3 x i32> *%out) #0
-declare void @spv_get_work_group_size(<3 x i32> *%out) #0
+declare void @spv_get_global_invocation_id(%state_t *, i32 %lane_id, <3 x i32> *%out) #0
+declare void @spv_get_work_group_size(%state_t *, <3 x i32> *%out) #0
 
 declare float @spv_sqrt(float %in) #0
 
-declare void @spv_on_exit() #0
+declare void @spv_on_exit(%state_t *)
 
 attributes #0 = { nounwind readnone speculatable }

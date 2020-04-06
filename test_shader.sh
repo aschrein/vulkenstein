@@ -15,6 +15,7 @@ spirv-dis --raw-id shader.spv -o shader.spv.S && \
 s2l shader.spv > shader.ll && \
 llvm-as shader.ll -o shader.bc && \
 g++ -g -I$SCRIPTPATH stdlib.cpp -fPIC -c -o shader_stdlib.o && \
+opt -early-cse --amdgpu-load-store-vectorizer --load-store-vectorizer  --interleaved-load-combine --vector-combine --instnamer shader.bc -o shader.bc && \
 opt -O3  shader.bc -o shader.bc && \
 llvm-dis shader.bc -o shader.opt.ll && \
 llc --relocation-model=pic --mtriple=x86_64-unknown-linux-gnu -filetype=obj shader.bc -o shader.o && \
@@ -29,7 +30,10 @@ exit 1
 -fPIE -pie
 
 llc:
--mattr=+avx2,+fast-variable-shuffle
+-mattr=+avx2
+
+optimal options:
+-early-cse --amdgpu-load-store-vectorizer --load-store-vectorizer  --interleaved-load-combine --vector-combine --instnamer
 
 clang -emit-llvm -g -I$SCRIPTPATH stdlib.cpp -S -o shader_stdlib.bc && \
 llvm-link shader.bc shader_stdlib.bc -o shader.bc && \
