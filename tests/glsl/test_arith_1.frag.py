@@ -1,15 +1,10 @@
 stdlib = \
 r"""
-#include <stdlib.cpp>
+#include <test_stdlib.cpp>
 
 extern "C"{
-// Reference to the SPIRV module entry point(main only for now)
-void shader_entry();
 
-void test_launch() {
-  shader_entry();
-}
-vec4 g_input[3] = {
+float4 g_input[3] = {
 {1.0f, 2.0f, 3.0f, 4.0f},
 {1.0f, 2.0f, 3.0f, 4.0f},
 {2.0f, 1.0f, 2.0f, 1.0f},
@@ -17,7 +12,7 @@ vec4 g_input[3] = {
 
 #pragma pack(1)
 struct UBO {
-  vec4 vec_4;
+  float4 vec_4;
   float k;
 } uniforms;
 #pragma pop
@@ -35,36 +30,38 @@ void *get_input_ptr(int id) {
   return &g_input[id];
 }
 
-vec4 g_output;
+float4 g_output;
 
 void *get_output_ptr(int id) {
   return &g_output;
 }
 
-void spv_on_exit() {
+void shader_entry(void *);
+
+void test_launch(void *_printf) {
   /*fprintf(stdout, "[%f, %f, %f, %f]\n",
   g_output.m[0],
   g_output.m[1],
   g_output.m[2],
   g_output.m[3]
   );*/
-  vec3 res = {};
-  vec4 param0 = g_input[0];
-  vec4 param1 = g_input[1];
-  vec4 param2 = g_input[2];
+  float3 res = {};
+  float4 param0 = g_input[0];
+  float4 param1 = g_input[1];
+  float4 param2 = g_input[2];
   res =
-  (xyz(param0) * www(param1))
-  * dot(glm::xy(uniforms.vec_4), glm::zw(param2))
-  * dot(vec3(uniforms.k), xxx(param2))
-  * dot(param0, param1)
-  / length(param0 + param1);
-
+  (param0.xyz * param1.www)
+  * spv_dot_f2(uniforms.vec_4.xy, param2.zw)
+  * spv_dot_f3((float3){uniforms.k, uniforms.k, uniforms.k}, param2.xxx)
+  * spv_dot_f4(param0, param1)
+  / spv_length_f4(param0 + param1);
+  shader_entry(NULL);
   TEST_EQ(g_output.x, res.x);
   TEST_EQ(g_output.y, res.y);
   TEST_EQ(g_output.z, res.z);
   TEST_EQ(g_output.w, 1.0f);
 
-  fprintf(stdout, "[SUCCESS]\n");
+   ((printf_t)_printf)("[SUCCESS]\n");
 }
 
 }

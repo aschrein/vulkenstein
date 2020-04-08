@@ -1,24 +1,22 @@
 stdlib = \
 r"""
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdlib.cpp>
+#include <test_stdlib.cpp>
 
 extern "C"{
 
 float g_input[2][WAVE_WIDTH] = {};
-vec4 g_output[WAVE_WIDTH] = {};
+float4 g_output[WAVE_WIDTH] = {};
 
 #pragma pack(1)
 struct UBO {
-  mat4 transform;
+  float4 transform[4];
   int albedo_id;
   int normal_id;
   int arm_id;
   float metal_factor;
   float roughness_factor;
   char pad[12];
-  vec4 vec_4;
+  float4 vec_4;
 } uniforms;
 #pragma pop
 
@@ -39,7 +37,7 @@ void spv_on_exit(void *state) {
 
 void shader_entry(void *);
 
-void test_launch() {
+void test_launch(void *_printf) {
   for (int i = 0; i < WAVE_WIDTH; i++) {
     g_input[0][i] = (float)i;
     g_input[1][i] = (float)i + 1.0f;
@@ -60,7 +58,7 @@ void test_launch() {
     TEST_EQ(g_output[i].z, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.z);
     TEST_EQ(g_output[i].w, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.w);
   }
-  fprintf(stdout, "[SUCCESS]\n");
+  ((printf_t)_printf)("[SUCCESS]\n");
 }
 
 }

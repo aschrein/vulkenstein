@@ -12,6 +12,7 @@
     if (!(x)) {                                                                \
       fprintf(stderr, "%s:%i [FAIL] at %s\n", __FILE__, __LINE__, #x);         \
       (void)(*(volatile int *)(NULL) = 0);                                     \
+      abort();                                                                 \
     }                                                                          \
   }
 #define ASSERT_DEBUG(x) ASSERT_ALWAYS(x)

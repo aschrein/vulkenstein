@@ -5,9 +5,9 @@
 #include <dlfcn.h>
 
 extern "C" {
-void success() {
-  fprintf(stdout, "[SUCCESS]\n");
-}
+//void printf(char const *fmt, ...) {
+//  fprintf(stdout, "[SUCCESS]\n");
+//}
 }
 
 int main(int argc, char **argv) {
@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
   }
   main_t func = (main_t)dlsym(myso, "test_launch");
   ASSERT_ALWAYS(func != NULL);
-  func((void*)&success);
+  func((void*)&printf);
   dlclose(myso);
   return 0;
 }

@@ -3,7 +3,10 @@ export SCRIPTPATH=`dirname $SCRIPT`
 export PATH=$SCRIPTPATH/build:$PATH
 export PATH=/home/aschrein/dev/llvm/build/Release/bin:$PATH
 echo "using $(which clang)"
-export WAVE_WIDTH=64
+export WAVE_WIDTH=4
+export DEINTERLEAVE=0
+echo "WAVE_WIDTH=$WAVE_WIDTH"
+echo "DEINTERLEAVE=$DEINTERLEAVE"
 WD=`pwd`
 if [ -z "$1" ]
   then
@@ -19,8 +22,6 @@ s2l shader.spv $WAVE_WIDTH > shader.ll && \
 llvm-as shader.ll -o shader.bc && \
 clang -emit-llvm -DWAVE_WIDTH="$WAVE_WIDTH" -g -I$SCRIPTPATH stdlib.cpp -S -o shader_stdlib.bc && \
 llvm-link shader.bc shader_stdlib.bc -o shader.bc && \
-opt -early-cse --amdgpu-load-store-vectorizer --load-store-vectorizer \
-    --interleaved-load-combine --vector-combine --instnamer shader.bc -o shader.bc && \
 opt -strip -O3  shader.bc -o shader.bc && \
 llvm-dis shader.bc -o shader.opt.ll && \
 llc -mattr=+avx2 -O3 --relocation-model=pic --mtriple=x86_64-unknown-linux-gnu -filetype=obj shader.bc -o shader.o && \
@@ -31,7 +32,8 @@ clang++ -g $SCRIPTPATH/test_driver.cpp -o test_driver -ldl && \
 exit 0
 exit 1
 
-
+opt -early-cse --amdgpu-load-store-vectorizer --load-store-vectorizer \
+    --interleaved-load-combine --vector-combine --instnamer shader.bc -o shader.bc && \
 
 -Wl,--unresolved-symbols=ignore-all
 -fPIE -pie

@@ -2,12 +2,14 @@ stdlib = \
 r"""
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdlib.cpp>
+#include <test_stdlib.cpp>
 
 extern "C"{
 
-float g_input[2][WAVE_WIDTH] = {};
-float4 g_output[WAVE_WIDTH] = {};
+float4 g_input[2][WAVE_WIDTH] = {};
+float g_input_flat[2][WAVE_WIDTH * 4] = {};
+
+float g_output[WAVE_WIDTH * 4] = {};
 
 #pragma pack(1)
 struct UBO {
@@ -22,26 +24,36 @@ void *get_uniform_ptr(void *state, int set, int binding) {
 }
 
 void *get_input_ptr(void *state) {
+#if DEINTERLEAVE
+  return (void*)(&g_input_flat[0]);
+#else
   return (void*)(&g_input[0]);
+#endif
 }
 
 void *get_output_ptr(void *state, int id) {
   return &g_output;
 }
 
-void spv_on_exit(void *state) {
-}
-
 void shader_entry(void *);
 
-void test_launch(void *success) {
-  typedef void (*success_t)();
-  //success_t func = (success_t)dlsym(parent, "success");
+void test_launch(void *_printf) {
 
   for (int i = 0; i < WAVE_WIDTH; i++) {
-    g_input[0][i] = (float)i;
-    g_input[1][i] = (float)i + 1.0f;
+    g_input[0][i].x = (float)i;
+    g_input[0][i].y = (float)i;
+    g_input[0][i].z = (float)i;
+    g_input[0][i].w = (float)i;
+    g_input[1][i].x = (float)i + 1.0f;
+    g_input[1][i].y = (float)i + 2.0f;
+    g_input[1][i].z = (float)i + 3.0f;
+    g_input[1][i].w = (float)i + 4.0f;
   }
+
+#if DEINTERLEAVE
+  deinterleave(&g_input[0][0], &g_input_flat[0][0]);
+  deinterleave(&g_input[1][0], &g_input_flat[1][0]);
+#endif
 
   uniforms.vec_4[0] = 2.0f;
   uniforms.vec_4[1] = 2.0f;
@@ -50,16 +62,33 @@ void test_launch(void *success) {
 
   shader_entry(NULL);
 
+#if DEINTERLEAVE
+  const size_t stride = 1;
+  const size_t x_offset = WAVE_WIDTH * 0;
+  const size_t y_offset = WAVE_WIDTH * 1;
+  const size_t z_offset = WAVE_WIDTH * 2;
+  const size_t w_offset = WAVE_WIDTH * 3;
+#else
+  const size_t stride = 4;
+  const size_t x_offset = 0;
+  const size_t y_offset = 1;
+  const size_t z_offset = 2;
+  const size_t w_offset = 3;
+#endif
+
   for (int i = 0; i < WAVE_WIDTH; i++) {
-    //fprintf(stdout, "[%f %f %f %f]\n", g_output[i].x, g_output[i].y, g_output[i].z, g_output[i].w);
-    //fprintf(stdout, "[(%f+%f)*%f]\n", g_input[0][i], g_input[1][i], uniforms.vec_4.x);
-    TEST_EQ(g_output[i].x, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.x);
-    TEST_EQ(g_output[i].y, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.y);
-    TEST_EQ(g_output[i].z, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.z);
-    TEST_EQ(g_output[i].w, (g_input[0][i] + g_input[1][i]) * uniforms.vec_4.w);
+#define out_x g_output[i * stride + x_offset]
+#define out_y g_output[i * stride + y_offset]
+#define out_z g_output[i * stride + z_offset]
+#define out_w g_output[i * stride + w_offset]
+    // ((printf_t)_printf)("[%f %f %f %f]\n", out_x, out_y, out_z, out_w);
+    // ((printf_t)_printf)("[(%f+%f)*%f]\n", g_input[0][i], g_input[1][i], uniforms.vec_4.x);
+    TEST_EQ(out_x, (g_input[0][i] + g_input[1][i]).x * uniforms.vec_4.x);
+    TEST_EQ(out_y, (g_input[0][i] + g_input[1][i]).y * uniforms.vec_4.y);
+    TEST_EQ(out_z, (g_input[0][i] + g_input[1][i]).z * uniforms.vec_4.z);
+    TEST_EQ(out_w, (g_input[0][i] + g_input[1][i]).w * uniforms.vec_4.w);
   }
-  ((success_t)success)();
-  // fprintf(stdout, "[SUCCESS]\n");
+  ((printf_t)_printf)("[SUCCESS]\n");
 }
 
 }
@@ -68,8 +97,8 @@ shader = \
 r"""#version 450
 #extension GL_EXT_nonuniform_qualifier : require
 
-layout(location = 0) in float param0;
-layout(location = 1) in float param1;
+layout(location = 0) in vec4 param0;
+layout(location = 1) in vec4 param1;
 
 layout(set = 0, binding = 0, std140) uniform UBO {
   int pad_0;

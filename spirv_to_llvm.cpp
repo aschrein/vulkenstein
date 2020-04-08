@@ -66,7 +66,7 @@ bool contains(M const &in, K const &key) {
   {                                                                            \
     fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);        \
     (void)(*(int *)(void *)(0) = 0);                                           \
-    exit(1);                                                                   \
+    abort();                                                                   \
   }
 
 #define UNIMPLEMENTED UNIMPLEMENTED_("")
@@ -91,6 +91,7 @@ void llvm_fatal(void *user_data, const std::string &reason,
                 bool gen_crash_diag) {
   fprintf(stderr, "[LLVM_FATAL] %s\n", reason.c_str());
   (void)(*(int *)(void *)(0) = 0);
+  abort();
 }
 
 #ifdef S2L_EXE
@@ -259,7 +260,10 @@ struct Entry {
   spv::ExecutionModel execution_model;
   std::string name;
 };
-
+struct Parsed_Op {
+  spv::Op op;
+  std::vector<uint32_t> args;
+};
 #include "spv_dump.hpp"
 
 struct Spirv_Builder {
@@ -267,6 +271,7 @@ struct Spirv_Builder {
   //     Options      //
   //////////////////////
   uint32_t opt_subgroup_size = 4;
+  //  bool opt_deinterleave_attributes = false;
 
   //////////////////////
   // Meta information //
@@ -415,9 +420,9 @@ struct Spirv_Builder {
     LOOKUP_FN(normalize_f2);
     LOOKUP_FN(normalize_f3);
     LOOKUP_FN(normalize_f4);
-    LOOKUP_FN(length_f2);
-    LOOKUP_FN(length_f3);
-    LOOKUP_FN(length_f4);
+    LOOKUP_FN(spv_length_f2);
+    LOOKUP_FN(spv_length_f3);
+    LOOKUP_FN(spv_length_f4);
     LOOKUP_FN(dummy_sample);
     LOOKUP_FN(spv_sqrt);
     LOOKUP_FN(spv_dot_f2);
@@ -431,40 +436,6 @@ struct Spirv_Builder {
     // Force 64 bit pointers
     llvm::Type *llvm_int_ptr_t = llvm::Type::getInt64Ty(c);
     llvm::Type *state_t_ptr = llvm::PointerType::get(state_t, 0);
-
-    // Vector types for a given subgroup size
-
-    //    LOOKUP_TY(float_t);
-    //    LOOKUP_TY(float2_t);
-    //    LOOKUP_TY(float3_t);
-    //    LOOKUP_TY(float4_t);
-
-    //    LOOKUP_TY(float2x2_t);
-    //    LOOKUP_TY(float2x3_t);
-    //    LOOKUP_TY(float2x4_t);
-
-    //    LOOKUP_TY(float3x2_t);
-    //    LOOKUP_TY(float3x3_t);
-    //    LOOKUP_TY(float3x4_t);
-
-    //    LOOKUP_TY(float4x2_t);
-    //    LOOKUP_TY(float4x3_t);
-    //    LOOKUP_TY(float4x4_t);
-
-    //    LOOKUP_TY(double_t);
-    //    LOOKUP_TY(double2_t);
-    //    LOOKUP_TY(double3_t);
-    //    LOOKUP_TY(double4_t);
-
-    //    LOOKUP_TY(int_t);
-    //    LOOKUP_TY(int2_t);
-    //    LOOKUP_TY(int3_t);
-    //    LOOKUP_TY(int4_t);
-
-    //    LOOKUP_TY(half_t);
-    //    LOOKUP_TY(half2_t);
-    //    LOOKUP_TY(half3_t);
-    //    LOOKUP_TY(half4_t);
 
     LOOKUP_TY(sampler_t);
     LOOKUP_TY(image_t);
@@ -810,7 +781,33 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(var.storage != spv::StorageClass::StorageClassFunction);
         llvm::Type *llvm_type = llvm_types[var.type_id];
         ASSERT_ALWAYS(llvm_type != NULL);
-
+        ASSERT_ALWAYS(llvm_type->isPointerTy());
+        PtrTy ptr_type = ptr_types[var.type_id];
+        DeclTy pointee_decl_ty = decl_types_table[ptr_type.target_id];
+        // In case that's a vector type we'd try to deinterleave it(flatten into
+        // one huge vector of floats/ints)
+        uint32_t num_components = 0;
+        Primitive_t component_ty = Primitive_t::Void;
+        switch (pointee_decl_ty) {
+        case DeclTy::PrimitiveTy: {
+          PrimitiveTy pty = primitive_types[ptr_type.target_id];
+          if (pty.type == Primitive_t::F32) {
+            num_components = 1;
+          }
+          break;
+        }
+        case DeclTy::VectorTy: {
+          VectorTy vec_ty = vector_types[ptr_type.target_id];
+          ASSERT_ALWAYS(vec_ty.width <= 4);
+          ASSERT_ALWAYS(contains(primitive_types, vec_ty.member_id));
+          component_ty = primitive_types[vec_ty.member_id].type;
+          num_components = vec_ty.width;
+          break;
+        }
+        default:
+          break;
+        }
+        // Handle each storage type differently
         switch (var.storage) {
         case spv::StorageClass::StorageClassPrivate: {
           ito(opt_subgroup_size) {
@@ -857,9 +854,9 @@ struct Spirv_Builder {
           uint32_t location =
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
-
           ASSERT_ALWAYS(location >= 0);
           ASSERT_ALWAYS(llvm_type->isPointerTy());
+
           llvm::ArrayType *array_type = llvm::ArrayType::get(
               llvm_type->getPointerElementType(), opt_subgroup_size);
           llvm::Value *alloca = llvm_builder->CreateAlloca(array_type);
@@ -921,11 +918,17 @@ struct Spirv_Builder {
             break;
           }
           // Pipeline input
+          ASSERT_ALWAYS(
+              (pointee_decl_ty == DeclTy::PrimitiveTy &&
+               primitive_types[ptr_type.target_id].type == Primitive_t::F32) ||
+              (pointee_decl_ty == DeclTy::VectorTy &&
+               vector_types[ptr_type.target_id].width <= 4) ||
+              false);
           uint32_t location =
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
           ASSERT_ALWAYS(location >= 0);
-          ASSERT_ALWAYS(llvm_type->isPointerTy());
+
           llvm::ArrayType *array_type = llvm::ArrayType::get(
               llvm_type->getPointerElementType(), opt_subgroup_size);
           llvm::Value *offset = llvm_builder->CreateGEP(
@@ -1010,7 +1013,6 @@ struct Spirv_Builder {
             llvm::Type *result_type = llvm_types[word1];
             NOTNULL(result_type);
             llvm::Value *val = base;
-            //
             ito(indices.size()) {
               llvm::Value *index_val = indices[i];
               NOTNULL(index_val);
@@ -1040,14 +1042,24 @@ struct Spirv_Builder {
                                                  (uint32_t)0),
                           llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
                                                  (uint32_t)struct_member_id)});
+                // Make sure there is no reinterpretation at SPIRV level
+                ASSERT_ALWAYS(i != indices.size() - 1 ||
+                              result_type == val->getType());
               } else {
-                llvm::Value *gep = llvm_builder->CreateGEP(val, index_val);
-                val = gep;
+                if (i == indices.size() - 1) {
+                  llvm::Value *reinter =
+                      llvm_builder->CreateBitCast(val, result_type);
+                  llvm::Value *gep =
+                      llvm_builder->CreateGEP(reinter, index_val);
+                  val = gep;
+                } else {
+                  llvm::Value *gep = llvm_builder->CreateGEP(val, index_val);
+                  val = gep;
+                }
               }
             }
             // SPIRV allows implicit reinterprets of pointers?
-            llvm_values_per_lane[k][word2] =
-                llvm_builder->CreateBitCast(val, result_type);
+            llvm_values_per_lane[k][word2] = val;
           }
           break;
         }
@@ -1411,22 +1423,18 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(op2_vtype != NULL);
             ASSERT_ALWAYS(op1_vtype->getVectorNumElements() ==
                           op2_vtype->getVectorNumElements());
-            llvm::Value *alloca1 = llvm_builder->CreateAlloca(op1_vtype);
-            llvm::Value *alloca2 = llvm_builder->CreateAlloca(op2_vtype);
-            llvm_builder->CreateStore(op1_val, alloca1);
-            llvm_builder->CreateStore(op2_val, alloca2);
             switch (op1_vtype->getVectorNumElements()) {
             case 2:
               llvm_values_per_lane[k][res_id] =
-                  llvm_builder->CreateCall(spv_dot_f2, {alloca1, alloca2});
+                  llvm_builder->CreateCall(spv_dot_f2, {op1_val, op2_val});
               break;
             case 3:
               llvm_values_per_lane[k][res_id] =
-                  llvm_builder->CreateCall(spv_dot_f3, {alloca1, alloca2});
+                  llvm_builder->CreateCall(spv_dot_f3, {op1_val, op2_val});
               break;
             case 4:
               llvm_values_per_lane[k][res_id] =
-                  llvm_builder->CreateCall(spv_dot_f4, {alloca1, alloca2});
+                  llvm_builder->CreateCall(spv_dot_f4, {op1_val, op2_val});
               break;
             default:
               UNIMPLEMENTED;
@@ -1504,21 +1512,19 @@ struct Spirv_Builder {
               llvm::VectorType *vtype =
                   llvm::dyn_cast<llvm::VectorType>(arg->getType());
               ASSERT_ALWAYS(vtype != NULL);
-              llvm::Value *alloca = llvm_builder->CreateAlloca(vtype);
-              llvm_builder->CreateStore(arg, alloca);
               uint32_t width = vtype->getVectorNumElements();
               switch (width) {
               case 2:
                 llvm_values_per_lane[k][word2] =
-                    llvm_builder->CreateCall(length_f2, {alloca});
+                    llvm_builder->CreateCall(spv_length_f2, {arg});
                 break;
               case 3:
                 llvm_values_per_lane[k][word2] =
-                    llvm_builder->CreateCall(length_f3, {alloca});
+                    llvm_builder->CreateCall(spv_length_f3, {arg});
                 break;
               case 4:
                 llvm_values_per_lane[k][word2] =
-                    llvm_builder->CreateCall(length_f4, {alloca});
+                    llvm_builder->CreateCall(spv_length_f4, {arg});
                 break;
               default:
                 UNIMPLEMENTED;
@@ -1595,15 +1601,7 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(coord != NULL);
             llvm::Value *texel = llvm_values_per_lane[k][texel_id];
             ASSERT_ALWAYS(texel != NULL);
-#define STASH_STACK(name, val)                                                 \
-  llvm::Value *name = llvm_builder->CreateAlloca(val->getType());              \
-  llvm_builder->CreateStore(val, name);
-            STASH_STACK(image_shadow, image);
-            STASH_STACK(coord_shadow, coord);
-            STASH_STACK(texel_shadow, texel);
-#undef STASH_STACK
-            llvm_builder->CreateCall(
-                spv_image_write_f4, {image_shadow, coord_shadow, texel_shadow});
+            llvm_builder->CreateCall(spv_image_write_f4, {image, coord, texel});
           }
           break;
         }
@@ -1621,17 +1619,10 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(image != NULL);
             llvm::Value *coord = llvm_values_per_lane[k][coord_id];
             ASSERT_ALWAYS(coord != NULL);
-#define STASH_STACK(name, val)                                                 \
-  llvm::Value *name = llvm_builder->CreateAlloca(val->getType());              \
-  llvm_builder->CreateStore(val, name);
-            STASH_STACK(image_shadow, image);
-            STASH_STACK(coord_shadow, coord);
-#undef STASH_STACK
             llvm::Value *res_shadow = llvm_builder->CreateAlloca(res_type);
-            llvm::Value *call = llvm_builder->CreateCall(
-                spv_image_read_f4, {image_shadow, coord_shadow, res_shadow});
-            llvm_values_per_lane[k][res_id] =
-                llvm_builder->CreateLoad(res_shadow);
+            llvm::Value *call =
+                llvm_builder->CreateCall(spv_image_read_f4, {image, coord});
+            llvm_values_per_lane[k][res_id] = call;
           }
           break;
         }
@@ -3233,6 +3224,9 @@ struct Spirv_Builder {
         if (item.second == DeclTy::Variable) {
           Variable var = variables[item.first];
           ASSERT_ALWAYS(var.id > 0);
+          // Skip builtins here
+          if (has_decoration(spv::Decoration::DecorationBuiltIn, var.id))
+            continue;
           if (var.storage == spv::StorageClass::StorageClassInput) {
             uint32_t location =
                 find_decoration(spv::Decoration::DecorationLocation, var.id)
