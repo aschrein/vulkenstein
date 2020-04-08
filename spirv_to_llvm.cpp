@@ -423,6 +423,7 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_length_f2);
     LOOKUP_FN(spv_length_f3);
     LOOKUP_FN(spv_length_f4);
+    LOOKUP_FN(spv_cross);
     LOOKUP_FN(dummy_sample);
     LOOKUP_FN(spv_sqrt);
     LOOKUP_FN(spv_dot_f2);
@@ -436,6 +437,8 @@ struct Spirv_Builder {
     // Force 64 bit pointers
     llvm::Type *llvm_int_ptr_t = llvm::Type::getInt64Ty(c);
     llvm::Type *state_t_ptr = llvm::PointerType::get(state_t, 0);
+    llvm::Type *mask_t = llvm::VectorType::get(llvm::IntegerType::getInt1Ty(c),
+                                               opt_subgroup_size);
 
     LOOKUP_TY(sampler_t);
     LOOKUP_TY(image_t);
@@ -476,6 +479,9 @@ struct Spirv_Builder {
         llvm::SmallVector<llvm::Type *, 16> args;
         // Prepend state_t* to each function type
         args.push_back(state_t_ptr);
+        // Prepend mask to each function type
+        args.push_back(mask_t);
+
         for (auto &param_id : type.params) {
           llvm::Type *arg_type = llvm_types[param_id];
           ASSERT_ALWAYS(arg_type != NULL &&
@@ -715,6 +721,7 @@ struct Spirv_Builder {
       int32_t cur_merge_id = -1;
       int32_t cur_continue_id = -1;
       std::vector<BranchCond> deferred_branches;
+      std::vector<std::pair<llvm::BasicBlock *, uint32_t>> deferred_jumps;
       std::vector<DeferredStore> deferred_stores;
       std::map<uint32_t, llvm::BasicBlock *> llvm_labels;
       ///////////////////////////////////////////////
@@ -723,13 +730,16 @@ struct Spirv_Builder {
       llvm::Function *cur_fun =
           llvm::dyn_cast<llvm::Function>(llvm_global_values[func_id]);
       NOTNULL(cur_fun);
-      llvm::Value *state_ptr = cur_fun->arg_begin();
+      llvm::Value *state_ptr = cur_fun->getArg(0);
       state_ptr->setName("state_ptr");
       // Check that the first parameter is state_t*
       ASSERT_ALWAYS(state_ptr->getType() == state_t_ptr);
       // @llvm/allocas
       llvm::BasicBlock *cur_bb =
           llvm::BasicBlock::Create(c, "allocas", cur_fun, NULL);
+      llvm::Value *cur_mask = cur_fun->getArg(1);
+      NOTNULL(cur_mask);
+      ASSERT_ALWAYS(cur_mask->getType() == mask_t);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
       // TODO(aschrein) maybe do something more optimal?
@@ -1093,7 +1103,15 @@ struct Spirv_Builder {
           cur_merge_id = (int32_t)word1;
           break;
         }
-        case spv::Op::OpBranch:
+        case spv::Op::OpBranch: {
+          // branches reference labels that haven't been created yet
+          // So we just fix this up later
+          deferred_jumps.push_back({cur_bb, word1});
+          // Terminate current basic block
+          cur_bb = NULL;
+          llvm_builder.release();
+          break;
+        }
         case spv::Op::OpBranchConditional: {
           ASSERT_ALWAYS(cur_merge_id >= 0);
           BranchCond bc;
@@ -1112,6 +1130,87 @@ struct Spirv_Builder {
           llvm_builder.release();
           cur_merge_id = -1;
           cur_continue_id = -1;
+          break;
+        }
+        case spv::Op::OpGroupNonUniformBallot: {
+          ASSERT_ALWAYS(WordCount == 5);
+          uint32_t res_type_id = word1;
+          uint32_t res_id = word2;
+          uint32_t scope = word3;
+          uint32_t predicate_id = word4;
+          ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
+          llvm::Type *result_type = llvm_types[res_type_id];
+          ASSERT_ALWAYS(result_type->isVectorTy() &&
+                        result_type->getVectorNumElements() == 4 &&
+                        result_type->getVectorElementType() ==
+                            llvm::IntegerType::getInt32Ty(c));
+          llvm::Value *result_value =
+              llvm_builder->CreateVectorSplat(4, llvm_get_constant_i32(0));
+          ASSERT_ALWAYS(opt_subgroup_size <= 64);
+          llvm::Value *result_elem_0 = llvm_builder->CreateAnd(
+              llvm_get_constant_i32(0), llvm_get_constant_i32(0));
+          llvm::Value *result_elem_1 = llvm_builder->CreateAnd(
+              llvm_get_constant_i32(0), llvm_get_constant_i32(0));
+          kto(opt_subgroup_size) {
+            llvm::Value *pred_val = llvm_values_per_lane[k][predicate_id];
+            llvm::Value *lane_mask =
+                llvm_builder->CreateExtractElement(cur_mask, k);
+            llvm::Value *and_val = llvm_builder->CreateAnd(pred_val, lane_mask);
+            llvm::Value *zext = llvm_builder->CreateZExt(
+                and_val, llvm::IntegerType::getInt32Ty(c));
+            if (k < 32) {
+              llvm::Value *shift =
+                  llvm_builder->CreateShl(zext, llvm::APInt(32, k));
+              result_elem_0 = llvm_builder->CreateOr(shift, result_elem_0);
+            } else {
+              llvm::Value *shift =
+                  llvm_builder->CreateShl(zext, llvm::APInt(32, k - 32));
+              result_elem_1 = llvm_builder->CreateOr(shift, result_elem_1);
+            }
+          }
+          result_value = llvm_builder->CreateInsertElement(
+              result_value, result_elem_0, (uint64_t)0);
+          result_value = llvm_builder->CreateInsertElement(
+              result_value, result_elem_1, (uint64_t)1);
+          kto(opt_subgroup_size) {
+            llvm_values_per_lane[k][res_id] = result_value;
+          }
+          break;
+        }
+        case spv::Op::OpGroupNonUniformBallotBitCount: {
+          ASSERT_ALWAYS(WordCount == 6);
+          uint32_t res_type_id = word1;
+          uint32_t res_id = word2;
+          uint32_t scope = word3;
+          uint32_t group_op = word4;
+          uint32_t value_id = word5;
+          ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
+
+          break;
+        }
+        case spv::Op::OpPhi: {
+          uint32_t res_type_id = word1;
+          uint32_t res_id = word2;
+          // (var, parent_bb)
+          std::vector<std::pair<uint32_t, uint32_t>> vars;
+          ASSERT_ALWAYS((WordCount - 3) % 2 == 0);
+          ito((WordCount - 3) / 2) {
+            vars.push_back({pCode[3 + i * 2], pCode[3 + i * 2 + 1]});
+          }
+          llvm::Type *result_type = llvm_types[res_type_id];
+          NOTNULL(result_type);
+          kto(opt_subgroup_size) {
+            llvm::PHINode *llvm_phi =
+                llvm_builder->CreatePHI(result_type, (uint32_t)vars.size());
+            ito(vars.size()) {
+              llvm::Value *value = llvm_values_per_lane[k][vars[i].first];
+              llvm::BasicBlock *parent_bb = llvm_labels[vars[i].second];
+              NOTNULL(parent_bb);
+              NOTNULL(value);
+              llvm_phi->addIncoming(value, parent_bb);
+            }
+            llvm_values_per_lane[k][res_id] = llvm_phi;
+          }
           break;
         }
 #define SIMPLE_LLVM_OP(llvm_op)                                                \
@@ -1199,19 +1298,26 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpUMod: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateURem);
+          break;
         }
         case spv::Op::OpSRem: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateSRem);
+          break;
         }
         case spv::Op::OpSMod: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          // TODO(aschrein): srem != smod
+          SIMPLE_LLVM_OP(CreateSRem);
+          break;
         }
         case spv::Op::OpFRem: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateFRem);
+          break;
         }
         case spv::Op::OpFMod: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          // TODO(aschrein): srem != smod
+          SIMPLE_LLVM_OP(CreateFRem);
+          break;
         }
         case spv::Op::OpLogicalEqual: {
           UNIMPLEMENTED_(get_cstr(opcode));
@@ -1220,13 +1326,12 @@ struct Spirv_Builder {
           UNIMPLEMENTED_(get_cstr(opcode));
         }
         case spv::Op::OpLogicalOr: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateOr);
+          break;
         }
         case spv::Op::OpLogicalAnd: {
-          UNIMPLEMENTED_(get_cstr(opcode));
-        }
-        case spv::Op::OpLogicalNot: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateAnd);
+          break;
         }
         case spv::Op::OpSelect: {
           UNIMPLEMENTED_(get_cstr(opcode));
@@ -1272,27 +1377,52 @@ struct Spirv_Builder {
           UNIMPLEMENTED_(get_cstr(opcode));
         }
         case spv::Op::OpShiftRightLogical: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateLShr);
+          break;
         }
         case spv::Op::OpShiftRightArithmetic: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateAShr);
+          break;
         }
         case spv::Op::OpShiftLeftLogical: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateShl);
+          break;
         }
         case spv::Op::OpBitwiseOr: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateOr);
+          break;
         }
         case spv::Op::OpBitwiseXor: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateXor);
+          break;
         }
         case spv::Op::OpBitwiseAnd: {
-          UNIMPLEMENTED_(get_cstr(opcode));
+          SIMPLE_LLVM_OP(CreateAnd);
+          break;
         }
         case spv::Op::OpNot: {
           UNIMPLEMENTED_(get_cstr(opcode));
         }
 #undef SIMPLE_LLVM_OP
+        case spv::Op::OpConvertUToF: {
+          kto(opt_subgroup_size) {
+            llvm::Type *dest_ty = llvm_types[word1];
+            NOTNULL(dest_ty);
+            llvm::Value *src_val = llvm_values_per_lane[k][word3];
+            NOTNULL(src_val);
+            llvm_values_per_lane[k][word2] =
+                llvm_builder->CreateUIToFP(src_val, dest_ty);
+          }
+          break;
+        }
+        case spv::Op::OpLogicalNot: {
+          kto(opt_subgroup_size) {
+            llvm::Value *src_val = llvm_values_per_lane[k][word3];
+            NOTNULL(src_val);
+            llvm_values_per_lane[k][word2] = llvm_builder->CreateNot(src_val);
+          }
+          break;
+        }
         case spv::Op::OpKill: {
           llvm_builder->CreateCall(
               kill, {state_ptr, llvm_get_constant_i32((uint32_t)~0)});
@@ -1343,6 +1473,18 @@ struct Spirv_Builder {
                 ASSERT_ALWAYS(src != NULL);
                 final_val =
                     llvm_builder->CreateInsertElement(final_val, src, i);
+              }
+              llvm_values_per_lane[k][word2] = final_val;
+            } else if (dst_type->isArrayTy()) {
+              llvm::Value *undef = llvm::UndefValue::get(dst_type);
+              llvm::ArrayType *atype =
+                  llvm::dyn_cast<llvm::ArrayType>(dst_type);
+              ASSERT_ALWAYS(atype != NULL);
+              llvm::Value *final_val = undef;
+              ito(atype->getArrayNumElements()) {
+                llvm::Value *src = llvm_values_per_lane[k][pCode[3 + i]];
+                ASSERT_ALWAYS(src != NULL);
+                final_val = llvm_builder->CreateInsertValue(final_val, src, i);
               }
               llvm_values_per_lane[k][word2] = final_val;
             } else {
@@ -1528,6 +1670,91 @@ struct Spirv_Builder {
                 break;
               default:
                 UNIMPLEMENTED;
+              }
+            }
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450Cross: {
+            ASSERT_ALWAYS(WordCount == 7);
+            kto(opt_subgroup_size) {
+              llvm::Value *op1 = llvm_values_per_lane[k][pCode[5]];
+              ASSERT_ALWAYS(op1 != NULL);
+              llvm::Value *op2 = llvm_values_per_lane[k][pCode[6]];
+              ASSERT_ALWAYS(op2 != NULL);
+              llvm_values_per_lane[k][word2] =
+                  llvm_builder->CreateCall(spv_cross, {op1, op2});
+            }
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450UMin:
+          case spv::GLSLstd450::GLSLstd450FMin: {
+            ASSERT_ALWAYS(WordCount == 7);
+            kto(opt_subgroup_size) {
+              llvm::Value *op1 = llvm_values_per_lane[k][pCode[5]];
+              ASSERT_ALWAYS(op1 != NULL);
+              llvm::Value *op2 = llvm_values_per_lane[k][pCode[6]];
+              ASSERT_ALWAYS(op2 != NULL);
+              llvm::Value *cmp = NULL;
+              if (inst == spv::GLSLstd450::GLSLstd450UMin)
+                cmp = llvm_builder->CreateICmpULT(op1, op2);
+              else
+                cmp = llvm_builder->CreateFCmpOLT(op1, op2);
+              llvm::Value *select = llvm_builder->CreateSelect(cmp, op1, op2);
+              llvm_values_per_lane[k][word2] = select;
+            }
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450UMax:
+          case spv::GLSLstd450::GLSLstd450FMax: {
+            ASSERT_ALWAYS(WordCount == 7);
+            kto(opt_subgroup_size) {
+              llvm::Value *op1 = llvm_values_per_lane[k][pCode[5]];
+              ASSERT_ALWAYS(op1 != NULL);
+              llvm::Value *op2 = llvm_values_per_lane[k][pCode[6]];
+              ASSERT_ALWAYS(op2 != NULL);
+              llvm::Value *cmp = NULL;
+              if (inst == spv::GLSLstd450::GLSLstd450UMax)
+                cmp = llvm_builder->CreateICmpUGT(op1, op2);
+              else
+                cmp = llvm_builder->CreateFCmpOGT(op1, op2);
+              llvm::Value *select = llvm_builder->CreateSelect(cmp, op1, op2);
+              llvm_values_per_lane[k][word2] = select;
+            }
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450FSign: {
+            ASSERT_ALWAYS(WordCount == 6);
+            kto(opt_subgroup_size) {
+              llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
+              ASSERT_ALWAYS(arg != NULL);
+              if (arg->getType()->isVectorTy()) {
+                llvm::VectorType *vtype =
+                    llvm::dyn_cast<llvm::VectorType>(arg->getType());
+                llvm::Value *cmp = llvm_builder->CreateFCmpOLT(
+                    arg,
+                    llvm_builder->CreateVectorSplat(
+                        vtype->getVectorNumElements(),
+                        llvm::ConstantFP::get(llvm::Type::getFloatTy(c), 0.0)));
+                llvm::Value *select = llvm_builder->CreateSelect(
+                    cmp,
+                    llvm_builder->CreateVectorSplat(
+                        vtype->getVectorNumElements(),
+                        llvm::ConstantFP::get(llvm::Type::getFloatTy(c), -1.0)),
+                    llvm_builder->CreateVectorSplat(
+                        vtype->getVectorNumElements(),
+                        llvm::ConstantFP::get(llvm::Type::getFloatTy(c), 1.0))
+
+                );
+                llvm_values_per_lane[k][word2] = select;
+              } else {
+                llvm::Value *cmp = llvm_builder->CreateFCmpOLT(
+                    arg, llvm::ConstantFP::get(llvm::Type::getFloatTy(c), 0.0));
+                llvm::Value *select = llvm_builder->CreateSelect(
+                    cmp, llvm::ConstantFP::get(llvm::Type::getFloatTy(c), -1.0),
+                    llvm::ConstantFP::get(llvm::Type::getFloatTy(c), -1.0)
+
+                );
+                llvm_values_per_lane[k][word2] = select;
               }
             }
             break;
@@ -1746,7 +1973,6 @@ struct Spirv_Builder {
         case spv::Op::OpConvertFToU:
         case spv::Op::OpConvertFToS:
         case spv::Op::OpConvertSToF:
-        case spv::Op::OpConvertUToF:
         case spv::Op::OpUConvert:
         case spv::Op::OpSConvert:
         case spv::Op::OpFConvert:
@@ -1815,7 +2041,6 @@ struct Spirv_Builder {
         case spv::Op::OpAtomicAnd:
         case spv::Op::OpAtomicOr:
         case spv::Op::OpAtomicXor:
-        case spv::Op::OpPhi:
         case spv::Op::OpSwitch:
         case spv::Op::OpUnreachable:
         case spv::Op::OpLifetimeStart:
@@ -1896,10 +2121,8 @@ struct Spirv_Builder {
         case spv::Op::OpGroupNonUniformAllEqual:
         case spv::Op::OpGroupNonUniformBroadcast:
         case spv::Op::OpGroupNonUniformBroadcastFirst:
-        case spv::Op::OpGroupNonUniformBallot:
         case spv::Op::OpGroupNonUniformInverseBallot:
         case spv::Op::OpGroupNonUniformBallotBitExtract:
-        case spv::Op::OpGroupNonUniformBallotBitCount:
         case spv::Op::OpGroupNonUniformBallotFindLSB:
         case spv::Op::OpGroupNonUniformBallotFindMSB:
         case spv::Op::OpGroupNonUniformShuffle:

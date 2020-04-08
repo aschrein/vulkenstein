@@ -36,6 +36,8 @@ declare float @spv_dot_f2(<2 x float> %a, <2 x float> %b) #0
 declare float @spv_dot_f3(<3 x float> %a, <3 x float> %b) #0
 declare float @spv_dot_f4(<4 x float> %a, <4 x float> %b) #0
 
+declare <3 x float> @spv_cross(<3 x float> %a, <3 x float> %b) #0
+
 declare float @spv_length_f2(<2 x float> %in) #0
 declare float @spv_length_f3(<3 x float> %in) #0
 declare float @spv_length_f4(<4 x float> %in) #0
