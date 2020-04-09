@@ -31,6 +31,7 @@
 
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Mangler.h>
@@ -271,6 +272,7 @@ struct Spirv_Builder {
   //     Options      //
   //////////////////////
   uint32_t opt_subgroup_size = 4;
+  bool opt_debug_comments = false;
   //  bool opt_deinterleave_attributes = false;
 
   //////////////////////
@@ -433,6 +435,10 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_get_work_group_size);
     LOOKUP_FN(spv_image_read_f4);
     LOOKUP_FN(spv_image_write_f4);
+    LOOKUP_FN(spv_lsb_i64);
+    LOOKUP_FN(spv_atomic_add_i32);
+    LOOKUP_FN(spv_atomic_sub_i32);
+    LOOKUP_FN(spv_atomic_or_i32);
     llvm::Type *state_t = llvm::Type::getInt8Ty(c);
     // Force 64 bit pointers
     llvm::Type *llvm_int_ptr_t = llvm::Type::getInt64Ty(c);
@@ -454,7 +460,12 @@ struct Spirv_Builder {
     // Each function creates a copy that inherits the global
     // table
     std::vector<llvm::Value *> llvm_global_values(ID_bound);
-
+    auto get_global_const_i32 = [&llvm_global_values](uint32_t const_id) {
+      llvm::ConstantInt *co =
+          llvm::dyn_cast<llvm::ConstantInt>(llvm_global_values[const_id]);
+      NOTNULL(co);
+      return (uint32_t)co->getLimitedValue();
+    };
     //    auto wave_local_t = [&](llvm::Type *ty) {
     //      return llvm::ArrayType::get(ty, opt_subgroup_size);
     //    };
@@ -481,14 +492,17 @@ struct Spirv_Builder {
         args.push_back(state_t_ptr);
         // Prepend mask to each function type
         args.push_back(mask_t);
-
         for (auto &param_id : type.params) {
           llvm::Type *arg_type = llvm_types[param_id];
           ASSERT_ALWAYS(arg_type != NULL &&
                         "Function must have all argumet types defined");
-          args.push_back(arg_type);
+          kto(opt_subgroup_size) args.push_back(arg_type);
         }
-        llvm_types[type.id] = llvm::FunctionType::get(ret_type, args, false);
+        if (ret_type->isVoidTy())
+          llvm_types[type.id] = llvm::FunctionType::get(ret_type, args, false);
+        else
+          llvm_types[type.id] = llvm::FunctionType::get(
+              llvm::ArrayType::get(ret_type, opt_subgroup_size), args, false);
         break;
       }
       case DeclTy::Function: {
@@ -563,7 +577,14 @@ struct Spirv_Builder {
           ASSERT_ALWAYS(cnst != NULL);
           llvm_elems.push_back(cnst);
         }
-        llvm_global_values[c.id] = llvm::ConstantVector::get(llvm_elems);
+        if (type->isVectorTy())
+          llvm_global_values[c.id] = llvm::ConstantVector::get(llvm_elems);
+        else if (type->isArrayTy())
+          llvm_global_values[c.id] = llvm::ConstantArray::get(
+              llvm::dyn_cast<llvm::ArrayType>(type), llvm_elems);
+        else {
+          UNIMPLEMENTED;
+        }
         break;
       }
       case DeclTy::Variable: {
@@ -720,6 +741,7 @@ struct Spirv_Builder {
       };
       int32_t cur_merge_id = -1;
       int32_t cur_continue_id = -1;
+
       std::vector<BranchCond> deferred_branches;
       std::vector<std::pair<llvm::BasicBlock *, uint32_t>> deferred_jumps;
       std::vector<DeferredStore> deferred_stores;
@@ -749,6 +771,16 @@ struct Spirv_Builder {
           opt_subgroup_size);
       // Copy global constants into each lane
       ito(opt_subgroup_size) llvm_values_per_lane[i] = copy(llvm_global_values);
+      // Setup arguments
+      uint32_t cur_param_id = 2;
+      Function function = functions[func_id];
+      for (auto &param : function.params) {
+        uint32_t res_type_id = param.type_id;
+        uint32_t res_id = param.id;
+        kto(opt_subgroup_size) {
+          llvm_values_per_lane[k][res_id] = cur_fun->getArg(cur_param_id++);
+        }
+      }
 
       // Call to get input/output/uniform data
       llvm::Value *input_ptr =
@@ -821,10 +853,11 @@ struct Spirv_Builder {
         switch (var.storage) {
         case spv::StorageClass::StorageClassPrivate: {
           ito(opt_subgroup_size) {
-            llvm::Value *pc_ptr = llvm_builder->CreateCall(
-                get_private_ptr, {state_ptr, llvm_get_constant_i32(i)});
+            llvm::Value *pc_ptr =
+                llvm_builder->CreateCall(get_private_ptr, state_ptr);
             ASSERT_ALWAYS(contains(private_offsets, var_id));
-            uint32_t offset = private_offsets[var_id];
+            uint32_t offset =
+                private_storage_size * i + private_offsets[var_id];
             llvm::Value *pc_ptr_offset = llvm_builder->CreateGEP(
                 pc_ptr, llvm::ConstantInt::get(c, llvm::APInt(32, offset)));
             llvm::Value *llvm_value = llvm_builder->CreateBitCast(
@@ -990,6 +1023,19 @@ struct Spirv_Builder {
         uint32_t word7 = WordCount > 7 ? pCode[7] : 0;
         uint32_t word8 = WordCount > 8 ? pCode[8] : 0;
         uint32_t word9 = WordCount > 9 ? pCode[9] : 0;
+        if (cur_bb != NULL && opt_debug_comments) {
+          static char str_buf[0x100];
+          std::vector<llvm::Type *> AsmArgTypes;
+          std::vector<llvm::Value *> AsmArgs;
+          snprintf(str_buf, sizeof(str_buf), "%s: word1: %i word2: %i",
+                   get_cstr((spv::Op)opcode), word1, word2);
+          llvm::FunctionType *AsmFTy = llvm::FunctionType::get(
+              llvm::Type::getVoidTy(c), AsmArgTypes, false);
+          llvm::InlineAsm *IA = llvm::InlineAsm::get(AsmFTy, str_buf, "", true,
+                                                     /* IsAlignStack */ false,
+                                                     llvm::InlineAsm::AD_ATT);
+          llvm::CallInst::Create(IA, AsmArgs, "", cur_bb);
+        }
         switch (opcode) {
         case spv::Op::OpLabel: {
           uint32_t id = word1;
@@ -1136,7 +1182,12 @@ struct Spirv_Builder {
           ASSERT_ALWAYS(WordCount == 5);
           uint32_t res_type_id = word1;
           uint32_t res_id = word2;
-          uint32_t scope = word3;
+          uint32_t scope_id = word3;
+          llvm::Value *scope_val = llvm_global_values[scope_id];
+          llvm::ConstantInt *scope_const =
+              llvm::dyn_cast<llvm::ConstantInt>(scope_val);
+          NOTNULL(scope_const);
+          uint32_t scope = (uint32_t)scope_const->getLimitedValue();
           uint32_t predicate_id = word4;
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
           llvm::Type *result_type = llvm_types[res_type_id];
@@ -1181,11 +1232,178 @@ struct Spirv_Builder {
           ASSERT_ALWAYS(WordCount == 6);
           uint32_t res_type_id = word1;
           uint32_t res_id = word2;
-          uint32_t scope = word3;
+          uint32_t scope_id = word3;
+          uint32_t scope = get_global_const_i32(scope_id);
           uint32_t group_op = word4;
           uint32_t value_id = word5;
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
-
+          llvm::Type *result_type = llvm_types[res_type_id];
+          NOTNULL(result_type);
+          ASSERT_ALWAYS(result_type->isIntegerTy(32));
+          llvm::SmallVector<llvm::Value *, 64> scan;
+          scan.push_back(llvm_get_constant_i32(0));
+          kto(opt_subgroup_size) {
+            llvm::Value *val = llvm_values_per_lane[k][value_id];
+            NOTNULL(val);
+            ASSERT_ALWAYS(
+                val->getType()->isVectorTy() &&
+                val->getType()->getVectorNumElements() == 4 &&
+                val->getType()->getVectorElementType()->isIntegerTy(32));
+            llvm::Value *lane_mask_i32 = llvm_builder->CreateSExt(
+                llvm_builder->CreateExtractElement(cur_mask, (uint64_t)k),
+                llvm::Type::getInt32Ty(c));
+            llvm::Value *popcnt_0 = llvm_builder->CreateIntrinsic(
+                llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
+                {llvm_builder->CreateExtractElement(val, (uint64_t)0)});
+            llvm::Value *popcnt_1 = llvm_builder->CreateIntrinsic(
+                llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
+                {llvm_builder->CreateExtractElement(val, (uint64_t)1)});
+            llvm::Value *popcnt_2 = llvm_builder->CreateIntrinsic(
+                llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
+                {llvm_builder->CreateExtractElement(val, (uint64_t)2)});
+            llvm::Value *popcnt_3 = llvm_builder->CreateIntrinsic(
+                llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
+                {llvm_builder->CreateExtractElement(val, (uint64_t)3)});
+            llvm::Value *popcnt = llvm_builder->CreateAdd(
+                popcnt_0,
+                llvm_builder->CreateAdd(
+                    popcnt_1, llvm_builder->CreateAdd(popcnt_2, popcnt_3)));
+            popcnt = llvm_builder->CreateAnd(lane_mask_i32, popcnt);
+            scan.push_back(llvm_builder->CreateAdd(popcnt, scan.back()));
+          }
+          switch ((spv::GroupOperation)group_op) {
+          case spv::GroupOperation::GroupOperationExclusiveScan: {
+            kto(opt_subgroup_size) {
+              llvm_values_per_lane[k][res_id] = scan[k];
+            }
+            break;
+          }
+          case spv::GroupOperation::GroupOperationInclusiveScan: {
+            kto(opt_subgroup_size) {
+              llvm_values_per_lane[k][res_id] = scan[k + 1];
+            }
+            break;
+          }
+          case spv::GroupOperation::GroupOperationReduce: {
+            kto(opt_subgroup_size) {
+              llvm_values_per_lane[k][res_id] = scan.back();
+            }
+            break;
+          }
+          default:
+            UNIMPLEMENTED_(get_cstr((spv::GroupOperation)group_op));
+          }
+          break;
+        }
+        case spv::Op::OpGroupNonUniformElect: {
+          ASSERT_ALWAYS(WordCount == 4);
+          uint32_t res_type_id = word1;
+          uint32_t res_id = word2;
+          uint32_t scope_id = word3;
+          uint32_t scope = get_global_const_i32(scope_id);
+          ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
+          llvm::Value *result = llvm_builder->CreateVectorSplat(
+              opt_subgroup_size,
+              llvm::Constant::getIntegerValue(llvm::Type::getInt1Ty(c),
+                                              llvm::APInt(1, 0)));
+          ASSERT_ALWAYS(opt_subgroup_size <= 64);
+          llvm::Value *cur_mask_packed = llvm_builder->CreateBitCast(
+              cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
+          llvm::Value *cur_mask_i64 = llvm_builder->CreateZExt(
+              cur_mask_packed, llvm::IntegerType::get(c, 64));
+          llvm::Value *lsb =
+              llvm_builder->CreateCall(spv_lsb_i64, cur_mask_i64);
+          llvm::Value *election_mask =
+              llvm_builder->CreateShl(llvm_get_constant_i64(1), lsb);
+          kto(opt_subgroup_size) {
+            // lane_bit = (i1)((election_mask >> k) & 1)
+            llvm::Value *lane_bit = llvm_builder->CreateTrunc(
+                llvm_builder->CreateAnd(
+                    llvm_builder->CreateLShr(election_mask,
+                                             llvm_get_constant_i64(k)),
+                    llvm_get_constant_i64(1)),
+                llvm::IntegerType::getInt1Ty(c));
+            llvm_values_per_lane[k][res_id] = lane_bit;
+          }
+          break;
+        }
+        case spv::Op::OpGroupNonUniformBroadcastFirst: {
+          ASSERT_ALWAYS(WordCount == 5);
+          uint32_t res_type_id = word1;
+          uint32_t res_id = word2;
+          uint32_t scope_id = word3;
+          uint32_t value_id = word4;
+          uint32_t scope = get_global_const_i32(scope_id);
+          ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
+          llvm::Type *result_type = llvm_types[res_type_id];
+          NOTNULL(result_type);
+          llvm::ArrayType *result_arr =
+              llvm::ArrayType::get(result_type, opt_subgroup_size);
+          llvm::Value *result = llvm::UndefValue::get(result_arr);
+          kto(opt_subgroup_size) {
+            llvm::Value *lane_val = llvm_values_per_lane[k][value_id];
+            result = llvm_builder->CreateInsertValue(result, lane_val,
+                                                     {(uint32_t)k});
+          }
+          llvm::Value *cur_mask_packed = llvm_builder->CreateBitCast(
+              cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
+          llvm::Value *cur_mask_i64 = llvm_builder->CreateZExt(
+              cur_mask_packed, llvm::IntegerType::get(c, 64));
+          llvm::Value *lsb =
+              llvm_builder->CreateCall(spv_lsb_i64, cur_mask_i64);
+          llvm::Value *stack_proxy =
+              llvm_builder->CreateAlloca(result->getType());
+          llvm_builder->CreateStore(result, stack_proxy);
+          llvm::Value *gep = llvm_builder->CreateGEP(
+              stack_proxy, {llvm_get_constant_i32(0), lsb});
+          llvm::Value *broadcast = llvm_builder->CreateLoad(gep);
+          //              llvm_builder->CreateExtractElement(result, lsb);
+          kto(opt_subgroup_size) {
+            llvm_values_per_lane[k][res_id] = broadcast;
+          }
+          break;
+        }
+        case spv::Op::OpAtomicISub:
+        case spv::Op::OpAtomicOr:
+        case spv::Op::OpAtomicIAdd: {
+          ASSERT_ALWAYS(WordCount == 7);
+          uint32_t res_type_id = word1;
+          uint32_t res_id = word2;
+          uint32_t pointer_id = word3;
+          uint32_t scope_id = word4;
+          uint32_t semantics_id = word5;
+          uint32_t value_id = word6;
+          uint32_t scope = get_global_const_i32(scope_id);
+          uint32_t semantics = get_global_const_i32(semantics_id);
+          // TODO(aschrein): implement memory semantics
+          //          spv::MemorySemanticsMask::MemorySemantics
+          llvm::Type *result_type = llvm_types[res_type_id];
+          NOTNULL(result_type);
+          ASSERT_ALWAYS(result_type->isIntegerTy() &&
+                        result_type->getIntegerBitWidth() == 32);
+          // Do they have different pointers?
+          kto(opt_subgroup_size) {
+            llvm::Value *val = llvm_values_per_lane[k][value_id];
+            NOTNULL(val);
+            ASSERT_ALWAYS(val->getType()->isIntegerTy() &&
+                          val->getType()->getIntegerBitWidth() == 32);
+            llvm::Value *ptr = llvm_values_per_lane[k][pointer_id];
+            NOTNULL(ptr);
+            ASSERT_ALWAYS(
+                ptr->getType()->isPointerTy() &&
+                ptr->getType()->getPointerElementType()->isIntegerTy() &&
+                ptr->getType()->getPointerElementType()->getIntegerBitWidth() ==
+                    32);
+            llvm_values_per_lane[k][res_id] = llvm_builder->CreateCall(
+                // clang-format off
+                opcode == spv::Op::OpAtomicISub ? spv_atomic_sub_i32 :
+                opcode == spv::Op::OpAtomicIAdd ? spv_atomic_add_i32 :
+                opcode == spv::Op::OpAtomicOr   ? spv_atomic_or_i32 :
+                                                  NULL
+                // clang-format on
+                ,
+                {ptr, val});
+          }
           break;
         }
         case spv::Op::OpPhi: {
@@ -1595,21 +1813,19 @@ struct Spirv_Builder {
               llvm::VectorType *vtype =
                   llvm::dyn_cast<llvm::VectorType>(arg->getType());
               ASSERT_ALWAYS(vtype != NULL);
-              llvm::Value *alloca = llvm_builder->CreateAlloca(vtype);
-              llvm_builder->CreateStore(arg, alloca);
               uint32_t width = vtype->getVectorNumElements();
               switch (width) {
               case 2:
                 llvm_values_per_lane[k][word2] =
-                    llvm_builder->CreateCall(normalize_f2, {alloca});
+                    llvm_builder->CreateCall(normalize_f2, {arg});
                 break;
               case 3:
                 llvm_values_per_lane[k][word2] =
-                    llvm_builder->CreateCall(normalize_f3, {alloca});
+                    llvm_builder->CreateCall(normalize_f3, {arg});
                 break;
               case 4:
                 llvm_values_per_lane[k][word2] =
-                    llvm_builder->CreateCall(normalize_f4, {alloca});
+                    llvm_builder->CreateCall(normalize_f4, {arg});
                 break;
               default:
                 UNIMPLEMENTED;
@@ -1766,21 +1982,21 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpReturnValue: {
-          UNIMPLEMENTED;
-          //          // Check that this is not an entry as they don't return
-          //          values
-          //          // usually, right?
-          //          ASSERT_ALWAYS(!contains(entries, item.first));
-          //          uint32_t ret_value_id = word1;
-          //          llvm::Value *ret_value = llvm_values[ret_value_id];
-          //          NOTNULL(ret_value);
-          //          llvm::ReturnInst::Create(c, ret_value, cur_bb);
-          //          // Terminate current basic block
-          //          cur_bb = NULL;
-          //          llvm_builder.release();
-          //          cur_merge_id = -1;
-          //          cur_continue_id = -1;
-          //          break;
+          ASSERT_ALWAYS(!contains(entries, item.first));
+          uint32_t ret_value_id = word1;
+          llvm::Value *arr = llvm::UndefValue::get(cur_fun->getReturnType());
+          kto(opt_subgroup_size) {
+            llvm::Value *ret_value = llvm_values_per_lane[k][ret_value_id];
+            NOTNULL(ret_value);
+            arr = llvm_builder->CreateInsertValue(arr, ret_value, (uint32_t)k);
+          }
+          llvm::ReturnInst::Create(c, arr, cur_bb);
+          // Terminate current basic block
+          cur_bb = NULL;
+          llvm_builder.release();
+          cur_merge_id = -1;
+          cur_continue_id = -1;
+          break;
         }
         case spv::Op::OpReturn: {
           NOTNULL(cur_bb);
@@ -1856,22 +2072,27 @@ struct Spirv_Builder {
         case spv::Op::OpFunctionCall: {
           uint32_t fun_id = word3;
           uint32_t res_id = word2;
-          kto(opt_subgroup_size) {
-            llvm::Value *fun_value = llvm_values_per_lane[k][fun_id];
-            NOTNULL(fun_value);
-            llvm::Function *target_fun =
-                llvm::dyn_cast<llvm::Function>(fun_value);
-            NOTNULL(target_fun);
-            llvm::SmallVector<llvm::Value *, 4> args;
-            // Prepend state *
-            args.push_back(state_ptr);
-            for (int i = 4; i < WordCount; i++) {
+          llvm::Value *fun_value = llvm_global_values[fun_id];
+          NOTNULL(fun_value);
+          llvm::Function *target_fun =
+              llvm::dyn_cast<llvm::Function>(fun_value);
+          NOTNULL(target_fun);
+          llvm::SmallVector<llvm::Value *, 4> args;
+          // Prepend state * and mask
+          args.push_back(state_ptr);
+          args.push_back(cur_mask);
+
+          for (int i = 4; i < WordCount; i++) {
+            kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[i]];
               NOTNULL(arg);
               args.push_back(arg);
             }
+          }
+          llvm::Value *result = llvm_builder->CreateCall(target_fun, args);
+          kto(opt_subgroup_size) {
             llvm_values_per_lane[k][res_id] =
-                llvm_builder->CreateCall(target_fun, args);
+                llvm_builder->CreateExtractValue(result, k);
           }
           break;
         }
@@ -1888,6 +2109,7 @@ struct Spirv_Builder {
           UNIMPLEMENTED;
         }
         // Skip declarations
+        case spv::Op::OpFunctionParameter:
         case spv::Op::OpNop:
         case spv::Op::OpUndef:
         case spv::Op::OpSourceContinued:
@@ -1936,7 +2158,6 @@ struct Spirv_Builder {
         case spv::Op::OpSpecConstantComposite:
         case spv::Op::OpSpecConstantOp:
         case spv::Op::OpFunction:
-        case spv::Op::OpFunctionParameter:
         case spv::Op::OpFunctionEnd:
         case spv::Op::OpDecorate:
         case spv::Op::OpMemberDecorate:
@@ -2032,14 +2253,11 @@ struct Spirv_Builder {
         case spv::Op::OpAtomicCompareExchangeWeak:
         case spv::Op::OpAtomicIIncrement:
         case spv::Op::OpAtomicIDecrement:
-        case spv::Op::OpAtomicIAdd:
-        case spv::Op::OpAtomicISub:
         case spv::Op::OpAtomicSMin:
         case spv::Op::OpAtomicUMin:
         case spv::Op::OpAtomicSMax:
         case spv::Op::OpAtomicUMax:
         case spv::Op::OpAtomicAnd:
-        case spv::Op::OpAtomicOr:
         case spv::Op::OpAtomicXor:
         case spv::Op::OpSwitch:
         case spv::Op::OpUnreachable:
@@ -2115,12 +2333,10 @@ struct Spirv_Builder {
         case spv::Op::OpModuleProcessed:
         case spv::Op::OpExecutionModeId:
         case spv::Op::OpDecorateId:
-        case spv::Op::OpGroupNonUniformElect:
         case spv::Op::OpGroupNonUniformAll:
         case spv::Op::OpGroupNonUniformAny:
         case spv::Op::OpGroupNonUniformAllEqual:
         case spv::Op::OpGroupNonUniformBroadcast:
-        case spv::Op::OpGroupNonUniformBroadcastFirst:
         case spv::Op::OpGroupNonUniformInverseBallot:
         case spv::Op::OpGroupNonUniformBallotBitExtract:
         case spv::Op::OpGroupNonUniformBallotFindLSB:
@@ -2352,39 +2568,42 @@ struct Spirv_Builder {
         }
       }
       // @llvm/finish_function
-      //      for (auto &cb : deferred_branches) {
-      //        llvm::BasicBlock *bb = cb.bb;
-      //        ASSERT_ALWAYS(bb != NULL);
-      //        uint16_t WordCount = pCode[0] >> spv::WordCountShift;
-      //        spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
-      //        uint32_t word1 = pCode[1];
-      //        uint32_t word2 = WordCount > 2 ? pCode[2] : 0;
-      //        uint32_t word3 = WordCount > 3 ? pCode[3] : 0;
-      //        uint32_t word4 = WordCount > 4 ? pCode[4] : 0;
-      //        uint32_t word5 = WordCount > 5 ? pCode[5] : 0;
-      //        uint32_t word6 = WordCount > 6 ? pCode[6] : 0;
-      //        uint32_t word7 = WordCount > 7 ? pCode[7] : 0;
-      //        uint32_t word8 = WordCount > 8 ? pCode[8] : 0;
-      //        uint32_t word9 = WordCount > 9 ? pCode[9] : 0;
-      //        switch (opcode) {
-      //        case spv::Op::OpBranch: {
-      //          llvm::BasicBlock *dst = llvm_labels[word1];
-      //          ASSERT_ALWAYS(dst != NULL);
-      //          llvm::BranchInst::Create(dst, bb);
-      //          break;
-      //        }
-      //        case spv::Op::OpBranchConditional: {
-      //          llvm::BasicBlock *dst_true = llvm_labels[word2];
-      //          llvm::BasicBlock *dst_false = llvm_labels[word3];
-      //          llvm::Value *cond = llvm_values[word1];
-      //          ASSERT_ALWAYS(dst_true != NULL && dst_false != NULL && cond !=
-      //          NULL); llvm::BranchInst::Create(dst_true, dst_false, cond,
-      //          bb); break;
-      //        }
-      //        default:
-      //          UNIMPLEMENTED_(get_cstr(opcode));
-      //        }
-      //      }
+      for (auto &cb : deferred_branches) {
+        llvm::BasicBlock *bb = cb.bb;
+        ASSERT_ALWAYS(bb != NULL);
+        std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
+        llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
+        llvm::BasicBlock *dst_true = llvm_labels[cb.true_id];
+        llvm::BasicBlock *dst_false = llvm_labels[cb.false_id];
+        NOTNULL(dst_true);
+        NOTNULL(dst_false);
+        llvm::Value *new_mask = cur_mask;
+        kto(opt_subgroup_size) {
+          llvm::Value *cond = llvm_values_per_lane[k][cb.cond_id];
+          NOTNULL(cond);
+          new_mask = llvm_builder->CreateInsertElement(
+              new_mask,
+              llvm_builder->CreateAnd(
+                  llvm_builder->CreateExtractElement(new_mask, (uint64_t)0),
+                  cond),
+              (uint32_t)k);
+        }
+        // TODO(aschrein) actual mask handling
+        llvm::Value *new_mask_packed = llvm_builder->CreateBitCast(
+            new_mask, llvm::IntegerType::get(c, opt_subgroup_size));
+        llvm::Value *new_mask_i64 = llvm_builder->CreateZExt(
+            new_mask_packed, llvm::IntegerType::get(c, 64));
+        llvm::Value *cmp =
+            llvm_builder->CreateICmpEQ(new_mask_i64, llvm_get_constant_i64(0));
+        llvm::BranchInst::Create(dst_true, dst_false, cmp, bb);
+      }
+      for (auto &j : deferred_jumps) {
+        llvm::BasicBlock *bb = j.first;
+        ASSERT_ALWAYS(bb != NULL);
+        llvm::BasicBlock *dst = llvm_labels[j.second];
+        NOTNULL(dst);
+        llvm::BranchInst::Create(dst, bb);
+      }
     finish_function:
       continue;
     }

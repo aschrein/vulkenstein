@@ -45,6 +45,12 @@ declare float @spv_length_f4(<4 x float> %in) #0
 declare <3 x i32> @spv_get_global_invocation_id(%state_t *, i32 %lane_id) #0
 declare <3 x i32> @spv_get_work_group_size(%state_t *) #0
 
+declare i64 @spv_lsb_i64(i64) #0
+
+declare i32 @spv_atomic_add_i32(i32 *%ptr, i32 %val)
+declare i32 @spv_atomic_sub_i32(i32 *%ptr, i32 %val)
+declare i32 @spv_atomic_or_i32(i32 *%ptr, i32 %val)
+
 declare float @spv_sqrt(float %in) #0
 
 attributes #0 = { nounwind readnone speculatable }
