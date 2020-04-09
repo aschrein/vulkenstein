@@ -50,6 +50,25 @@ COMMAND python3 ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_std
                   xxd -i llvm_stdlib_64.bc > llvm_stdlib_64.h
 )
 ### END OF COPY PASTE
+configure_file(icd_template.json icd.json)
+#add_custom_command(
+#OUTPUT icd.h
+#DEPENDS ${CMAKE_SOURCE_DIR}/icd_template.json
+#COMMAND cp ${CMAKE_SOURCE_DIR}/icd_template.json ${CMAKE_BINARY_DIR}/icd.json &&
+#                  cat ${CMAKE_BINARY_DIR}/icd.json | sed -e "s/BUILD_DIR/'${CMAKE_BINARY_DIR}'/g" > ${CMAKE_BINARY_DIR}/icd.json
+#)
+
+add_library(vk SHARED
+vk.cpp
+)
+target_include_directories(vk
+  PRIVATE
+  3rdparty/SPIRV
+  3rdparty
+  ${CMAKE_SOURCE_DIR}
+  ${CMAKE_BINARY_DIR}
+)
+#ADD_DEPENDENCIES(vk icd.json)
 
 add_executable(s2l
 spirv_to_llvm.cpp
@@ -61,7 +80,6 @@ target_include_directories(s2l
   PRIVATE
   3rdparty/SPIRV
   3rdparty
-  /usr/include/SPIRV
   ${CMAKE_SOURCE_DIR}
   ${CMAKE_BINARY_DIR}
   ${LLVM_INCLUDE_DIRS}

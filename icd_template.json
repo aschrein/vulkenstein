@@ -1,0 +1,7 @@
+{
+   "file_format_version": "1.0.0",
+   "ICD": {
+      "library_path": "${CMAKE_BINARY_DIR}/libvk.so",
+      "api_version": "1.2"
+   }
+}

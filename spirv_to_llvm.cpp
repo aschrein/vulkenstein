@@ -1357,7 +1357,6 @@ struct Spirv_Builder {
           llvm::Value *gep = llvm_builder->CreateGEP(
               stack_proxy, {llvm_get_constant_i32(0), lsb});
           llvm::Value *broadcast = llvm_builder->CreateLoad(gep);
-          //              llvm_builder->CreateExtractElement(result, lsb);
           kto(opt_subgroup_size) {
             llvm_values_per_lane[k][res_id] = broadcast;
           }
