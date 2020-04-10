@@ -12,52 +12,151 @@
 
 #include <sys/mman.h>
 #include <unistd.h>
-////////////////////////////////////////////////////////////
-// Those are just dummy implementation most of the time   //
-////////////////////////////////////////////////////////////
 #define DLL_EXPORT __attribute__((visibility("default")))
+
+// Data structures to keep track of the objects
+// TODO(aschrein): Nuke this from the orbit
 namespace vki {
-struct VkInstance {
+struct VkDeviceMemory_Impl {
   uint32_t id;
+  uint8_t *ptr;
+  size_t size;
+  void release() {
+    id = 0;
+    if (ptr != NULL)
+      free(ptr);
+    size = 0;
+  }
 };
-struct VkSurfaceKHR {
+struct VkBuffer_Impl {
   uint32_t id;
+  VkDeviceMemory_Impl *mem;
+  size_t offset;
+  size_t size;
 };
-struct VkPhysicalDevice {
+struct VkImage_Impl {
   uint32_t id;
+  VkDeviceMemory_Impl *mem;
+  size_t offset;
+  size_t size;
+  VkFormat format;
+  VkExtent3D extent;
+  uint32_t mipLevels;
+  uint32_t arrayLayers;
+  VkSampleCountFlagBits samples;
+  VkImageLayout initialLayout;
 };
-struct VkDevice {
+struct VkImageView_Impl {
   uint32_t id;
+  VkImage_Impl *img;
+  VkImageViewType type;
+  VkFormat format;
+  VkComponentMapping components;
+  VkImageSubresourceRange subresourceRange;
+  void release() { memset(this, 0, sizeof(*this)); }
 };
-static VkInstance g_instance;
-static VkPhysicalDevice g_phys_device;
-static VkDevice g_device;
-static VkSurfaceKHR g_surface;
+static constexpr uint32_t MAX_OBJECTS = 1000;
+#define MEMZERO(obj) memset(&obj, 0, sizeof(obj))
+// Simple object pool
+template <typename T, int N = MAX_OBJECTS> struct Pool {
+  T pool[N];
+  uint32_t next_free_slot;
+  Pool() { memset(this, 0, sizeof(*this)); }
+  void find_next_free_slot() {
+    bool first_attempt = true;
+    while (true) {
+      while (next_free_slot < N && pool[next_free_slot].id != 0) {
+        next_free_slot += 1;
+      }
+      if (next_free_slot != N)
+        break;
+      ASSERT_ALWAYS(first_attempt);
+      next_free_slot = 0;
+      first_attempt = false;
+    }
+  }
+  T *alloc() {
+    find_next_free_slot();
+    T *out = &pool[next_free_slot];
+    out->id = next_free_slot + 1;
+    return out;
+  }
+};
+
+struct VkSwapChain_Impl {
+  uint32_t id;
+  VkImage_Impl images[3];
+  uint32_t image_count;
+  uint32_t current_image;
+  uint32_t width, height;
+  VkFormat format;
+  void release() {
+    for (auto &image : images) {
+      if (image.mem != 0) {
+        image.mem->release();
+      }
+    }
+    MEMZERO((*this));
+  }
+};
+
+struct VkRenderPass_Impl {
+  uint32_t id;
+  uint32_t attachmentCount;
+  VkAttachmentDescription pAttachments[10];
+  uint32_t subpassCount;
+  VkSubpassDescription pSubpasses[10];
+  uint32_t dependencyCount;
+  VkSubpassDependency pDependencies[10];
+};
+
+#define OBJ_POOL(type) Pool<type##_Impl> type##_pool = {};
+
+OBJ_POOL(VkBuffer)
+OBJ_POOL(VkRenderPass)
+OBJ_POOL(VkImageView)
+OBJ_POOL(VkImage)
+OBJ_POOL(VkDeviceMemory)
+
+#define DECL_IMPL(type)                                                        \
+  struct type##_Impl {                                                         \
+    uint32_t id;                                                               \
+  };
+
+#define OBJ_POOL_DUMMY(type)                                                   \
+  DECL_IMPL(type)                                                              \
+  Pool<type##_Impl> type##_pool = {};
+
+OBJ_POOL_DUMMY(VkSemaphore)
+OBJ_POOL_DUMMY(VkQueue)
+OBJ_POOL_DUMMY(VkCommandPool)
+OBJ_POOL_DUMMY(VkFence)
+OBJ_POOL_DUMMY(VkCommandBuffer)
+DECL_IMPL(VkInstance)
+DECL_IMPL(VkPhysicalDevice)
+DECL_IMPL(VkDevice)
+DECL_IMPL(VkSurfaceKHR)
+
+#define ALLOC_VKOBJ(type) (type)(void *) vki::type##_pool.alloc()
+#define ALLOC_VKOBJ_T(type) vki::type##_pool.alloc()
+#define GET_VKOBJ(type, id) (&vki::type##_pool.pool[id])
+
+static VkInstance_Impl g_instance;
+static VkPhysicalDevice_Impl g_phys_device;
+static VkDevice_Impl g_device;
+static VkSwapChain_Impl g_swapchain;
+static VkSurfaceKHR_Impl g_surface;
 static xcb_connection_t *g_connection;
 static xcb_window_t g_window;
-static constexpr uint32_t MAX_OBJECTS = 1000;
-#define OBJ_POOL(type)                                                         \
-  struct type##_Dummy {                                                        \
-    uint64_t id;                                                               \
-  };                                                                           \
-  struct type##_pool {                                                         \
-    type##_Dummy pool[MAX_OBJECTS];                                            \
-    size_t cursor = 0;                                                         \
-  } type##_pool;                                                               \
-  type type##_alloc_helper() {                                                 \
-    void *out = (void *)&type##_pool.pool[type##_pool.cursor++];               \
-    return (type)out;                                                          \
-  }
-
-OBJ_POOL(VkSemaphore)
-OBJ_POOL(VkImage)
-OBJ_POOL(VkBuffer)
-OBJ_POOL(VkQueue)
-OBJ_POOL(VkCommandPool)
-OBJ_POOL(VkSwapchainKHR)
-
-#define ALLOC_VKOBJ(type) vki::type##_alloc_helper()
-
+void init() {
+  MEMZERO(g_instance);
+  MEMZERO(g_phys_device);
+  MEMZERO(g_device);
+  MEMZERO(g_swapchain);
+  MEMZERO(g_surface);
+  MEMZERO(g_connection);
+  MEMZERO(g_window);
+}
 }; // namespace vki
 // Allocate a trap for unimplemented function
 // x86_64:linux only
@@ -123,6 +222,28 @@ void *allocate_trap(char const *fun_name) {
   ASSERT_ALWAYS(executable_memory_cursor < allocated_memory_size);
   //  fprintf(stderr, "trap: %s\n", fun_name);
   return trap_start;
+}
+
+uint32_t get_format_bpp(VkFormat format) {
+  switch (format) {
+  case VkFormat::VK_FORMAT_R8G8B8A8_SINT:
+  case VkFormat::VK_FORMAT_R8G8B8A8_SRGB:
+  case VkFormat::VK_FORMAT_R8G8B8A8_UINT:
+  case VkFormat::VK_FORMAT_R8G8B8A8_SNORM:
+  case VkFormat::VK_FORMAT_R8G8B8A8_UNORM:
+  //
+  case VkFormat::VK_FORMAT_B8G8R8A8_SRGB:
+  case VkFormat::VK_FORMAT_B8G8R8A8_SINT:
+  case VkFormat::VK_FORMAT_B8G8R8A8_UINT:
+  case VkFormat::VK_FORMAT_B8G8R8A8_SNORM:
+  case VkFormat::VK_FORMAT_B8G8R8A8_UNORM:
+    return 4;
+  case VkFormat::VK_FORMAT_D32_SFLOAT_S8_UINT:
+    return 4;
+  default:
+    ASSERT_ALWAYS(false);
+  }
+  ASSERT_ALWAYS(false);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceSupportKHR(
@@ -582,13 +703,18 @@ VKAPI_ATTR VkResult VKAPI_CALL vkDeviceWaitIdle(VkDevice device) {
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(
     VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
     const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMemory) {
+  vki::VkDeviceMemory_Impl *mem = ALLOC_VKOBJ_T(VkDeviceMemory);
+  mem->size = pAllocateInfo->allocationSize;
+  mem->ptr = (uint8_t *)malloc(mem->size);
+  *pMemory = (VkDeviceMemory)mem;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkFreeMemory(VkDevice device, VkDeviceMemory memory,
              const VkAllocationCallbacks *pAllocator) {
-  return;
+  vki::VkDeviceMemory_Impl *mem = (vki::VkDeviceMemory_Impl *)memory;
+  mem->release();
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -630,6 +756,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device,
 VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image,
                                                  VkDeviceMemory memory,
                                                  VkDeviceSize memoryOffset) {
+  vki::VkDeviceMemory_Impl *mem = (vki::VkDeviceMemory_Impl *)memory;
+  vki::VkImage_Impl *impl = (vki::VkImage_Impl *)image;
+  impl->mem = mem;
+  impl->offset = memoryOffset;
   return VK_SUCCESS;
 }
 
@@ -641,6 +771,10 @@ vkGetBufferMemoryRequirements(VkDevice device, VkBuffer buffer,
 
 VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(
     VkDevice device, VkImage image, VkMemoryRequirements *pMemoryRequirements) {
+  vki::VkImage_Impl *impl = (vki::VkImage_Impl *)image;
+  pMemoryRequirements->size = impl->size;
+  pMemoryRequirements->alignment = 0x10;
+  pMemoryRequirements->memoryTypeBits = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
   return;
 }
 
@@ -667,6 +801,7 @@ vkQueueBindSparse(VkQueue queue, uint32_t bindInfoCount,
 VKAPI_ATTR VkResult VKAPI_CALL
 vkCreateFence(VkDevice device, const VkFenceCreateInfo *pCreateInfo,
               const VkAllocationCallbacks *pAllocator, VkFence *pFence) {
+  *pFence = ALLOC_VKOBJ(VkFence);
   return VK_SUCCESS;
 }
 
@@ -776,6 +911,19 @@ vkDestroyBufferView(VkDevice device, VkBufferView bufferView,
 VKAPI_ATTR VkResult VKAPI_CALL
 vkCreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
               const VkAllocationCallbacks *pAllocator, VkImage *pImage) {
+  vki::VkImage_Impl *img = ALLOC_VKOBJ_T(VkImage);
+  img->mem = NULL;
+  img->size = 0;
+  img->offset = 0;
+  img->format = pCreateInfo->format;
+  img->extent = pCreateInfo->extent;
+  img->mipLevels = pCreateInfo->mipLevels;
+  img->arrayLayers = pCreateInfo->arrayLayers;
+  img->samples = pCreateInfo->samples;
+  img->initialLayout = pCreateInfo->initialLayout;
+  img->size = img->extent.width * img->extent.height * img->extent.depth *
+              get_format_bpp(img->format);
+  *pImage = (VkImage)(void *)img;
   return VK_SUCCESS;
 }
 
@@ -793,13 +941,20 @@ VKAPI_ATTR void VKAPI_CALL vkGetImageSubresourceLayout(
 VKAPI_ATTR VkResult VKAPI_CALL
 vkCreateImageView(VkDevice device, const VkImageViewCreateInfo *pCreateInfo,
                   const VkAllocationCallbacks *pAllocator, VkImageView *pView) {
+  vki::VkImage_Impl *img = (vki::VkImage_Impl *)pCreateInfo->image;
+  vki::VkImageView_Impl *img_view = ALLOC_VKOBJ_T(VkImageView);
+  img_view->img = img;
+  img_view->type = pCreateInfo->viewType;
+  img_view->format = pCreateInfo->format;
+  img_view->components = pCreateInfo->components;
+  *pView = (VkImageView)(void *)img_view;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyImageView(VkDevice device, VkImageView imageView,
                    const VkAllocationCallbacks *pAllocator) {
-  return;
+  ((vki::VkImageView_Impl *)imageView)->release();
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateShaderModule(
@@ -949,6 +1104,20 @@ vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer,
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(
     VkDevice device, const VkRenderPassCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkRenderPass *pRenderPass) {
+  vki::VkRenderPass_Impl *impl = ALLOC_VKOBJ_T(VkRenderPass);
+  impl->attachmentCount = pCreateInfo->attachmentCount;
+  ASSERT_ALWAYS(impl->attachmentCount < 10);
+  memcpy(impl->pAttachments, pCreateInfo->pAttachments,
+         sizeof(impl->pAttachments[0]) * impl->attachmentCount);
+  impl->subpassCount = pCreateInfo->subpassCount;
+  ASSERT_ALWAYS(impl->subpassCount < 10);
+  memcpy(impl->pSubpasses, pCreateInfo->pSubpasses,
+         sizeof(impl->pSubpasses[0]) * impl->subpassCount);
+  impl->dependencyCount = pCreateInfo->dependencyCount;
+  ASSERT_ALWAYS(impl->dependencyCount < 10);
+  memcpy(impl->pDependencies, pCreateInfo->pDependencies,
+         sizeof(impl->pDependencies[0]) * impl->dependencyCount);
+  *pRenderPass = (VkRenderPass)(void *)impl;
   return VK_SUCCESS;
 }
 
@@ -984,6 +1153,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandPool(
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateCommandBuffers(
     VkDevice device, const VkCommandBufferAllocateInfo *pAllocateInfo,
     VkCommandBuffer *pCommandBuffers) {
+  *pCommandBuffers = (VkCommandBuffer)(void *)ALLOC_VKOBJ_T(VkCommandBuffer);
   return VK_SUCCESS;
 }
 
@@ -1319,7 +1489,43 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
     VkDevice device, const VkSwapchainCreateInfoKHR *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkSwapchainKHR *pSwapchain) {
   NOTNULL(pSwapchain);
-  *pSwapchain = ALLOC_VKOBJ(VkSwapchainKHR);
+  //  ASSERT_ALWAYS(vki::g_swapchain.id == 0 && "Already created one swap
+  //  chain!");
+  vki::g_swapchain.release();
+  vki::g_swapchain.id = 1;
+  xcb_get_geometry_cookie_t cookie;
+  xcb_get_geometry_reply_t *reply;
+
+  cookie = xcb_get_geometry(vki::g_connection, vki::g_window);
+  ASSERT_ALWAYS(reply =
+                    xcb_get_geometry_reply(vki::g_connection, cookie, NULL));
+  ASSERT_ALWAYS(pCreateInfo->minImageCount == 2);
+  vki::g_swapchain.width = pCreateInfo->imageExtent.width;
+  vki::g_swapchain.height = pCreateInfo->imageExtent.height;
+  vki::g_swapchain.format = pCreateInfo->imageFormat;
+  vki::g_swapchain.image_count = pCreateInfo->minImageCount;
+  free(reply);
+  *pSwapchain = (VkSwapchainKHR)(void *)&vki::g_swapchain;
+  uint32_t bpp = 0;
+  switch (vki::g_swapchain.format) {
+  case VkFormat::VK_FORMAT_R8G8B8A8_SRGB: {
+    bpp = 4;
+    break;
+  }
+  default:
+    ASSERT_ALWAYS(false);
+  };
+  ASSERT_ALWAYS(bpp != 0);
+  ito(vki::g_swapchain.image_count) {
+    vki::VkDeviceMemory_Impl *mem = ALLOC_VKOBJ_T(VkDeviceMemory);
+    mem->size = bpp * vki::g_swapchain.width * vki::g_swapchain.height;
+    mem->ptr = (uint8_t *)malloc(mem->size);
+    vki::g_swapchain.images[i].id = i + 1;
+    vki::g_swapchain.images[i].format = vki::g_swapchain.format;
+    vki::g_swapchain.images[i].mem = mem;
+    vki::g_swapchain.images[i].size = mem->size;
+    vki::g_swapchain.images[i].offset = (size_t)0;
+  }
   return VK_SUCCESS;
 }
 
@@ -1330,7 +1536,13 @@ vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain,
 VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(
     VkDevice device, VkSwapchainKHR swapchain, uint32_t *pSwapchainImageCount,
     VkImage *pSwapchainImages) {
-
+  if (pSwapchainImageCount != NULL && pSwapchainImages == NULL) {
+    *pSwapchainImageCount = 2;
+    return VK_SUCCESS;
+  }
+  ASSERT_ALWAYS(vki::g_swapchain.id != 0);
+  pSwapchainImages[0] = (VkImage)(void *)&vki::g_swapchain.images[0];
+  pSwapchainImages[1] = (VkImage)(void *)&vki::g_swapchain.images[1];
   return VK_SUCCESS;
 }
 
@@ -1380,6 +1592,15 @@ vkGetDeviceProcAddr(VkDevice device, const char *pName) {
   CASE(vkCreateSemaphore);
   CASE(vkCreateCommandPool);
   CASE(vkCreateSwapchainKHR);
+  CASE(vkGetSwapchainImagesKHR);
+  CASE(vkCreateImageView);
+  CASE(vkAllocateCommandBuffers);
+  CASE(vkCreateFence);
+  CASE(vkCreateImage);
+  CASE(vkGetImageMemoryRequirements);
+  CASE(vkAllocateMemory);
+  CASE(vkBindImageMemory);
+  CASE(vkCreateRenderPass);
   return (PFN_vkVoidFunction)allocate_trap(pName);
 }
 
@@ -1412,7 +1633,16 @@ vkEnumerateInstanceVersion(uint32_t *pApiVersion) {
   CASE(vkGetDeviceProcAddr);                                                   \
   CASE(vkGetPhysicalDeviceMemoryProperties);                                   \
   CASE(vkGetPhysicalDeviceFormatProperties);                                   \
+  CASE(vkGetSwapchainImagesKHR);                                               \
   CASE(vkCreateSwapchainKHR);                                                  \
+  CASE(vkCreateImageView);                                                     \
+  CASE(vkCreateFence);                                                         \
+  CASE(vkAllocateCommandBuffers);                                              \
+  CASE(vkCreateImage);                                                         \
+  CASE(vkAllocateMemory);                                                      \
+  CASE(vkGetImageMemoryRequirements);                                          \
+  CASE(vkBindImageMemory);                                                     \
+  CASE(vkCreateRenderPass);                                                    \
   (void)0
 extern "C" {
 #undef VKAPI_ATTR
