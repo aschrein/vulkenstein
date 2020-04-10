@@ -18,6 +18,9 @@
 #define ASSERT_DEBUG(x) ASSERT_ALWAYS(x)
 #define NOTNULL(x) ASSERT_ALWAYS((x) != NULL)
 
+#undef MIN
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+
 template <typename F> struct __Defer__ {
   F f;
   __Defer__(F f) : f(f) {}
