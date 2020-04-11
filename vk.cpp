@@ -56,6 +56,31 @@
   CASE(vkDestroyFramebuffer);                                                  \
   CASE(vkCreateShaderModule);                                                  \
   CASE(vkDestroyShaderModule);                                                 \
+  CASE(vkCreateBuffer);                                                        \
+  CASE(vkDestroyBuffer);                                                       \
+  CASE(vkCreateBufferView);                                                    \
+  CASE(vkDestroyBufferView);                                                   \
+  CASE(vkGetBufferMemoryRequirements);                                         \
+  CASE(vkBindBufferMemory);                                                    \
+  CASE(vkMapMemory);                                                           \
+  CASE(vkUnmapMemory);                                                         \
+  CASE(vkBeginCommandBuffer);                                                  \
+  CASE(vkEndCommandBuffer);                                                    \
+  CASE(vkResetCommandBuffer);                                                  \
+  CASE(vkCmdCopyBuffer);                                                       \
+  CASE(vkQueueSubmit);                                                         \
+  CASE(vkQueueWaitIdle);                                                       \
+  CASE(vkDeviceWaitIdle);                                                      \
+  CASE(vkWaitForFences);                                                       \
+  CASE(vkResetFences);                                                         \
+  CASE(vkDestroyFence);                                                        \
+  CASE(vkGetFenceStatus);                                                      \
+  CASE(vkDestroySemaphore);                                                    \
+  CASE(vkCreateEvent);                                                         \
+  CASE(vkDestroyEvent);                                                        \
+  CASE(vkGetEventStatus);                                                      \
+  CASE(vkFreeCommandBuffers);                                                  \
+  CASE(vkFreeMemory);                                                          \
   (void)0
 
 // Data structures to keep track of the objects
@@ -77,6 +102,16 @@ struct VkBuffer_Impl {
   VkDeviceMemory_Impl *mem;
   size_t offset;
   size_t size;
+  void release() {
+    memset(this, 0, sizeof(*this));
+  }
+};
+struct VkBufferView_Impl {
+  uint32_t id;
+  VkBuffer_Impl *buf;
+  VkFormat format;
+  size_t offset;
+  void release() { memset(this, 0, sizeof(*this)); }
 };
 struct VkImage_Impl {
   uint32_t id;
@@ -89,6 +124,9 @@ struct VkImage_Impl {
   uint32_t arrayLayers;
   VkSampleCountFlagBits samples;
   VkImageLayout initialLayout;
+  void release() {
+    memset(this, 0, sizeof(*this));
+  }
 };
 struct VkImageView_Impl {
   uint32_t id;
@@ -169,9 +207,41 @@ struct VkRenderPass_Impl {
   void release() { memset(this, 0, sizeof(*this)); }
 };
 
+struct VkCommandBuffer_Impl {
+  uint32_t id;
+  uint8_t *data;
+  size_t data_size;
+  size_t data_cursor;
+  template <typename T> void write_cmd(T const &cmd) {
+    memcpy(data + data_cursor, &cmd, sizeof(cmd));
+    data_cursor += sizeof(cmd);
+    ASSERT_ALWAYS(data_cursor < data_size);
+  }
+  void write_key(uint8_t key) {
+    data[data_cursor] = key;
+    data_cursor += 1;
+    ASSERT_ALWAYS(data_cursor < data_size);
+  }
+  void init() {
+    // 1 << 20 == 1 MB of data
+    data_size = 1 << 20;
+    data = (uint8_t *)malloc(data_size);
+    data_cursor = 0;
+  }
+  void reset() { data_cursor = 0; }
+  void release() {
+    if (data != NULL) {
+      free(data);
+    }
+    memset(this, 0, sizeof(*this));
+  }
+};
+
 #define OBJ_POOL(type) Pool<type##_Impl> type##_pool = {};
 
 OBJ_POOL(VkBuffer)
+OBJ_POOL(VkCommandBuffer)
+OBJ_POOL(VkBufferView)
 OBJ_POOL(VkRenderPass)
 OBJ_POOL(VkImageView)
 OBJ_POOL(VkImage)
@@ -192,7 +262,7 @@ OBJ_POOL_DUMMY(VkSemaphore)
 OBJ_POOL_DUMMY(VkQueue)
 OBJ_POOL_DUMMY(VkCommandPool)
 OBJ_POOL_DUMMY(VkFence)
-OBJ_POOL_DUMMY(VkCommandBuffer)
+OBJ_POOL_DUMMY(VkEvent)
 OBJ_POOL_DUMMY(VkPipelineCache)
 DECL_IMPL(VkInstance)
 DECL_IMPL(VkPhysicalDevice)
@@ -235,6 +305,28 @@ void init() {
   MEMZERO(g_connection);
   MEMZERO(g_window);
 }
+namespace cmd {
+enum class Cmd_t : uint8_t { CopyBuffer = 1, CopyImage };
+struct CopyBuffer {
+  VkBuffer_Impl *src;
+  VkBuffer_Impl *dst;
+  uint32_t regionCount;
+  VkBufferCopy pRegions[0x10];
+};
+struct CopyImage {
+  VkImage_Impl *src;
+  VkImage_Impl *dst;
+  uint32_t regionCount;
+  VkImageCopy pRegions[0x10];
+};
+void execute_commands(uint8_t const *pCode, size_t code_size) {}
+} // namespace cmd
+#define WRITE_CMD(cmdbuf, cmd, type)                                           \
+  {                                                                            \
+    cmdbuf->write_key((uint8_t)vki::cmd::Cmd_t::type);                         \
+    cmdbuf->write_cmd(cmd);                                                    \
+  }
+
 }; // namespace vki
 // Allocate a trap for unimplemented function
 // x86_64:linux only
@@ -767,6 +859,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue queue,
                                              uint32_t submitCount,
                                              const VkSubmitInfo *pSubmits,
                                              VkFence fence) {
+  ito(submitCount) {
+    jto(pSubmits[i].commandBufferCount) {
+      vki::VkCommandBuffer_Impl *impl =
+          (vki::VkCommandBuffer_Impl *)pSubmits[i].pCommandBuffers[j];
+      vki::cmd::execute_commands(impl->data, impl->data_cursor);
+    }
+  }
   return VK_SUCCESS;
 }
 
@@ -798,6 +897,8 @@ vkFreeMemory(VkDevice device, VkDeviceMemory memory,
 VKAPI_ATTR VkResult VKAPI_CALL
 vkMapMemory(VkDevice device, VkDeviceMemory memory, VkDeviceSize offset,
             VkDeviceSize size, VkMemoryMapFlags flags, void **ppData) {
+  vki::VkDeviceMemory_Impl *mem = (vki::VkDeviceMemory_Impl *)memory;
+  *ppData = (void *)(mem->ptr + offset);
   return VK_SUCCESS;
 }
 
@@ -828,6 +929,12 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device,
                                                   VkBuffer buffer,
                                                   VkDeviceMemory memory,
                                                   VkDeviceSize memoryOffset) {
+  vki::VkBuffer_Impl *buf_impl = (vki::VkBuffer_Impl *)buffer;
+  vki::VkDeviceMemory_Impl *mem_impl = (vki::VkDeviceMemory_Impl *)memory;
+  NOTNULL(buf_impl);
+  NOTNULL(mem_impl);
+  buf_impl->mem = mem_impl;
+  buf_impl->offset = memoryOffset;
   return VK_SUCCESS;
 }
 
@@ -844,7 +951,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image,
 VKAPI_ATTR void VKAPI_CALL
 vkGetBufferMemoryRequirements(VkDevice device, VkBuffer buffer,
                               VkMemoryRequirements *pMemoryRequirements) {
-  return;
+  vki::VkBuffer_Impl *impl = (vki::VkBuffer_Impl *)buffer;
+  pMemoryRequirements->size = impl->size;
+  pMemoryRequirements->alignment = 0x10;
+  pMemoryRequirements->memoryTypeBits =
+      VkMemoryPropertyFlagBits::VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetImageMemoryRequirements(
@@ -885,6 +996,7 @@ vkCreateFence(VkDevice device, const VkFenceCreateInfo *pCreateInfo,
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyFence(
     VkDevice device, VkFence fence, const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(fence, VkFence);
   return;
 }
 
@@ -924,11 +1036,13 @@ vkDestroySemaphore(VkDevice device, VkSemaphore semaphore,
 VKAPI_ATTR VkResult VKAPI_CALL
 vkCreateEvent(VkDevice device, const VkEventCreateInfo *pCreateInfo,
               const VkAllocationCallbacks *pAllocator, VkEvent *pEvent) {
+  *pEvent = ALLOC_VKOBJ(VkEvent);
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyEvent(
     VkDevice device, VkEvent event, const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(event, VkEvent);
   return;
 }
 
@@ -967,24 +1081,35 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetQueryPoolResults(
 VKAPI_ATTR VkResult VKAPI_CALL
 vkCreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo,
                const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer) {
+  vki::VkBuffer_Impl *buf = ALLOC_VKOBJ_T(VkBuffer);
+  buf->mem = NULL;
+  buf->size = pCreateInfo->size;
+  buf->offset = 0;
+  *pBuffer = (VkBuffer)(void *)buf;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyBuffer(
     VkDevice device, VkBuffer buffer, const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(buffer, VkBuffer);
   return;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(
     VkDevice device, const VkBufferViewCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkBufferView *pView) {
+  vki::VkBufferView_Impl *impl = ALLOC_VKOBJ_T(VkBufferView);
+  impl->buf = (vki::VkBuffer_Impl *)pCreateInfo->buffer;
+  impl->format = pCreateInfo->format;
+  impl->offset = pCreateInfo->offset;
+  *pView = (VkBufferView)impl;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyBufferView(VkDevice device, VkBufferView bufferView,
                     const VkAllocationCallbacks *pAllocator) {
-  return;
+  RELEASE_VKOBJ(bufferView, VkBufferView);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -1008,7 +1133,7 @@ vkCreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyImage(
     VkDevice device, VkImage image, const VkAllocationCallbacks *pAllocator) {
-  return;
+  RELEASE_VKOBJ(image, VkImage);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkGetImageSubresourceLayout(
@@ -1255,17 +1380,28 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateCommandBuffers(
     VkDevice device, const VkCommandBufferAllocateInfo *pAllocateInfo,
     VkCommandBuffer *pCommandBuffers) {
   *pCommandBuffers = (VkCommandBuffer)(void *)ALLOC_VKOBJ_T(VkCommandBuffer);
+  vki::VkCommandBuffer_Impl *impl =
+      (vki::VkCommandBuffer_Impl *)*pCommandBuffers;
+  impl->init();
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkFreeCommandBuffers(
     VkDevice device, VkCommandPool commandPool, uint32_t commandBufferCount,
     const VkCommandBuffer *pCommandBuffers) {
+  ito(commandBufferCount) {
+    vki::VkCommandBuffer_Impl *impl =
+        (vki::VkCommandBuffer_Impl *)pCommandBuffers[i];
+    impl->release();
+  }
   return;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkBeginCommandBuffer(
     VkCommandBuffer commandBuffer, const VkCommandBufferBeginInfo *pBeginInfo) {
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  (void)pBeginInfo->flags;
+  impl->reset();
   return VK_SUCCESS;
 }
 
@@ -1276,6 +1412,8 @@ vkEndCommandBuffer(VkCommandBuffer commandBuffer) {
 
 VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandBuffer(
     VkCommandBuffer commandBuffer, VkCommandBufferResetFlags flags) {
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  impl->reset();
   return VK_SUCCESS;
 }
 
@@ -1407,7 +1545,14 @@ VKAPI_ATTR void VKAPI_CALL vkCmdCopyBuffer(VkCommandBuffer commandBuffer,
                                            VkBuffer dstBuffer,
                                            uint32_t regionCount,
                                            const VkBufferCopy *pRegions) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::CopyBuffer cmd;
+  cmd.src = (vki::VkBuffer_Impl *)srcBuffer;
+  cmd.dst = (vki::VkBuffer_Impl *)dstBuffer;
+  cmd.regionCount = regionCount;
+  ASSERT_ALWAYS(cmd.regionCount < 0x10);
+  memcpy(cmd.pRegions, pRegions, cmd.regionCount * sizeof(VkBufferCopy));
+  WRITE_CMD(impl, cmd, CopyBuffer);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage(VkCommandBuffer commandBuffer,

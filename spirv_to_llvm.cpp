@@ -271,6 +271,7 @@ struct Spirv_Builder {
   //////////////////////
   uint32_t opt_subgroup_size = 4;
   bool opt_debug_comments = false;
+  char const *opt_entry_name = "main";
   //  bool opt_deinterleave_attributes = false;
 
   //////////////////////
@@ -407,8 +408,6 @@ struct Spirv_Builder {
 
     // Initialize framework functions
 
-    // These operate on [opt_subgroup_size] arrays of data
-
     LOOKUP_FN(get_push_constant_ptr);
     LOOKUP_FN(get_uniform_ptr);
     LOOKUP_FN(get_private_ptr);
@@ -431,12 +430,57 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_dot_f4);
     LOOKUP_FN(spv_get_global_invocation_id);
     LOOKUP_FN(spv_get_work_group_size);
-    LOOKUP_FN(spv_image_read_f4);
-    LOOKUP_FN(spv_image_write_f4);
     LOOKUP_FN(spv_lsb_i64);
     LOOKUP_FN(spv_atomic_add_i32);
     LOOKUP_FN(spv_atomic_sub_i32);
     LOOKUP_FN(spv_atomic_or_i32);
+    auto lookup_image_op = [&](llvm::Type *res_type, llvm::Type *coord_type,
+                               bool read) {
+      static char tmp_buf[0x100];
+      char const *type_names[] = {
+          // clang-format off
+        "invalid",  "invalid" ,
+        "i32",      "f32"     ,
+        "int2",     "float2"  ,
+        "int3",     "float3"  ,
+        "int3",     "float4"  ,
+          // clang-format on
+      };
+      uint32_t dim = 0;
+      uint32_t components = 0;
+      llvm::Type *llvm_res_type = res_type;
+      if (res_type->isVectorTy()) {
+        components = llvm_res_type->getVectorNumElements();
+        llvm_res_type = llvm_res_type->getVectorElementType();
+      } else {
+        components = 1;
+      }
+      if (coord_type->isVectorTy()) {
+        dim = coord_type->getVectorNumElements();
+      } else {
+        dim = 1;
+      }
+      Primitive_t component_type = Primitive_t::Void;
+      if (llvm_res_type->isFloatTy()) {
+        component_type = Primitive_t::F32;
+      } else if (llvm_res_type->isIntegerTy()) {
+        ASSERT_ALWAYS(llvm_res_type->getIntegerBitWidth() == 32);
+        component_type = Primitive_t::U32;
+      } else {
+        UNIMPLEMENTED;
+      }
+
+      ASSERT_ALWAYS(dim == 1 || dim == 2 || dim == 3 || dim == 4);
+      ASSERT_ALWAYS(component_type == Primitive_t::F32 ||
+                    component_type == Primitive_t::U32);
+      uint32_t is_float = component_type == Primitive_t::F32 ? 1 : 0;
+      char const *type_str = type_names[components * 2 + is_float];
+      snprintf(tmp_buf, sizeof(tmp_buf), "spv_image_%s_%id_%s",
+               (read ? "read" : "write"), dim, type_str);
+      llvm::Function *fun = module->getFunction(tmp_buf);
+      ASSERT_ALWAYS(fun != NULL);
+      return fun;
+    };
     llvm::Type *state_t = llvm::Type::getInt8Ty(c);
     // Force 64 bit pointers
     llvm::Type *llvm_int_ptr_t = llvm::Type::getInt64Ty(c);
@@ -444,9 +488,9 @@ struct Spirv_Builder {
     llvm::Type *mask_t = llvm::VectorType::get(llvm::IntegerType::getInt1Ty(c),
                                                opt_subgroup_size);
 
-    LOOKUP_TY(sampler_t);
-    LOOKUP_TY(image_t);
-    LOOKUP_TY(combined_image_t);
+    llvm::Type *sampler_t = llvm::IntegerType::getInt64Ty(c);
+    llvm::Type *image_t = llvm::IntegerType::getInt64Ty(c);
+    llvm::Type *combined_image_t = llvm::IntegerType::getInt64Ty(c);
 
     // Structure member offsets for GEP
     // SPIRV has ways of setting the member offset
@@ -2041,7 +2085,10 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(coord != NULL);
             llvm::Value *texel = llvm_values_per_lane[k][texel_id];
             ASSERT_ALWAYS(texel != NULL);
-            llvm_builder->CreateCall(spv_image_write_f4, {image, coord, texel});
+            llvm_builder->CreateCall(lookup_image_op(texel->getType(),
+                                                     coord->getType(),
+                                                     /*read =*/false),
+                                     {image, coord, texel});
           }
           break;
         }
@@ -2059,9 +2106,9 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(image != NULL);
             llvm::Value *coord = llvm_values_per_lane[k][coord_id];
             ASSERT_ALWAYS(coord != NULL);
-            llvm::Value *res_shadow = llvm_builder->CreateAlloca(res_type);
-            llvm::Value *call =
-                llvm_builder->CreateCall(spv_image_read_f4, {image, coord});
+            llvm::Value *call = llvm_builder->CreateCall(
+                lookup_image_op(res_type, coord->getType(), /*read =*/true),
+                {image, coord});
             llvm_values_per_lane[k][res_id] = call;
           }
           break;
@@ -2628,20 +2675,6 @@ struct Spirv_Builder {
             if (auto *call = llvm::dyn_cast<llvm::CallInst>(&inst)) {
               call->setTailCallKind(llvm::CallInst::TailCallKind::TCK_NoTail);
             }
-            //            if (opt_force_alignment) {
-            //              if (auto *alloca =
-            //              llvm::dyn_cast<llvm::AllocaInst>(&inst)) {
-            //                alloca->setAlignment(llvm::MaybeAlign(16));
-            //              }
-            //              if (auto *load =
-            //              llvm::dyn_cast<llvm::LoadInst>(&inst)) {
-            //                load->setAlignment(llvm::MaybeAlign(16));
-            //              }
-            //              if (auto *store =
-            //              llvm::dyn_cast<llvm::StoreInst>(&inst)) {
-            //                store->setAlignment(llvm::MaybeAlign(16));
-            //              }
-            //            }
           }
         }
       }
@@ -3515,7 +3548,7 @@ struct Spirv_Builder {
     {
       auto names_copy = names;
       for (auto &item : names_copy) {
-        if (strcmp(item.second.c_str(), "main") == 0) {
+        if (strcmp(item.second.c_str(), opt_entry_name) == 0) {
           names[item.first] = "shader_entry";
         }
       }
@@ -3744,12 +3777,21 @@ struct Spirv_Builder {
     }
   }
 };
+
 #define DLL_EXPORT __attribute__((visibility("default")))
-extern "C" DLL_EXPORT void *compile_spirv(uint32_t *pCode, size_t code_size) {
+
+extern "C" DLL_EXPORT void *compile_spirv(uint32_t const *pCode,
+                                          size_t code_size,
+                                          char const *entry_name,
+                                          uint32_t subgroup_size) {
+  Spirv_Builder builder;
+  builder.opt_subgroup_size = subgroup_size;
+  builder.parse_meta(pCode, code_size);
+  builder.build_llvm_module_vectorized();
   return NULL;
 }
-extern "C" DLL_EXPORT void release_spirv(void *ptr) {
-}
+
+extern "C" DLL_EXPORT void release_spirv(void *ptr) {}
 #ifdef S2L_EXE
 int main(int argc, char **argv) {
   ASSERT_ALWAYS(argc == 3);

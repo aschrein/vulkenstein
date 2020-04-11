@@ -3,7 +3,7 @@ export SCRIPTPATH=`dirname $SCRIPT`
 export PATH=$SCRIPTPATH/build:$PATH
 export PATH=/home/aschrein/dev/llvm/build/Release/bin:$PATH
 echo "using $(which clang)"
-export WAVE_WIDTH=4
+export WAVE_WIDTH=1
 export DEINTERLEAVE=0
 echo "WAVE_WIDTH=$WAVE_WIDTH"
 echo "DEINTERLEAVE=$DEINTERLEAVE"
@@ -22,11 +22,11 @@ s2l shader.spv $WAVE_WIDTH > shader.ll && \
 llvm-as shader.ll -o shader.bc && \
 clang -emit-llvm -DWAVE_WIDTH="$WAVE_WIDTH" -g -I$SCRIPTPATH stdlib.cpp -S -o shader_stdlib.bc && \
 llvm-link shader.bc shader_stdlib.bc -o shader.bc && \
-opt -strip -O3  shader.bc -o shader.bc && \
+opt -O3  shader.bc -o shader.bc && \
 llvm-dis shader.bc -o shader.opt.ll && \
 llc -mattr=+avx2 -O3 --relocation-model=pic --mtriple=x86_64-unknown-linux-gnu -filetype=obj shader.bc -o shader.o && \
 objdump -D -M intel shader.o > shader.S && \
-clang shader.o -shared -fPIC -o shader.so && \
+clang -g shader.o -shared -fPIC -o shader.so && \
 clang++ -g $SCRIPTPATH/test_driver.cpp -o test_driver -ldl && \
 ./test_driver shader.so && \
 exit 0
