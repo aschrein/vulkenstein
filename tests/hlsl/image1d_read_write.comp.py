@@ -1,4 +1,4 @@
-stdlib = \
+runner = \
 r"""
 #include <test_stdlib.cpp>
 
@@ -6,7 +6,7 @@ extern "C"{
 
 const uint32_t NUM_INVOCATIONS = 1024;
 
-void shader_entry(void *);
+void spv_main(void *);
 
 void test_launch(void *_printf) {
   uint32_t g_buf_0[NUM_INVOCATIONS];
@@ -29,14 +29,20 @@ void test_launch(void *_printf) {
   info.subgroup_z_offset  = 0x0;
 
   void *descriptor_set_0[] = {NULL, NULL};
-  descriptor_set_0[0] = &g_buf_0;
-  descriptor_set_0[1] = &g_buf_1;
+  Image1D img_0;
+  Image1D img_1;
+  img_0.data = (uint8_t *)(void*)&g_buf_0;
+  img_0.bpp = 4;
+  img_1.data = (uint8_t *)(void*)&g_buf_1;
+  img_1.bpp = 4;
+  descriptor_set_0[0] = &img_0;
+  descriptor_set_0[1] = &img_1;
 
   info.descriptor_sets[0] = descriptor_set_0;
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS/WAVE_WIDTH; i++) {
     info.invocation_id = (uint3){i, 0, 0};
-    shader_entry(&info);
+    spv_main(&info);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
@@ -58,9 +64,9 @@ void main(uint3 tid : SV_DispatchThreadID)
 }
 """
 shader_filename = "shader.comp.hlsl"
-stdlib_c = open("stdlib.cpp", "w")
-stdlib_c.write(stdlib)
-stdlib_c.close()
+runner_c = open("runner.cpp", "w")
+runner_c.write(runner)
+runner_c.close()
 shader_f = open(shader_filename, "w")
 shader_f.write(shader)
 shader_f.close()

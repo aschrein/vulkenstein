@@ -54,6 +54,9 @@
 #include "llvm_stdlib_4.h"
 #include "llvm_stdlib_64.h"
 
+#define DLL_EXPORT __attribute__((visibility("default")))
+#define ATTR_USED __attribute__((used))
+
 template <typename T> struct std::vector<T> copy(std::vector<T> const &in) {
   return in;
 }
@@ -208,8 +211,15 @@ struct MatrixTy {
 };
 struct StructTy {
   uint32_t id;
+  bool is_builtin;
   std::vector<uint32_t> member_types;
   std::vector<uint32_t> member_offsets;
+  // Apparently there could be stuff like that
+  // out gl_PerVertex
+  // {
+  //    vec4 gl_Position;
+  // };
+  std::vector<spv::BuiltIn> member_builtins;
   uint32_t size;
 };
 struct PtrTy {
@@ -271,7 +281,6 @@ struct Spirv_Builder {
   //////////////////////
   uint32_t opt_subgroup_size = 4;
   bool opt_debug_comments = false;
-  char const *opt_entry_name = "main";
   //  bool opt_deinterleave_attributes = false;
 
   //////////////////////
@@ -319,7 +328,12 @@ struct Spirv_Builder {
   // Lifetime must be long enough
   uint32_t const *code;
   size_t code_size;
-
+  int ATTR_USED dump_spirv_module() const {
+    FILE *file = fopen("shader_dump.spv", "wb");
+    fwrite(code, 1, code_size, file);
+    fclose(file);
+    return 0;
+  }
   //////////////////////////////
   //          METHODS         //
   //////////////////////////////
@@ -342,6 +356,16 @@ struct Spirv_Builder {
         return dec;
     }
     UNIMPLEMENTED;
+  }
+  auto has_member_decoration(spv::Decoration spv_dec, uint32_t type_id,
+                             uint32_t member_id) -> bool {
+    ASSERT_ALWAYS(contains(member_decorations, type_id));
+    for (auto &item : member_decorations[type_id]) {
+      if (item.type == spv_dec && item.member_id == member_id) {
+        return true;
+      }
+    }
+    return false;
   }
   auto find_member_decoration(spv::Decoration spv_dec, uint32_t type_id,
                               uint32_t member_id) -> Member_Decoration {
@@ -400,12 +424,52 @@ struct Spirv_Builder {
     const uint32_t ID_bound = pCode[3];
     auto get_spv_name = [this](uint32_t id) -> std::string {
       if (names.find(id) == names.end()) {
-        names[id] = "spv__" + std::to_string(id);
+        names[id] = "spv_" + std::to_string(id);
       }
       ASSERT_ALWAYS(names.find(id) != names.end());
-      return names[id];
+      return "spv_" + names[id];
     };
-
+    auto llvm_matrix_transpose = [&c](llvm::Value *matrix,
+                                      llvm::IRBuilder<> *llvm_builder) {
+      llvm::Type *elem_type =
+          matrix->getType()->getArrayElementType()->getVectorElementType();
+      uint32_t matrix_row_size =
+          matrix->getType()->getArrayElementType()->getVectorNumElements();
+      uint32_t matrix_col_size =
+          (uint32_t)matrix->getType()->getArrayNumElements();
+      llvm::Type *matrix_t_type = llvm::ArrayType::get(
+          llvm::VectorType::get(elem_type, matrix_col_size), matrix_row_size);
+      llvm::Value *result = llvm::UndefValue::get(matrix_t_type);
+      llvm::SmallVector<llvm::Value *, 4> rows;
+      jto(matrix_row_size) {
+        rows.push_back(llvm_builder->CreateExtractValue(matrix, j));
+      }
+      ito(matrix_col_size) {
+        llvm::Value *result_row =
+            llvm::UndefValue::get(matrix_t_type->getArrayElementType());
+        jto(matrix_row_size) {
+          result_row = llvm_builder->CreateInsertElement(
+              result_row, llvm_builder->CreateExtractElement(rows[j], i), j);
+        }
+        result = llvm_builder->CreateInsertValue(result, result_row, i);
+      }
+      return result;
+    };
+    auto llvm_dot = [&c](llvm::Value *vector_0, llvm::Value *vector_1,
+                         llvm::IRBuilder<> *llvm_builder) {
+      llvm::Type *elem_type = vector_0->getType()->getVectorElementType();
+      llvm::Value *result = llvm::ConstantFP::get(elem_type, 0.0);
+      uint32_t vector_size = vector_0->getType()->getVectorNumElements();
+      ASSERT_ALWAYS(vector_1->getType()->getVectorNumElements() ==
+                    vector_0->getType()->getVectorNumElements());
+      jto(vector_size) {
+        result = llvm_builder->CreateFAdd(
+            result, llvm_builder->CreateFMul(
+                        llvm_builder->CreateExtractElement(vector_0, j),
+                        llvm_builder->CreateExtractElement(vector_1, j)));
+      }
+      return result;
+    };
     // Initialize framework functions
 
     LOOKUP_FN(get_push_constant_ptr);
@@ -414,7 +478,10 @@ struct Spirv_Builder {
     LOOKUP_FN(get_storage_ptr);
     LOOKUP_FN(get_uniform_const_ptr);
     LOOKUP_FN(get_input_ptr);
+    // Pointer to user attributes
     LOOKUP_FN(get_output_ptr);
+    // For vertex shaders et al holds a pointer to gl_Position
+    LOOKUP_FN(get_builtin_output_ptr);
     LOOKUP_FN(kill);
     LOOKUP_FN(normalize_f2);
     LOOKUP_FN(normalize_f3);
@@ -682,7 +749,7 @@ struct Spirv_Builder {
              member_id++) {
           llvm::Type *member_type = llvm_types[type.member_types[member_id]];
           ASSERT_ALWAYS(member_type != NULL && "Member types must be defined");
-          if (type.member_offsets[member_id] != offset) {
+          if (!type.is_builtin && type.member_offsets[member_id] != offset) {
             ASSERT_ALWAYS(type.member_offsets[member_id] > offset &&
                           "Can't move a member back in memory layout");
             size_t diff = type.member_offsets[member_id] - offset;
@@ -829,7 +896,8 @@ struct Spirv_Builder {
           llvm_builder->CreateCall(get_input_ptr, state_ptr);
       llvm::Value *output_ptr =
           llvm_builder->CreateCall(get_output_ptr, state_ptr);
-
+      llvm::Value *builtin_output_ptr =
+          llvm_builder->CreateCall(get_builtin_output_ptr, state_ptr);
       // @llvm/local_variables
       auto &locals = local_variables[func_id];
       for (auto &var_id : locals) {
@@ -868,6 +936,20 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(llvm_type->isPointerTy());
         PtrTy ptr_type = ptr_types[var.type_id];
         DeclTy pointee_decl_ty = decl_types_table[ptr_type.target_id];
+
+        bool is_builtin_struct = false;
+        StructTy builtin_struct_ty = {};
+        if (decl_types_table[var.type_id] == DeclTy::PtrTy) {
+          PtrTy ptr_ty = ptr_types[var.type_id];
+          if (decl_types_table[ptr_ty.target_id] == DeclTy::StructTy) {
+            StructTy struct_ty = struct_types[ptr_ty.target_id];
+            // This is a structure with builtin members so no need for location
+            if (struct_ty.is_builtin) {
+              is_builtin_struct = true;
+              builtin_struct_ty = struct_ty;
+            }
+          }
+        }
         // In case that's a vector type we'd try to deinterleave it(flatten into
         // one huge vector of floats/ints)
         uint32_t num_components = 0;
@@ -936,29 +1018,45 @@ struct Spirv_Builder {
           break;
         }
         case spv::StorageClass::StorageClassOutput: {
-          uint32_t location =
-              find_decoration(spv::Decoration::DecorationLocation, var.id)
-                  .param1;
-          ASSERT_ALWAYS(location >= 0);
-          ASSERT_ALWAYS(llvm_type->isPointerTy());
+          if (is_builtin_struct) {
+            llvm::ArrayType *array_type = llvm::ArrayType::get(
+                llvm_type->getPointerElementType(), opt_subgroup_size);
+            llvm::Value *alloca = llvm_builder->CreateAlloca(array_type);
+            DeferredStore ds;
+            ds.dst_ptr = builtin_output_ptr;
+            ds.value_ptr = alloca;
+            deferred_stores.push_back(ds);
+            ito(opt_subgroup_size) {
+              llvm::Value *offset = llvm_builder->CreateGEP(
+                  alloca, {llvm_get_constant_i32(0), llvm_get_constant_i32(i)},
+                  get_spv_name(var.id));
 
-          llvm::ArrayType *array_type = llvm::ArrayType::get(
-              llvm_type->getPointerElementType(), opt_subgroup_size);
-          llvm::Value *alloca = llvm_builder->CreateAlloca(array_type);
-          DeferredStore ds;
-          ds.dst_ptr = llvm_builder->CreateGEP(
-              output_ptr, llvm_get_constant_i32(output_offsets[location] *
-                                                opt_subgroup_size));
-          ds.value_ptr = alloca;
-          deferred_stores.push_back(ds);
-          ito(opt_subgroup_size) {
-            llvm::Value *offset = llvm_builder->CreateGEP(
-                alloca, {llvm_get_constant_i32(0), llvm_get_constant_i32(i)},
-                get_spv_name(var.id));
+              llvm_values_per_lane[i][var.id] = offset;
+            }
+          } else {
+            uint32_t location =
+                find_decoration(spv::Decoration::DecorationLocation, var.id)
+                    .param1;
+            ASSERT_ALWAYS(location >= 0);
+            ASSERT_ALWAYS(llvm_type->isPointerTy());
 
-            llvm_values_per_lane[i][var.id] = offset;
+            llvm::ArrayType *array_type = llvm::ArrayType::get(
+                llvm_type->getPointerElementType(), opt_subgroup_size);
+            llvm::Value *alloca = llvm_builder->CreateAlloca(array_type);
+            DeferredStore ds;
+            ds.dst_ptr = llvm_builder->CreateGEP(
+                output_ptr, llvm_get_constant_i32(output_offsets[location] *
+                                                  opt_subgroup_size));
+            ds.value_ptr = alloca;
+            deferred_stores.push_back(ds);
+            ito(opt_subgroup_size) {
+              llvm::Value *offset = llvm_builder->CreateGEP(
+                  alloca, {llvm_get_constant_i32(0), llvm_get_constant_i32(i)},
+                  get_spv_name(var.id));
+
+              llvm_values_per_lane[i][var.id] = offset;
+            }
           }
-
           break;
         }
         case spv::StorageClass::StorageClassInput: {
@@ -2140,6 +2238,168 @@ struct Spirv_Builder {
           }
           break;
         }
+        case spv::Op::OpMatrixTimesScalar: {
+          ASSERT_ALWAYS(WordCount == 5);
+          uint32_t result_type_id = word1;
+          uint32_t result_id = word2;
+          uint32_t matrix_id = word3;
+          uint32_t scalar_id = word4;
+          kto(opt_subgroup_size) {
+            llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
+            llvm::Value *scalar = llvm_values_per_lane[k][scalar_id];
+            NOTNULL(matrix);
+            ASSERT_ALWAYS(
+                matrix->getType()->isArrayTy() &&
+                matrix->getType()->getArrayElementType()->isVectorTy());
+            llvm::Value *result = llvm::UndefValue::get(matrix->getType());
+            uint32_t row_size = matrix->getType()
+                                    ->getArrayElementType()
+                                    ->getVectorNumElements();
+            ito(matrix->getType()->getArrayNumElements()) {
+              llvm::Value *row = llvm_builder->CreateExtractValue(matrix, i);
+              result = llvm_builder->CreateInsertValue(
+                  result,
+                  llvm_builder->CreateFMul(
+                      row, llvm_builder->CreateVectorSplat(row_size, scalar)),
+                  {0});
+            }
+            llvm_values_per_lane[k][result_id] = result;
+          }
+          break;
+        }
+        case spv::Op::OpVectorTimesMatrix: {
+          ASSERT_ALWAYS(WordCount == 5);
+          uint32_t result_type_id = word1;
+          uint32_t result_id = word2;
+          uint32_t vector_id = word3;
+          uint32_t matrix_id = word4;
+          kto(opt_subgroup_size) {
+            llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
+            llvm::Value *vector = llvm_values_per_lane[k][vector_id];
+            NOTNULL(matrix);
+            ASSERT_ALWAYS(
+                matrix->getType()->isArrayTy() &&
+                matrix->getType()->getArrayElementType()->isVectorTy());
+
+            uint32_t vector_size = vector->getType()->getVectorNumElements();
+            ASSERT_ALWAYS(vector_size ==
+                          matrix->getType()->getArrayNumElements());
+            uint32_t matrix_row_size = matrix->getType()
+                                           ->getArrayElementType()
+                                           ->getVectorNumElements();
+            llvm::Type *result_type = llvm::VectorType::get(
+                vector->getType()->getVectorElementType(), matrix_row_size);
+            llvm::Value *result = llvm::UndefValue::get(result_type);
+            llvm::Value *matrix_t =
+                llvm_matrix_transpose(matrix, llvm_builder.get());
+            llvm::SmallVector<llvm::Value *, 4> rows;
+            jto(matrix_row_size) {
+              rows.push_back(llvm_builder->CreateExtractValue(matrix_t, j));
+            }
+            ito(matrix_row_size) {
+              llvm::Value *dot_result =
+                  llvm_dot(vector, rows[i], llvm_builder.get());
+              result = llvm_builder->CreateInsertElement(result, dot_result, i);
+            }
+            llvm_values_per_lane[k][result_id] = result;
+          }
+          break;
+        }
+        case spv::Op::OpMatrixTimesVector: {
+          ASSERT_ALWAYS(WordCount == 5);
+          uint32_t result_type_id = word1;
+          uint32_t result_id = word2;
+          uint32_t matrix_id = word3;
+          uint32_t vector_id = word4;
+          kto(opt_subgroup_size) {
+            llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
+            llvm::Value *vector = llvm_values_per_lane[k][vector_id];
+            NOTNULL(matrix);
+            ASSERT_ALWAYS(
+                matrix->getType()->isArrayTy() &&
+                matrix->getType()->getArrayElementType()->isVectorTy());
+
+            uint32_t vector_size = vector->getType()->getVectorNumElements();
+
+            uint32_t matrix_col_size = matrix->getType()->getArrayNumElements();
+            ASSERT_ALWAYS(vector_size == matrix->getType()
+                                             ->getArrayElementType()
+                                             ->getVectorNumElements());
+            llvm::Type *result_type = llvm::VectorType::get(
+                vector->getType()->getVectorElementType(), matrix_col_size);
+            llvm::Value *result = llvm::UndefValue::get(result_type);
+            llvm::SmallVector<llvm::Value *, 4> rows;
+            jto(matrix_col_size) {
+              rows.push_back(llvm_builder->CreateExtractValue(matrix, j));
+            }
+            ito(matrix_col_size) {
+              llvm::Value *dot_result =
+                  llvm_dot(vector, rows[i], llvm_builder.get());
+              result = llvm_builder->CreateInsertElement(result, dot_result, i);
+            }
+            llvm_values_per_lane[k][result_id] = result;
+          }
+          break;
+        }
+        case spv::Op::OpMatrixTimesMatrix: {
+          ASSERT_ALWAYS(WordCount == 5);
+          uint32_t result_type_id = word1;
+          uint32_t result_id = word2;
+          uint32_t matrix_1_id = word3;
+          uint32_t matrix_2_id = word4;
+          uto(opt_subgroup_size) {
+            // MUl N x K x M matrices
+            llvm::Value *matrix_1 = llvm_values_per_lane[u][matrix_1_id];
+            llvm::Value *matrix_2 = llvm_values_per_lane[u][matrix_2_id];
+            NOTNULL(matrix_1);
+            NOTNULL(matrix_2);
+            ASSERT_ALWAYS(
+                matrix_1->getType()->isArrayTy() &&
+                matrix_1->getType()->getArrayElementType()->isVectorTy());
+            ASSERT_ALWAYS(
+                matrix_2->getType()->isArrayTy() &&
+                matrix_2->getType()->getArrayElementType()->isVectorTy());
+            llvm::Type *elem_type = matrix_1->getType()
+                                        ->getArrayElementType()
+                                        ->getVectorElementType();
+            uint32_t N = (uint32_t)matrix_1->getType()->getArrayNumElements();
+            uint32_t K = matrix_1->getType()
+                             ->getArrayElementType()
+                             ->getVectorNumElements();
+            uint32_t K_1 = (uint32_t)matrix_2->getType()->getArrayNumElements();
+            ASSERT_ALWAYS(K == K_1);
+            uint32_t M = matrix_2->getType()
+                             ->getArrayElementType()
+                             ->getVectorNumElements();
+
+            llvm::Value *matrix_2_t =
+                llvm_matrix_transpose(matrix_2, llvm_builder.get());
+            llvm::SmallVector<llvm::Value *, 4> rows_1;
+            llvm::SmallVector<llvm::Value *, 4> cols_2;
+            jto(K) {
+              cols_2.push_back(llvm_builder->CreateExtractValue(matrix_2_t, j));
+            }
+            jto(K) {
+              rows_1.push_back(llvm_builder->CreateExtractValue(matrix_1, j));
+            }
+            llvm::Type *result_type =
+                llvm::ArrayType::get(llvm::VectorType::get(elem_type, M), N);
+            llvm::Value *result = llvm::UndefValue::get(result_type);
+            ito(N) {
+              llvm::Value *result_row =
+                  llvm::UndefValue::get(result_type->getArrayElementType());
+              jto(M) {
+                llvm::Value *dot_result =
+                    llvm_dot(rows_1[i], cols_2[j], llvm_builder.get());
+                result_row = llvm_builder->CreateInsertElement(result_row,
+                                                               dot_result, j);
+              }
+              result = llvm_builder->CreateInsertValue(result, result_row, i);
+            }
+            llvm_values_per_lane[u][result_id] = result;
+          }
+          break;
+        }
         case spv::Op::OpSampledImage:
         case spv::Op::OpImageSampleImplicitLod:
         case spv::Op::OpImageSampleExplicitLod:
@@ -2251,10 +2511,6 @@ struct Spirv_Builder {
         case spv::Op::OpGenericCastToPtrExplicit:
         case spv::Op::OpSNegate:
         case spv::Op::OpFNegate:
-        case spv::Op::OpMatrixTimesScalar:
-        case spv::Op::OpVectorTimesMatrix:
-        case spv::Op::OpMatrixTimesVector:
-        case spv::Op::OpMatrixTimesMatrix:
         case spv::Op::OpOuterProduct:
         case spv::Op::OpIAddCarry:
         case spv::Op::OpISubBorrow:
@@ -2695,7 +2951,7 @@ struct Spirv_Builder {
 
   void parse_meta(const uint32_t *pCode, size_t codeSize) {
     this->code = pCode;
-    this->code_size = code_size;
+    this->code_size = codeSize;
     ASSERT_ALWAYS(pCode[0] == spv::MagicNumber);
     ASSERT_ALWAYS(pCode[1] <= spv::Version);
 
@@ -2870,14 +3126,32 @@ struct Spirv_Builder {
       case spv::Op::OpTypeStruct: {
         StructTy type;
         type.id = word1;
+        type.is_builtin = false;
         for (uint16_t i = 2; i < WordCount; i++) {
           type.member_types.push_back(pCode[i]);
           type.member_offsets.push_back(0);
+          type.member_builtins.push_back(spv::BuiltIn::BuiltInMax);
         }
-        ito(type.member_types.size()) type.member_offsets[i] =
-            find_member_decoration(spv::Decoration::DecorationOffset, type.id,
-                                   i)
-                .param1;
+        ito(type.member_types.size()) {
+          if (has_member_decoration(spv::Decoration::DecorationBuiltIn, type.id,
+                                    i)) {
+            type.is_builtin = true;
+            type.member_builtins[i] =
+                (spv::BuiltIn)find_member_decoration(
+                    spv::Decoration::DecorationBuiltIn, type.id, i)
+                    .param1;
+          } else {
+            ASSERT_ALWAYS(type.is_builtin == false);
+            type.member_offsets[i] =
+                find_member_decoration(spv::Decoration::DecorationOffset,
+                                       type.id, i)
+                    .param1;
+          }
+        }
+        if (type.is_builtin) {
+          // things can get funky if it aint true. FIXME
+          ASSERT_ALWAYS(type.member_types.size() == 1);
+        }
         type.size = 0;
         struct_types[word1] = type;
         CLASSIFY(type.id, DeclTy::StructTy);
@@ -3543,16 +3817,6 @@ struct Spirv_Builder {
       pCode += WordCount;
     }
 #undef CLASSIFY
-    // Rename main -> shader_entry to avoid compilation errors and confusion
-    // TODO: Cleanup
-    {
-      auto names_copy = names;
-      for (auto &item : names_copy) {
-        if (strcmp(item.second.c_str(), opt_entry_name) == 0) {
-          names[item.first] = "shader_entry";
-        }
-      }
-    }
     // TODO handle more cases like WASM_32 etc
     auto get_pointer_size = []() { return sizeof(void *); };
     auto get_primitive_size = [](Primitive_t type) -> size_t {
@@ -3699,6 +3963,16 @@ struct Spirv_Builder {
           // Skip builtins here
           if (has_decoration(spv::Decoration::DecorationBuiltIn, var.id))
             continue;
+          if (decl_types_table[var.type_id] == DeclTy::PtrTy) {
+            PtrTy ptr_ty = ptr_types[var.type_id];
+            if (decl_types_table[ptr_ty.target_id] == DeclTy::StructTy) {
+              StructTy struct_ty = struct_types[ptr_ty.target_id];
+              // This is a structure with builtin members so no need for
+              // location
+              if (struct_ty.is_builtin)
+                continue;
+            }
+          }
           if (var.storage == spv::StorageClass::StorageClassInput) {
             uint32_t location =
                 find_decoration(spv::Decoration::DecorationLocation, var.id)
@@ -3778,14 +4052,9 @@ struct Spirv_Builder {
   }
 };
 
-#define DLL_EXPORT __attribute__((visibility("default")))
-
 extern "C" DLL_EXPORT void *compile_spirv(uint32_t const *pCode,
-                                          size_t code_size,
-                                          char const *entry_name,
-                                          uint32_t subgroup_size) {
+                                          size_t code_size) {
   Spirv_Builder builder;
-  builder.opt_subgroup_size = subgroup_size;
   builder.parse_meta(pCode, code_size);
   builder.build_llvm_module_vectorized();
   return NULL;

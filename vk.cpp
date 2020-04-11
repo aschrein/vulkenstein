@@ -81,6 +81,10 @@
   CASE(vkGetEventStatus);                                                      \
   CASE(vkFreeCommandBuffers);                                                  \
   CASE(vkFreeMemory);                                                          \
+  CASE(vkCreateDescriptorSetLayout);                                           \
+  CASE(vkDestroyDescriptorSetLayout);                                          \
+  CASE(vkCreatePipelineLayout);                                                \
+  CASE(vkDestroyPipelineLayout);                                               \
   (void)0
 
 // Data structures to keep track of the objects
@@ -102,9 +106,7 @@ struct VkBuffer_Impl {
   VkDeviceMemory_Impl *mem;
   size_t offset;
   size_t size;
-  void release() {
-    memset(this, 0, sizeof(*this));
-  }
+  void release() { memset(this, 0, sizeof(*this)); }
 };
 struct VkBufferView_Impl {
   uint32_t id;
@@ -124,9 +126,25 @@ struct VkImage_Impl {
   uint32_t arrayLayers;
   VkSampleCountFlagBits samples;
   VkImageLayout initialLayout;
+  void release() { memset(this, 0, sizeof(*this)); }
+};
+struct VkDescriptorSetLayout_Impl {
+  uint32_t id;
+  uint32_t bindingCount;
+  VkDescriptorSetLayoutBinding *pBindings;
   void release() {
+    if (pBindings != NULL)
+      free(pBindings);
     memset(this, 0, sizeof(*this));
   }
+};
+struct VkPipelineLayout_Impl {
+  uint32_t id;
+  uint32_t setLayoutCount;
+  VkDescriptorSetLayout_Impl *pSetLayouts[0x10];
+  uint32_t pushConstantRangeCount;
+  VkPushConstantRange pPushConstantRanges[0x10];
+  void release() { memset(this, 0, sizeof(*this)); }
 };
 struct VkImageView_Impl {
   uint32_t id;
@@ -247,6 +265,8 @@ OBJ_POOL(VkImageView)
 OBJ_POOL(VkImage)
 OBJ_POOL(VkDeviceMemory)
 OBJ_POOL(VkShaderModule)
+OBJ_POOL(VkDescriptorSetLayout)
+OBJ_POOL(VkPipelineLayout)
 
 #define DECL_IMPL(type)                                                        \
   struct type##_Impl {                                                         \
@@ -1230,12 +1250,26 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineLayout(
     VkDevice device, const VkPipelineLayoutCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator,
     VkPipelineLayout *pPipelineLayout) {
+  vki::VkPipelineLayout_Impl *impl = ALLOC_VKOBJ_T(VkPipelineLayout);
+  impl->setLayoutCount = pCreateInfo->setLayoutCount;
+  impl->pushConstantRangeCount = pCreateInfo->pushConstantRangeCount;
+  ASSERT_ALWAYS(impl->setLayoutCount < 0x10);
+  ASSERT_ALWAYS(impl->pushConstantRangeCount < 0x10);
+  ito(impl->setLayoutCount) {
+    impl->pSetLayouts[i] =
+        (vki::VkDescriptorSetLayout_Impl *)pCreateInfo->pSetLayouts[i];
+  }
+  ito(impl->pushConstantRangeCount) {
+    impl->pPushConstantRanges[i] = pCreateInfo->pPushConstantRanges[i];
+  }
+  *pPipelineLayout = (VkPipelineLayout)impl;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyPipelineLayout(VkDevice device, VkPipelineLayout pipelineLayout,
                         const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(pipelineLayout, VkPipelineLayout);
   return;
 }
 
@@ -1255,13 +1289,20 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorSetLayout(
     VkDevice device, const VkDescriptorSetLayoutCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator,
     VkDescriptorSetLayout *pSetLayout) {
+  vki::VkDescriptorSetLayout_Impl *impl = ALLOC_VKOBJ_T(VkDescriptorSetLayout);
+  impl->bindingCount = pCreateInfo->bindingCount;
+  impl->pBindings = (VkDescriptorSetLayoutBinding *)malloc(
+      sizeof(VkDescriptorSetLayoutBinding) * impl->bindingCount);
+  memcpy(impl->pBindings, pCreateInfo->pBindings,
+         sizeof(VkDescriptorSetLayoutBinding) * impl->bindingCount);
+  *pSetLayout = (VkDescriptorSetLayout)impl;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyDescriptorSetLayout(
     VkDevice device, VkDescriptorSetLayout descriptorSetLayout,
     const VkAllocationCallbacks *pAllocator) {
-  return;
+  RELEASE_VKOBJ(descriptorSetLayout, VkDescriptorSetLayout);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(

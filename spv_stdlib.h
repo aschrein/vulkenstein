@@ -33,24 +33,31 @@ struct Invocation_Info {
   uint32_t subgroup_y_bits, subgroup_y_offset;
   uint32_t subgroup_z_bits, subgroup_z_offset;
   uint32_t wave_width;
-  // void *[N]
+  // array of (void *[])
   void **descriptor_sets[0x10];
+  void *input;
+  void *builtin_output;
+  void *output;
 };
 
 struct Image1D {
   uint8_t *data;
-  uint32_t format, width;
+  uint32_t bpp, width;
 };
 
 struct Image2D {
   uint8_t *data;
-  uint32_t format, pitch, width, height;
+  uint32_t bpp, pitch, width, height;
 };
 
 struct Image3D {
   uint8_t *data;
-  uint32_t format, width_pitch, height_pitch, width, height, depth;
+  uint32_t bpp, width_pitch, height_pitch, width, height, depth;
 };
+
+void *get_input_ptr(Invocation_Info *state) { return state->input; }
+void *get_output_ptr(Invocation_Info *state) { return state->output; }
+void *get_builtin_output_ptr(Invocation_Info *state) { return state->builtin_output; }
 
 uint3 spv_get_global_invocation_id(Invocation_Info *state, uint32_t lane_id) {
 
@@ -83,25 +90,24 @@ void *get_uniform_ptr(Invocation_Info *state, int set, int binding) {
 }
 
 uint32_t spv_image_read_1d_i32(uint64_t handle, uint32_t coord) {
-  Image1D *ptr = (Image1D*)(void*)(size_t)handle;
-  return *(uint32_t*)&ptr->data[coord];
+  Image1D *ptr = (Image1D *)(void *)(size_t)handle;
+  return *(uint32_t *)&ptr->data[coord * ptr->bpp];
 }
 
 void spv_image_write_1d_i32(uint64_t handle, uint32_t coord, uint32_t val) {
-  Image1D *ptr = (Image1D*)(void*)(size_t)handle;
-  ptr->data[coord] = val;
+  Image1D *ptr = (Image1D *)(void *)(size_t)handle;
+  *(uint32_t *)(&ptr->data[coord * ptr->bpp]) = val;
 }
 
 float4 spv_image_read_2d_float4(uint64_t handle, int2 coord) {
-  Image2D *ptr = (Image2D*)(void*)(size_t)handle;
-  return *(float4*)&ptr->data[16 *(coord.x + coord.y * ptr->pitch)];
+  Image2D *ptr = (Image2D *)(void *)(size_t)handle;
+  return *(float4 *)&ptr->data[ptr->bpp * coord.x + coord.y * ptr->pitch];
 }
 
 void spv_image_write_f4(int *handle, int2 coord, float4 val) {
-  Image2D *ptr = (Image2D*)(void*)(size_t)handle;
-  *(float4*)&ptr->data[16 *(coord.x + coord.y * ptr->pitch)] = val;
+  Image2D *ptr = (Image2D *)(void *)(size_t)handle;
+  *(float4 *)&ptr->data[ptr->bpp * coord.x + coord.y * ptr->pitch] = val;
 }
-
 
 float spv_sqrt(float a) { return sqrtf(a); }
 

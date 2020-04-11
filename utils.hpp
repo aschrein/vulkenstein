@@ -36,6 +36,7 @@ template <typename F> __Defer__<F> defer_func(F f) { return __Defer__<F>(f); }
 
 #define ito(N) for (uint32_t i = 0; i < N; ++i)
 #define jto(N) for (uint32_t j = 0; j < N; ++j)
+#define uto(N) for (uint32_t u = 0; u < N; ++u)
 #define kto(N) for (uint32_t k = 0; k < N; ++k)
 
 #define PERF_HIST_ADD(name, val)

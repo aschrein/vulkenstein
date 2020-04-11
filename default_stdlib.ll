@@ -25,6 +25,7 @@ declare align 16 i8 *@get_uniform_const_ptr(%state_t *, i32 %set, i32 %binding) 
 declare align 16 i8 *@get_storage_ptr(%state_t *, i32 %set, i32 %binding) #0
 declare align 16 i8 *@get_input_ptr(%state_t *) #0
 declare align 16 i8 *@get_output_ptr(%state_t *) #0
+declare align 16 i8 *@get_builtin_output_ptr(%state_t *) #0
 declare align 16 i8 *@get_private_ptr(%state_t *) #0
 
 declare void @kill(%state_t *, %mask_t %mask)
