@@ -95,8 +95,6 @@ void llvm_fatal(void *user_data, const std::string &reason,
   abort();
 }
 
-#ifdef S2L_EXE
-
 void *read_file(const char *filename, size_t *size,
                 Allocator *allocator = NULL) {
   if (allocator == NULL)
@@ -3746,6 +3744,13 @@ struct Spirv_Builder {
     }
   }
 };
+#define DLL_EXPORT __attribute__((visibility("default")))
+extern "C" DLL_EXPORT void *compile_spirv(uint32_t *pCode, size_t code_size) {
+  return NULL;
+}
+extern "C" DLL_EXPORT void release_spirv(void *ptr) {
+}
+#ifdef S2L_EXE
 int main(int argc, char **argv) {
   ASSERT_ALWAYS(argc == 3);
   uint32_t subgroup_size = (uint32_t)atoi(argv[2]);

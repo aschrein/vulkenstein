@@ -14,6 +14,50 @@
 #include <unistd.h>
 #define DLL_EXPORT __attribute__((visibility("default")))
 
+#define ALL_FUNCTIONS                                                          \
+  CASE(vkCreateInstance);                                                      \
+  CASE(vkCreateXcbSurfaceKHR);                                                 \
+  CASE(vkGetPhysicalDeviceXcbPresentationSupportKHR);                          \
+  CASE(vkEnumerateInstanceExtensionProperties);                                \
+  CASE(vkEnumerateInstanceVersion);                                            \
+  CASE(vkEnumeratePhysicalDevices);                                            \
+  CASE(vkGetPhysicalDeviceSurfaceSupportKHR);                                  \
+  CASE(vkGetPhysicalDeviceSurfaceFormatsKHR);                                  \
+  CASE(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);                             \
+  CASE(vkGetPhysicalDeviceSurfacePresentModesKHR);                             \
+  CASE(vkEnumerateDeviceExtensionProperties);                                  \
+  CASE(vkGetPhysicalDeviceFeatures);                                           \
+  CASE(vkGetPhysicalDeviceQueueFamilyProperties);                              \
+  CASE(vkGetPhysicalDeviceProperties);                                         \
+  CASE(vkCreateDevice);                                                        \
+  CASE(vkGetDeviceProcAddr);                                                   \
+  CASE(vkGetPhysicalDeviceMemoryProperties);                                   \
+  CASE(vkGetPhysicalDeviceFormatProperties);                                   \
+  CASE(vkGetSwapchainImagesKHR);                                               \
+  CASE(vkCreateSwapchainKHR);                                                  \
+  CASE(vkCreateImageView);                                                     \
+  CASE(vkCreateFence);                                                         \
+  CASE(vkAllocateCommandBuffers);                                              \
+  CASE(vkCreateImage);                                                         \
+  CASE(vkAllocateMemory);                                                      \
+  CASE(vkGetImageMemoryRequirements);                                          \
+  CASE(vkBindImageMemory);                                                     \
+  CASE(vkCreateRenderPass);                                                    \
+  CASE(vkCreatePipelineCache);                                                 \
+  CASE(vkDestroyPipelineCache);                                                \
+  CASE(vkGetPipelineCacheData);                                                \
+  CASE(vkCreateCommandPool);                                                   \
+  CASE(vkDestroyCommandPool);                                                  \
+  CASE(vkGetDeviceQueue);                                                      \
+  CASE(vkCreateSemaphore);                                                     \
+  CASE(vkDestroySemaphore);                                                    \
+  CASE(vkDestroyRenderPass);                                                   \
+  CASE(vkCreateFramebuffer);                                                   \
+  CASE(vkDestroyFramebuffer);                                                  \
+  CASE(vkCreateShaderModule);                                                  \
+  CASE(vkDestroyShaderModule);                                                 \
+  (void)0
+
 // Data structures to keep track of the objects
 // TODO(aschrein): Nuke this from the orbit
 namespace vki {
@@ -54,6 +98,20 @@ struct VkImageView_Impl {
   VkComponentMapping components;
   VkImageSubresourceRange subresourceRange;
   void release() { memset(this, 0, sizeof(*this)); }
+};
+extern "C" void *compile_spirv(uint32_t const *pCode, size_t code_size);
+extern "C" void release_spirv(void *ptr);
+struct VkShaderModule_Impl {
+  uint32_t id;
+  void *jitted_code;
+  void init(uint32_t const *pCode, size_t code_size) {
+    jitted_code = compile_spirv(pCode, code_size);
+  }
+  void release() {
+    if (jitted_code != NULL)
+      release_spirv(jitted_code);
+    memset(this, 0, sizeof(*this));
+  }
 };
 static constexpr uint32_t MAX_OBJECTS = 1000;
 #define MEMZERO(obj) memset(&obj, 0, sizeof(obj))
@@ -108,6 +166,7 @@ struct VkRenderPass_Impl {
   VkSubpassDescription pSubpasses[10];
   uint32_t dependencyCount;
   VkSubpassDependency pDependencies[10];
+  void release() { memset(this, 0, sizeof(*this)); }
 };
 
 #define OBJ_POOL(type) Pool<type##_Impl> type##_pool = {};
@@ -117,10 +176,12 @@ OBJ_POOL(VkRenderPass)
 OBJ_POOL(VkImageView)
 OBJ_POOL(VkImage)
 OBJ_POOL(VkDeviceMemory)
+OBJ_POOL(VkShaderModule)
 
 #define DECL_IMPL(type)                                                        \
   struct type##_Impl {                                                         \
     uint32_t id;                                                               \
+    void release() { memset(this, 0, sizeof(*this)); }                         \
   };
 
 #define OBJ_POOL_DUMMY(type)                                                   \
@@ -132,14 +193,31 @@ OBJ_POOL_DUMMY(VkQueue)
 OBJ_POOL_DUMMY(VkCommandPool)
 OBJ_POOL_DUMMY(VkFence)
 OBJ_POOL_DUMMY(VkCommandBuffer)
+OBJ_POOL_DUMMY(VkPipelineCache)
 DECL_IMPL(VkInstance)
 DECL_IMPL(VkPhysicalDevice)
 DECL_IMPL(VkDevice)
 DECL_IMPL(VkSurfaceKHR)
 
+struct VkFramebuffer_Impl {
+  uint32_t id;
+  VkFramebufferCreateFlags flags;
+  VkRenderPass_Impl *renderPass;
+  uint32_t attachmentCount;
+  VkImageView_Impl *pAttachments[0x10];
+  uint32_t width;
+  uint32_t height;
+  uint32_t layers;
+  void release() { memset(this, 0, sizeof(*this)); }
+};
+OBJ_POOL(VkFramebuffer)
+
 #define ALLOC_VKOBJ(type) (type)(void *) vki::type##_pool.alloc()
 #define ALLOC_VKOBJ_T(type) vki::type##_pool.alloc()
 #define GET_VKOBJ(type, id) (&vki::type##_pool.pool[id])
+#define RELEASE_VKOBJ(obj, type)                                               \
+  NOTNULL(obj);                                                                \
+  ((vki::type##_Impl *)obj)->release()
 
 static VkInstance_Impl g_instance;
 static VkPhysicalDevice_Impl g_phys_device;
@@ -839,6 +917,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSemaphore(
 VKAPI_ATTR void VKAPI_CALL
 vkDestroySemaphore(VkDevice device, VkSemaphore semaphore,
                    const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(semaphore, VkSemaphore);
   return;
 }
 
@@ -960,30 +1039,39 @@ vkDestroyImageView(VkDevice device, VkImageView imageView,
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateShaderModule(
     VkDevice device, const VkShaderModuleCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkShaderModule *pShaderModule) {
+  vki::VkShaderModule_Impl *impl = ALLOC_VKOBJ_T(VkShaderModule);
+  impl->init(pCreateInfo->pCode, pCreateInfo->codeSize);
+  *pShaderModule = (VkShaderModule)(void *)impl;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyShaderModule(VkDevice device, VkShaderModule shaderModule,
                       const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(shaderModule, VkShaderModule);
   return;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineCache(
     VkDevice device, const VkPipelineCacheCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkPipelineCache *pPipelineCache) {
+  *pPipelineCache = ALLOC_VKOBJ(VkPipelineCache);
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyPipelineCache(VkDevice device, VkPipelineCache pipelineCache,
                        const VkAllocationCallbacks *pAllocator) {
+  ((vki::VkPipelineCache_Impl *)pipelineCache)->release();
   return;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
 vkGetPipelineCacheData(VkDevice device, VkPipelineCache pipelineCache,
                        size_t *pDataSize, void *pData) {
+  *pDataSize = 4;
+  if (pData != NULL)
+    ((uint32_t *)pData)[0] = 0xdeadbeef;
   return VK_SUCCESS;
 }
 
@@ -1092,12 +1180,23 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(
     VkDevice device, const VkFramebufferCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkFramebuffer *pFramebuffer) {
+  vki::VkFramebuffer_Impl *impl = ALLOC_VKOBJ_T(VkFramebuffer);
+  impl->flags = pCreateInfo->flags;
+  impl->width = pCreateInfo->width;
+  impl->height = pCreateInfo->height;
+  impl->layers = pCreateInfo->layers;
+  impl->attachmentCount = pCreateInfo->attachmentCount;
+  ASSERT_ALWAYS(impl->attachmentCount < 0x10);
+  ito(impl->attachmentCount) impl->pAttachments[i] =
+      (vki::VkImageView_Impl *)pCreateInfo->pAttachments[i];
+  impl->renderPass = (vki::VkRenderPass_Impl *)pCreateInfo->renderPass;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer,
                      const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(framebuffer, VkFramebuffer);
   return;
 }
 
@@ -1124,6 +1223,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyRenderPass(VkDevice device, VkRenderPass renderPass,
                     const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(renderPass, VkRenderPass);
   return;
 }
 
@@ -1142,6 +1242,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateCommandPool(
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyCommandPool(VkDevice device, VkCommandPool commandPool,
                      const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(commandPool, VkCommandPool);
   return;
 }
 
@@ -1588,19 +1689,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImage2KHR(
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vkGetDeviceProcAddr(VkDevice device, const char *pName) {
-  CASE(vkGetDeviceQueue);
-  CASE(vkCreateSemaphore);
-  CASE(vkCreateCommandPool);
-  CASE(vkCreateSwapchainKHR);
-  CASE(vkGetSwapchainImagesKHR);
-  CASE(vkCreateImageView);
-  CASE(vkAllocateCommandBuffers);
-  CASE(vkCreateFence);
-  CASE(vkCreateImage);
-  CASE(vkGetImageMemoryRequirements);
-  CASE(vkAllocateMemory);
-  CASE(vkBindImageMemory);
-  CASE(vkCreateRenderPass);
+  ALL_FUNCTIONS;
   return (PFN_vkVoidFunction)allocate_trap(pName);
 }
 
@@ -1613,50 +1702,19 @@ vkEnumerateInstanceVersion(uint32_t *pApiVersion) {
 
 // Documentation:
 // https://vulkan.lunarg.com/doc/view/1.0.13.0/windows/LoaderAndLayerInterface.html
-
-#define INSTANCE_FUNCTIONS                                                     \
-  CASE(vkCreateInstance);                                                      \
-  CASE(vkCreateXcbSurfaceKHR);                                                 \
-  CASE(vkGetPhysicalDeviceXcbPresentationSupportKHR);                          \
-  CASE(vkEnumerateInstanceExtensionProperties);                                \
-  CASE(vkEnumerateInstanceVersion);                                            \
-  CASE(vkEnumeratePhysicalDevices);                                            \
-  CASE(vkGetPhysicalDeviceSurfaceSupportKHR);                                  \
-  CASE(vkGetPhysicalDeviceSurfaceFormatsKHR);                                  \
-  CASE(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);                             \
-  CASE(vkGetPhysicalDeviceSurfacePresentModesKHR);                             \
-  CASE(vkEnumerateDeviceExtensionProperties);                                  \
-  CASE(vkGetPhysicalDeviceFeatures);                                           \
-  CASE(vkGetPhysicalDeviceQueueFamilyProperties);                              \
-  CASE(vkGetPhysicalDeviceProperties);                                         \
-  CASE(vkCreateDevice);                                                        \
-  CASE(vkGetDeviceProcAddr);                                                   \
-  CASE(vkGetPhysicalDeviceMemoryProperties);                                   \
-  CASE(vkGetPhysicalDeviceFormatProperties);                                   \
-  CASE(vkGetSwapchainImagesKHR);                                               \
-  CASE(vkCreateSwapchainKHR);                                                  \
-  CASE(vkCreateImageView);                                                     \
-  CASE(vkCreateFence);                                                         \
-  CASE(vkAllocateCommandBuffers);                                              \
-  CASE(vkCreateImage);                                                         \
-  CASE(vkAllocateMemory);                                                      \
-  CASE(vkGetImageMemoryRequirements);                                          \
-  CASE(vkBindImageMemory);                                                     \
-  CASE(vkCreateRenderPass);                                                    \
-  (void)0
 extern "C" {
 #undef VKAPI_ATTR
 #define VKAPI_ATTR DLL_EXPORT
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName) {
-  INSTANCE_FUNCTIONS;
+  ALL_FUNCTIONS;
   return (PFN_vkVoidFunction)allocate_trap(pName);
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vk_icdGetPhysicalDeviceProcAddr(VkInstance instance, const char *pName) {
-  INSTANCE_FUNCTIONS;
+  ALL_FUNCTIONS;
   return (PFN_vkVoidFunction)allocate_trap(pName);
 }
 #undef CASE

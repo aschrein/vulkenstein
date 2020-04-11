@@ -60,6 +60,10 @@ configure_file(icd_template.json icd.json)
 
 add_library(vk SHARED
 vk.cpp
+spirv_to_llvm.cpp
+llvm_stdlib_1.h
+llvm_stdlib_4.h
+llvm_stdlib_64.h
 )
 target_include_directories(vk
   PRIVATE
@@ -67,6 +71,7 @@ target_include_directories(vk
   3rdparty
   ${CMAKE_SOURCE_DIR}
   ${CMAKE_BINARY_DIR}
+  ${LLVM_INCLUDE_DIRS}
 )
 #ADD_DEPENDENCIES(vk icd.json)
 
@@ -85,5 +90,7 @@ target_include_directories(s2l
   ${LLVM_INCLUDE_DIRS}
 )
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -fmax-errors=1 -fno-exceptions -fno-rtti -fvisibility=hidden")
+target_compile_definitions(vk PRIVATE ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(s2l PRIVATE "-DS2L_EXE " ${LLVM_COMPILE_FLAGS})
 target_link_libraries(s2l ${LLVM_LIBRARY_LIST} pthread ncurses z)
+target_link_libraries(vk ${LLVM_LIBRARY_LIST} pthread ncurses z)
