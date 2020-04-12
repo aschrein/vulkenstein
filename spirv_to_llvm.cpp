@@ -330,7 +330,7 @@ struct Spirv_Builder {
   size_t code_size;
   int ATTR_USED dump_spirv_module() const {
     FILE *file = fopen("shader_dump.spv", "wb");
-    fwrite(code, 1, code_size, file);
+    fwrite(code, 1, code_size * 4, file);
     fclose(file);
     return 0;
   }
@@ -4055,7 +4055,7 @@ struct Spirv_Builder {
 extern "C" DLL_EXPORT void *compile_spirv(uint32_t const *pCode,
                                           size_t code_size) {
   Spirv_Builder builder;
-  builder.parse_meta(pCode, code_size);
+  builder.parse_meta(pCode, code_size /  4);
   builder.build_llvm_module_vectorized();
   return NULL;
 }

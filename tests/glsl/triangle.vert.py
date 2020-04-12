@@ -59,11 +59,29 @@ void test_launch(void *_printf) {
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS/WAVE_WIDTH; i++) {
     info.invocation_id = (uint3){i, 0, 0};
+    info.invocation_id = (uint3){i, 0, 0};
+    info.input = &positions[i * WAVE_WIDTH];
+    info.output = &colors[i * WAVE_WIDTH];
+    info.builtin_output = &gl_PerVertex[i * WAVE_WIDTH];
     spv_main(&info);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
-    //TEST_EQ(g_buf_0[i], g_buf_1[i]);
+    float4 tmp = spv_matrix_times_float_4x4(
+      &ubo.projectionMatrix[0],
+      spv_matrix_times_float_4x4(
+        &ubo.viewMatrix[0],
+        spv_matrix_times_float_4x4(
+          &ubo.modelMatrix[0],
+          (float4){positions[i].x, positions[i].y, positions[i].z, 1.0f}
+        )
+      )
+    );
+    // ubo.projectionMatrix * ubo.viewMatrix * ubo.modelMatrix * vec4(inPos.xyz, 1.0);
+    TEST_EQ(tmp.x, gl_PerVertex[i].x);
+    TEST_EQ(tmp.y, gl_PerVertex[i].y);
+    TEST_EQ(tmp.z, gl_PerVertex[i].z);
+    TEST_EQ(tmp.w, gl_PerVertex[i].w);
   }
   ((printf_t)_printf)("[SUCCESS]\n");
 }

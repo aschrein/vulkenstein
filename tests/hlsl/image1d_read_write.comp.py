@@ -35,8 +35,9 @@ void test_launch(void *_printf) {
   img_0.bpp = 4;
   img_1.data = (uint8_t *)(void*)&g_buf_1;
   img_1.bpp = 4;
-  descriptor_set_0[0] = &img_0;
-  descriptor_set_0[1] = &img_1;
+  void *images[] = {&img_0, &img_1};
+  descriptor_set_0[0] = &images[0];
+  descriptor_set_0[1] = &images[1];
 
   info.descriptor_sets[0] = descriptor_set_0;
 

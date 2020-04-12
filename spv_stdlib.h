@@ -82,11 +82,11 @@ uint3 spv_get_work_group_size(Invocation_Info *state) {
 
 void *get_uniform_const_ptr(Invocation_Info *state, uint32_t set,
                             uint32_t binding) {
-  return &state->descriptor_sets[set][binding];
+  return state->descriptor_sets[set][binding];
 }
 
 void *get_uniform_ptr(Invocation_Info *state, int set, int binding) {
-  return &state->descriptor_sets[set][binding];
+  return state->descriptor_sets[set][binding];
 }
 
 uint32_t spv_image_read_1d_i32(uint64_t handle, uint32_t coord) {
@@ -124,6 +124,15 @@ float spv_dot_f2(float2 a, float2 b) { return a.x * b.x + a.y * b.y; }
 float spv_length_f4(float4 a) { return spv_sqrt(spv_dot_f4(a, a)); }
 float spv_length_f3(float3 a) { return spv_sqrt(spv_dot_f3(a, a)); }
 float spv_length_f2(float2 a) { return spv_sqrt(spv_dot_f2(a, a)); }
+
+float4 spv_matrix_times_float_4x4(float4 *matrix, float4 vector) {
+  float4 out;
+  out.x = spv_dot_f4(matrix[0], vector);
+  out.y = spv_dot_f4(matrix[1], vector);
+  out.z = spv_dot_f4(matrix[2], vector);
+  out.w = spv_dot_f4(matrix[3], vector);
+  return out;
+}
 
 void deinterleave(float4 const *in, float *out, uint32_t subgroup_size) {
   for (int i = 0; i < subgroup_size; i++) {
