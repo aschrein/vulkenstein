@@ -9,7 +9,7 @@ message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 message(STATUS "LLVM_INCLUDE_DIRS: ${LLVM_INCLUDE_DIRS}")
 message(STATUS "LLVM_LIBRARY_DIR: ${LLVM_LIBRARY_DIR}")
 execute_process(
-        COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --libfiles x86 core analysis bitreader bitwriter codegen irreader linker mc passes support target transformutils
+        COMMAND ${LLVM_TOOLS_BINARY_DIR}/llvm-config --libfiles x86 core OrcJIT analysis bitreader bitwriter codegen irreader linker mc passes support target transformutils
         OUTPUT_VARIABLE LLVM_LIBRARY_LIST
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
@@ -92,5 +92,5 @@ target_include_directories(s2l
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -fmax-errors=1 -fno-exceptions -fno-rtti -fvisibility=hidden")
 target_compile_definitions(vk PRIVATE ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(s2l PRIVATE "-DS2L_EXE " ${LLVM_COMPILE_FLAGS})
-target_link_libraries(s2l ${LLVM_LIBRARY_LIST} pthread ncurses z)
-target_link_libraries(vk ${LLVM_LIBRARY_LIST} pthread ncurses z)
+target_link_libraries(s2l ${LLVM_LIBRARY_LIST} pthread ncurses z dl)
+target_link_libraries(vk ${LLVM_LIBRARY_LIST} pthread ncurses z dl)

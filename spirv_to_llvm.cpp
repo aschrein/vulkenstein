@@ -1,19 +1,3 @@
-// #include <llvm/ExecutionEngine/ExecutionEngine.h>
-// #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
-// #include <llvm/ExecutionEngine/Orc/IRCompileLayer.h>
-// #include <llvm/ExecutionEngine/Orc/LambdaResolver.h>
-// #include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
-// #include <llvm/ExecutionEngine/RTDyldMemoryManager.h>
-// #include <llvm/ExecutionEngine/SectionMemoryManager.h>
-// #include <llvm/IR/DerivedTypes.h>
-// #include <llvm/IR/IRBuilder.h>
-// #include <llvm/IR/LegacyPassManager.h>
-// #include <llvm/IR/Mangler.h>
-// #include <llvm/IR/Module.h>
-// #include <llvm/IR/Verifier.h>
-// #include <llvm/Support/DynamicLibrary.h>
-// #include <llvm/Support/TargetSelect.h>
-// #include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include "3rdparty/SPIRV/GLSL.std.450.h"
 #include "3rdparty/SPIRV/spirv.hpp"
 //#include <fstream>
@@ -24,11 +8,8 @@
 #define UTILS_IMPL
 #include "utils.hpp"
 
-// #include "3rdparty/spirv_cross/spirv_parser.hpp"
-// #include "3rdparty/spirv_cross/spirv_cpp.hpp"
-// #include "3rdparty/spirv_cross/spirv_ispc.hpp"
-// #include "3rdparty/spirv_cross/spirv_llvm.hpp"
-
+#include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/Support/TargetSelect.h"
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InlineAsm.h>
@@ -112,6 +93,18 @@ void *read_file(const char *filename, size_t *size,
   fclose(f);
   return data;
 }
+
+struct Jitted_Shader {
+  std::unique_ptr<llvm::orc::LLJIT> lljit;
+  void execute() {
+    //    auto Add1Sym = ExitOnErr(J->lookup("add1"));
+    //  int (*Add1)(int) = (int (*)(int))Add1Sym.getAddress();
+
+    //  int Result = Add1(42);
+    //  outs() << "add1(42) = " << Result << "\n";
+  }
+};
+
 //////////////////////////
 // Meta data structures //
 //////////////////////////
@@ -378,39 +371,38 @@ struct Spirv_Builder {
     UNIMPLEMENTED;
   }
 
-  void build_llvm_module_vectorized() {
-    llvm::LLVMContext *context = new llvm::LLVMContext();
+  llvm::orc::ThreadSafeModule build_llvm_module_vectorized() {
+    std::unique_ptr<llvm::LLVMContext> context(new llvm::LLVMContext());
     auto &c = *context;
     llvm::SMDiagnostic error;
-    llvm::Module *module = NULL;
+    std::unique_ptr<llvm::Module> module = NULL;
     // Load the stdlib for a given subgroup size
     switch (opt_subgroup_size) {
     case 1: {
       auto mbuf = llvm::MemoryBuffer::getMemBuffer(
           llvm::StringRef((char *)llvm_stdlib_1_bc, llvm_stdlib_1_bc_len), "",
           false);
-      module = llvm::parseIR(*mbuf.get(), error, c).release();
+      module = llvm::parseIR(*mbuf.get(), error, c);
       break;
     }
     case 4: {
       auto mbuf = llvm::MemoryBuffer::getMemBuffer(
           llvm::StringRef((char *)llvm_stdlib_4_bc, llvm_stdlib_4_bc_len), "",
           false);
-      module = llvm::parseIR(*mbuf.get(), error, c).release();
+      module = llvm::parseIR(*mbuf.get(), error, c);
       break;
     }
     case 64: {
       auto mbuf = llvm::MemoryBuffer::getMemBuffer(
           llvm::StringRef((char *)llvm_stdlib_64_bc, llvm_stdlib_64_bc_len), "",
           false);
-      module = llvm::parseIR(*mbuf.get(), error, c).release();
+      module = llvm::parseIR(*mbuf.get(), error, c);
       break;
     }
     default:
       UNIMPLEMENTED;
     };
     ASSERT_ALWAYS(module);
-    defer(delete module; delete context;);
 
     llvm::install_fatal_error_handler(&llvm_fatal);
     auto llvm_get_constant_i32 = [&c](uint32_t a) {
@@ -622,7 +614,7 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(fun_type != NULL && "Function type must be defined");
         llvm_global_values[fun.id] =
             llvm::Function::Create(fun_type, llvm::GlobalValue::ExternalLinkage,
-                                   get_spv_name(fun.id), module);
+                                   get_spv_name(fun.id), module.get());
         break;
       }
       case DeclTy::RuntimeArrayTy:
@@ -2914,7 +2906,7 @@ struct Spirv_Builder {
       llvm::Function *get_private_size = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
           llvm::Function::LinkageTypes::ExternalLinkage, "get_private_size",
-          module);
+          module.get());
       llvm::BasicBlock *bb =
           llvm::BasicBlock::Create(c, "entry", get_private_size);
       llvm::ReturnInst::Create(
@@ -2937,14 +2929,11 @@ struct Spirv_Builder {
     }
     std::string str;
     llvm::raw_string_ostream os(str);
-    str.clear();
-    module->print(os, NULL);
-    os.flush();
-    fprintf(stdout, "%s", str.c_str());
     if (verifyModule(*module, &os)) {
       fprintf(stderr, "%s", os.str().c_str());
-      exit(1);
+      abort();
     } else {
+      return llvm::orc::ThreadSafeModule(std::move(module), std::move(context));
       //      fprintf(stdout, "Module verified!\n");
     }
   }
@@ -4055,12 +4044,27 @@ struct Spirv_Builder {
 extern "C" DLL_EXPORT void *compile_spirv(uint32_t const *pCode,
                                           size_t code_size) {
   Spirv_Builder builder;
-  builder.parse_meta(pCode, code_size /  4);
-  builder.build_llvm_module_vectorized();
-  return NULL;
+  builder.parse_meta(pCode, code_size / 4);
+  llvm::orc::ThreadSafeModule bundle = builder.build_llvm_module_vectorized();
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+
+  llvm::ExitOnError ExitOnErr;
+
+  // Create an LLJIT instance.
+  std::unique_ptr<llvm::orc::LLJIT> J =
+      ExitOnErr(llvm::orc::LLJITBuilder().create());
+  ExitOnErr(J->addIRModule(std::move(bundle)));
+  Jitted_Shader *jitted_shader = new Jitted_Shader();
+  jitted_shader->lljit = std::move(J);
+  return (void*)jitted_shader;
 }
 
-extern "C" DLL_EXPORT void release_spirv(void *ptr) {}
+extern "C" DLL_EXPORT void release_spirv(void *ptr) {
+  Jitted_Shader *jitted_shader  = (Jitted_Shader*)ptr;
+  delete jitted_shader;
+}
+
 #ifdef S2L_EXE
 int main(int argc, char **argv) {
   ASSERT_ALWAYS(argc == 3);
@@ -4076,6 +4080,12 @@ int main(int argc, char **argv) {
   Spirv_Builder builder;
   builder.opt_subgroup_size = subgroup_size;
   builder.parse_meta(pCode, codeSize);
-  builder.build_llvm_module_vectorized();
+  llvm::orc::ThreadSafeModule bundle = builder.build_llvm_module_vectorized();
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  str.clear();
+  bundle.getModuleUnlocked()->print(os, NULL);
+  os.flush();
+  fprintf(stdout, "%s", str.c_str());
 }
 #endif // S2L_EXE

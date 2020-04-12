@@ -85,11 +85,52 @@
   CASE(vkDestroyDescriptorSetLayout);                                          \
   CASE(vkCreatePipelineLayout);                                                \
   CASE(vkDestroyPipelineLayout);                                               \
+  CASE(vkCreateGraphicsPipelines);                                             \
+  CASE(vkDestroyPipeline);                                                     \
+  CASE(vkCreateDescriptorPool);                                                \
+  CASE(vkDestroyDescriptorPool);                                               \
+  CASE(vkAllocateDescriptorSets);                                              \
+  CASE(vkFreeDescriptorSets);                                                  \
+  CASE(vkResetDescriptorPool);                                                 \
+  CASE(vkUpdateDescriptorSets);                                                \
+  CASE(vkCmdBeginRenderPass);                                                  \
+  CASE(vkCmdEndRenderPass);                                                    \
+  CASE(vkCmdSetViewport);                                                      \
+  CASE(vkCmdSetScissor);                                                       \
+  CASE(vkCmdBindDescriptorSets);                                               \
+  CASE(vkCmdBindPipeline);                                                     \
+  CASE(vkCmdBindVertexBuffers);                                                \
+  CASE(vkCmdBindIndexBuffer);                                                  \
+  CASE(vkCmdDrawIndexed);                                                      \
+  CASE(vkDestroyImageView);                                                    \
+  CASE(vkDestroySwapchainKHR);                                                 \
+  CASE(vkDestroyImage);                                                        \
+  CASE(vkAcquireNextImageKHR);                                                 \
+  CASE(vkQueuePresentKHR);                                                     \
   (void)0
 
 // Data structures to keep track of the objects
 // TODO(aschrein): Nuke this from the orbit
 namespace vki {
+struct VkDevice_Impl {
+  uint32_t id;
+  void release() { memset(this, 0, sizeof(*this)); }
+};
+struct VkSurfaceKHR_Impl {
+  uint32_t id;
+  xcb_connection_t *connection;
+  xcb_window_t window;
+  void release() { memset(this, 0, sizeof(*this)); }
+};
+struct VkPhysicalDevice_Impl {
+  uint32_t id;
+  void release() { memset(this, 0, sizeof(*this)); }
+};
+
+struct VkInstance_Impl {
+  uint32_t id;
+  void release() { memset(this, 0, sizeof(*this)); }
+};
 struct VkDeviceMemory_Impl {
   uint32_t id;
   uint8_t *ptr;
@@ -192,6 +233,8 @@ template <typename T, int N = MAX_OBJECTS> struct Pool {
   T *alloc() {
     find_next_free_slot();
     T *out = &pool[next_free_slot];
+    ASSERT_ALWAYS(out->id == 0);
+    memset(out, 0, sizeof(T));
     out->id = next_free_slot + 1;
     return out;
   }
@@ -199,11 +242,14 @@ template <typename T, int N = MAX_OBJECTS> struct Pool {
 
 struct VkSwapChain_Impl {
   uint32_t id;
+  uint32_t cur_image = 0;
   VkImage_Impl images[3];
   uint32_t image_count;
   uint32_t current_image;
   uint32_t width, height;
   VkFormat format;
+  VkSurfaceKHR_Impl *surface;
+  void present() {}
   void release() {
     for (auto &image : images) {
       if (image.mem != 0) {
@@ -224,7 +270,106 @@ struct VkRenderPass_Impl {
   VkSubpassDependency pDependencies[10];
   void release() { memset(this, 0, sizeof(*this)); }
 };
-
+struct VkPipeline_Impl {
+  uint32_t id;
+  bool is_graphics;
+  // Compute state
+  VkShaderModule_Impl *cs;
+  // Graphics state
+  VkShaderModule_Impl *vs;
+  VkShaderModule_Impl *ps;
+  struct {
+    uint32_t vertexBindingDescriptionCount;
+    VkVertexInputBindingDescription pVertexBindingDescriptions[0x10];
+    uint32_t vertexAttributeDescriptionCount;
+    VkVertexInputAttributeDescription pVertexAttributeDescriptions[0x10];
+  } IA_bindings;
+  VkPrimitiveTopology IA_topology;
+  struct {
+    uint32_t viewportCount;
+    VkViewport pViewports[0x10];
+    uint32_t scissorCount;
+    VkRect2D pScissors[0x10];
+  } RS_viewports;
+  struct {
+    VkBool32 depthClampEnable;
+    VkBool32 rasterizerDiscardEnable;
+    VkPolygonMode polygonMode;
+    VkCullModeFlags cullMode;
+    VkFrontFace frontFace;
+    VkBool32 depthBiasEnable;
+    float depthBiasConstantFactor;
+    float depthBiasClamp;
+    float depthBiasSlopeFactor;
+    float lineWidth;
+  } RS_state;
+  struct {
+    VkBool32 depthTestEnable;
+    VkBool32 depthWriteEnable;
+    VkCompareOp depthCompareOp;
+    VkBool32 depthBoundsTestEnable;
+    VkBool32 stencilTestEnable;
+    VkStencilOpState front;
+    VkStencilOpState back;
+    float minDepthBounds;
+    float maxDepthBounds;
+  } DS_state;
+  struct {
+    VkBool32 logicOpEnable;
+    VkLogicOp logicOp;
+    uint32_t attachmentCount;
+    VkPipelineColorBlendAttachmentState pAttachments[0x10];
+    float blendConstants[4];
+  } OM_blend_state;
+  struct {
+    VkSampleCountFlagBits rasterizationSamples;
+    VkBool32 sampleShadingEnable;
+    float minSampleShading;
+    VkSampleMask pSampleMask[0x10];
+    VkBool32 alphaToCoverageEnable;
+    VkBool32 alphaToOneEnable;
+  } MS_state;
+  VkPipelineLayout_Impl *layout;
+  VkRenderPass_Impl *renderPass;
+  uint32_t subpass;
+  void release() { memset(this, 0, sizeof(*this)); }
+};
+struct VkDescriptorPool_Impl {
+  uint32_t id;
+  uint32_t maxSets;
+  uint32_t poolSizeCount;
+  VkDescriptorPoolSize *pPoolSizes;
+  void release() {
+    if (pPoolSizes != NULL) {
+      free(pPoolSizes);
+    }
+    memset(this, 0, sizeof(*this));
+  }
+};
+struct VkSampler_Impl {
+  uint32_t id;
+  void release() { memset(this, 0, sizeof(*this)); }
+};
+struct VkDescriptorSet_Impl {
+  uint32_t id;
+  VkDescriptorPool_Impl *pool;
+  VkDescriptorSetLayout_Impl *layout;
+  struct Slot {
+    VkDescriptorType type;
+    VkImageView_Impl *image_view;
+    VkBufferView_Impl *buf_view;
+    VkSampler_Impl *sampler;
+    VkBuffer_Impl *buffer;
+    VkDeviceSize offset;
+    VkDeviceSize range;
+  };
+  Slot *slots;
+  void release() {
+    if (slots)
+      free(slots);
+    memset(this, 0, sizeof(*this));
+  }
+};
 struct VkCommandBuffer_Impl {
   uint32_t id;
   uint8_t *data;
@@ -240,9 +385,14 @@ struct VkCommandBuffer_Impl {
     data_cursor += 1;
     ASSERT_ALWAYS(data_cursor < data_size);
   }
+  void write(void const *pData, size_t size) {
+    memcpy(data + data_cursor, pData, size);
+    data_cursor += size;
+    ASSERT_ALWAYS(data_cursor < data_size);
+  }
   void init() {
     // 1 << 20 == 1 MB of data
-    data_size = 1 << 20;
+    data_size = 16 * (1 << 20);
     data = (uint8_t *)malloc(data_size);
     data_cursor = 0;
   }
@@ -258,6 +408,10 @@ struct VkCommandBuffer_Impl {
 #define OBJ_POOL(type) Pool<type##_Impl> type##_pool = {};
 
 OBJ_POOL(VkBuffer)
+OBJ_POOL(VkSampler)
+OBJ_POOL(VkDescriptorSet)
+OBJ_POOL(VkDescriptorPool)
+OBJ_POOL(VkPipeline)
 OBJ_POOL(VkCommandBuffer)
 OBJ_POOL(VkBufferView)
 OBJ_POOL(VkRenderPass)
@@ -267,6 +421,11 @@ OBJ_POOL(VkDeviceMemory)
 OBJ_POOL(VkShaderModule)
 OBJ_POOL(VkDescriptorSetLayout)
 OBJ_POOL(VkPipelineLayout)
+OBJ_POOL(VkDevice)
+OBJ_POOL(VkSurfaceKHR)
+OBJ_POOL(VkPhysicalDevice)
+OBJ_POOL(VkInstance)
+OBJ_POOL(VkSwapChain)
 
 #define DECL_IMPL(type)                                                        \
   struct type##_Impl {                                                         \
@@ -284,10 +443,6 @@ OBJ_POOL_DUMMY(VkCommandPool)
 OBJ_POOL_DUMMY(VkFence)
 OBJ_POOL_DUMMY(VkEvent)
 OBJ_POOL_DUMMY(VkPipelineCache)
-DECL_IMPL(VkInstance)
-DECL_IMPL(VkPhysicalDevice)
-DECL_IMPL(VkDevice)
-DECL_IMPL(VkSurfaceKHR)
 
 struct VkFramebuffer_Impl {
   uint32_t id;
@@ -306,27 +461,73 @@ OBJ_POOL(VkFramebuffer)
 #define ALLOC_VKOBJ_T(type) vki::type##_pool.alloc()
 #define GET_VKOBJ(type, id) (&vki::type##_pool.pool[id])
 #define RELEASE_VKOBJ(obj, type)                                               \
-  NOTNULL(obj);                                                                \
-  ((vki::type##_Impl *)obj)->release()
+  do {                                                                         \
+    NOTNULL(obj);                                                              \
+    ((vki::type##_Impl *)obj)->release();                                      \
+  } while (0)
 
-static VkInstance_Impl g_instance;
-static VkPhysicalDevice_Impl g_phys_device;
-static VkDevice_Impl g_device;
-static VkSwapChain_Impl g_swapchain;
-static VkSurfaceKHR_Impl g_surface;
-static xcb_connection_t *g_connection;
-static xcb_window_t g_window;
+// static VkInstance_Impl g_instance;
+// static VkPhysicalDevice_Impl g_phys_device;
+// static VkDevice_Impl g_device;
+// static VkSwapChain_Impl g_swapchain;
+// static VkSurfaceKHR_Impl g_surface;
+// static xcb_connection_t *g_connection;
+// static xcb_window_t g_window;
 void init() {
-  MEMZERO(g_instance);
-  MEMZERO(g_phys_device);
-  MEMZERO(g_device);
-  MEMZERO(g_swapchain);
-  MEMZERO(g_surface);
-  MEMZERO(g_connection);
-  MEMZERO(g_window);
+  //  MEMZERO(g_instance);
+  //  MEMZERO(g_phys_device);
+  //  MEMZERO(g_device);
+  //  MEMZERO(g_swapchain);
+  //  MEMZERO(g_surface);
+  //  MEMZERO(g_connection);
+  //  MEMZERO(g_window);
 }
 namespace cmd {
-enum class Cmd_t : uint8_t { CopyBuffer = 1, CopyImage };
+enum class Cmd_t : uint8_t {
+  CopyBuffer = 1,
+  CopyImage,
+  RenderPassBegin,
+  RenderPassEnd,
+  SetViewport,
+  SetScissor,
+  SetLineWidth,
+  SetBlendConstants,
+  SetDepthBias,
+  SetDepthBounds,
+  SetStencilCompareMask,
+  SetStencilWriteMask,
+  SetStencilReference,
+  BindDescriptorSets,
+  BindIndexBuffer,
+  BindVertexBuffers,
+  Draw,
+  DrawIndexed,
+  DrawIndirect,
+  DrawIndexedIndirect,
+  Dispatch,
+  DispatchIndirect,
+  CopyBufferToImage,
+  CopyImageToBuffer,
+  UpdateBuffer,
+  FillBuffer,
+  ClearColorImage,
+  ClearDepthStencilImage,
+  ClearAttachments,
+  ResolveImage,
+  SetEvent,
+  ResetEvent,
+  WaitEvents,
+  PipelineBarrier,
+  BeginQuery,
+  EndQuery,
+  ResetQueryPool,
+  WriteTimestamp,
+  CopyQueryPoolResults,
+  PushConstants,
+  NextSubpass,
+  ExecuteCommands,
+  BindPipeline
+};
 struct CopyBuffer {
   VkBuffer_Impl *src;
   VkBuffer_Impl *dst;
@@ -338,6 +539,139 @@ struct CopyImage {
   VkImage_Impl *dst;
   uint32_t regionCount;
   VkImageCopy pRegions[0x10];
+};
+struct RenderPassBegin {
+  VkRenderPass_Impl *renderPass;
+  VkFramebuffer_Impl *framebuffer;
+  VkRect2D renderArea;
+  uint32_t clearValueCount;
+  VkClearValue pClearValues[0x10];
+};
+struct SetViewport {
+  uint32_t firstViewport;
+  uint32_t viewportCount;
+  VkViewport pViewports[0x10];
+};
+struct BindPipeline {
+  VkPipelineBindPoint pipelineBindPoint;
+  VkPipeline_Impl *pipeline;
+};
+struct SetScissor {
+  uint32_t firstScissor;
+  uint32_t scissorCount;
+  VkRect2D pScissors[0x10];
+};
+struct SetLineWidth {
+  float lineWidth;
+};
+struct SetDepthBias {
+  float depthBiasConstantFactor;
+  float depthBiasClamp;
+  float depthBiasSlopeFactor;
+};
+struct SetBlendConstants {
+  float blendConstants[4];
+};
+struct SetDepthBounds {
+  float minDepthBounds;
+  float maxDepthBounds;
+};
+struct SetStencilCompareMask {
+  VkStencilFaceFlags faceMask;
+  uint32_t compareMask;
+};
+struct SetStencilWriteMask {
+  VkStencilFaceFlags faceMask;
+  uint32_t writeMask;
+};
+struct SetStencilReference {
+  VkStencilFaceFlags faceMask;
+  uint32_t reference;
+};
+struct BindDescriptorSets {
+  VkPipelineBindPoint pipelineBindPoint;
+  VkPipelineLayout_Impl *layout;
+  uint32_t firstSet;
+  uint32_t descriptorSetCount;
+  VkDescriptorSet_Impl *pDescriptorSets[0x10];
+  uint32_t dynamicOffsetCount;
+  uint32_t pDynamicOffsets[0x10];
+};
+struct BindIndexBuffer {
+  VkBuffer_Impl *buffer;
+  VkDeviceSize offset;
+  VkIndexType indexType;
+};
+struct BindVertexBuffers {
+  uint32_t firstBinding;
+  uint32_t bindingCount;
+  VkBuffer_Impl *pBuffers[0x40];
+  VkDeviceSize pOffsets[0x40];
+};
+struct Draw {
+  uint32_t vertexCount;
+  uint32_t instanceCount;
+  uint32_t firstVertex;
+  uint32_t firstInstance;
+};
+struct DrawIndexed {
+  uint32_t indexCount;
+  uint32_t instanceCount;
+  uint32_t firstIndex;
+  int32_t vertexOffset;
+  uint32_t firstInstance;
+};
+struct DrawIndirect {
+  VkBuffer_Impl *buffer;
+  VkDeviceSize offset;
+  uint32_t drawCount;
+  uint32_t stride;
+};
+struct DrawIndexedIndirect {
+  VkBuffer_Impl *buffer;
+  VkDeviceSize offset;
+  uint32_t drawCount;
+  uint32_t stride;
+};
+struct Dispatch {
+  uint32_t groupCountX;
+  uint32_t groupCountY;
+  uint32_t groupCountZ;
+};
+struct DispatchIndirect {
+  VkBuffer_Impl *buffer;
+  VkDeviceSize offset;
+};
+struct CopyBufferToImage {
+  VkBuffer_Impl *srcBuffer;
+  VkImage_Impl *dstImage;
+  uint32_t regionCount;
+  VkBufferImageCopy pRegions[0x10];
+};
+struct CopyImageToBuffer {
+  VkBuffer_Impl *dstBuffer;
+  VkImage_Impl *srcImage;
+  uint32_t regionCount;
+  VkBufferImageCopy pRegions[0x10];
+};
+struct UpdateBuffer {
+  VkBuffer_Impl *dstBuffer;
+  VkDeviceSize dstOffset;
+  VkDeviceSize dataSize;
+  // uint8_t pData[dataSize] follows the cmd in the command buffer
+};
+struct ClearAttachments {
+  uint32_t attachmentCount;
+  VkClearAttachment pAttachments[0x10];
+  uint32_t rectCount;
+  VkClearRect pRects[0x10];
+};
+struct PushConstants {
+  VkPipelineLayout_Impl *layout;
+  VkShaderStageFlags stageFlags;
+  uint32_t offset;
+  uint32_t size;
+  // uint8_t pData[size] follows the cmd in the command buffer
 };
 void execute_commands(uint8_t const *pCode, size_t code_size) {}
 } // namespace cmd
@@ -631,9 +965,10 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateXcbSurfaceKHR(
     VkInstance instance, const VkXcbSurfaceCreateInfoKHR *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface) {
   NOTNULL(pCreateInfo);
-  vki::g_connection = pCreateInfo->connection;
-  vki::g_window = pCreateInfo->window;
-  pSurface = (VkSurfaceKHR *)(void *)&vki::g_surface;
+  vki::VkSurfaceKHR_Impl *impl = ALLOC_VKOBJ_T(VkSurfaceKHR);
+  impl->connection = pCreateInfo->connection;
+  impl->window = pCreateInfo->window;
+  *pSurface = (VkSurfaceKHR)impl;
   return VK_SUCCESS;
 }
 
@@ -714,14 +1049,14 @@ vkEnumeratePhysicalDevices(VkInstance instance, uint32_t *pPhysicalDeviceCount,
   if (*pPhysicalDeviceCount < 1)
     return VK_INCOMPLETE;
   *pPhysicalDeviceCount = 1;
-  *pPhysicalDevices = (VkPhysicalDevice)&vki::g_phys_device;
+  *pPhysicalDevices = ALLOC_VKOBJ(VkPhysicalDevice);
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroySurfaceKHR(VkInstance instance, VkSurfaceKHR surface,
                     const VkAllocationCallbacks *pAllocator) {
-  ASSERT_ALWAYS(false);
+  RELEASE_VKOBJ(surface, VkSurfaceKHR);
 }
 
 // BEGIN DEVICE FUNCTIONS
@@ -729,12 +1064,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(
     const VkInstanceCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkInstance *pInstance) {
   NOTNULL(pInstance);
-  *pInstance = (VkInstance)(void *)&vki::g_instance;
+  *pInstance = ALLOC_VKOBJ(VkInstance);
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL vkDestroyInstance(
     VkInstance instance, const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(instance, VkInstance);
   return;
 }
 
@@ -847,13 +1183,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(
     VkPhysicalDevice physicalDevice, const VkDeviceCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkDevice *pDevice) {
   NOTNULL(pDevice);
-  *pDevice = (VkDevice)&vki::g_device;
+  *pDevice = ALLOC_VKOBJ(VkDevice);
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyDevice(VkDevice device, const VkAllocationCallbacks *pAllocator) {
-  return;
+  RELEASE_VKOBJ(device, VkDevice);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceLayerProperties(
@@ -1230,6 +1566,91 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(
     VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
     const VkGraphicsPipelineCreateInfo *pCreateInfos,
     const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines) {
+
+  ito(createInfoCount) {
+    vki::VkPipeline_Impl *impl = ALLOC_VKOBJ_T(VkPipeline);
+    VkGraphicsPipelineCreateInfo info = pCreateInfos[i];
+    jto(info.stageCount) {
+      switch (info.pStages[j].stage) {
+      case VkShaderStageFlagBits::VK_SHADER_STAGE_VERTEX_BIT: {
+        impl->vs = (vki::VkShaderModule_Impl *)info.pStages[j].module;
+        ASSERT_ALWAYS(strcmp(info.pStages[j].pName, "main") == 0);
+        break;
+      }
+      case VkShaderStageFlagBits::VK_SHADER_STAGE_FRAGMENT_BIT: {
+        impl->ps = (vki::VkShaderModule_Impl *)info.pStages[j].module;
+        ASSERT_ALWAYS(strcmp(info.pStages[j].pName, "main") == 0);
+        break;
+      }
+      default:
+        ASSERT_ALWAYS(false);
+      }
+    }
+    impl->IA_bindings.vertexBindingDescriptionCount =
+        info.pVertexInputState->vertexBindingDescriptionCount;
+    impl->IA_bindings.vertexAttributeDescriptionCount =
+        info.pVertexInputState->vertexAttributeDescriptionCount;
+    jto(impl->IA_bindings.vertexBindingDescriptionCount)
+        impl->IA_bindings.pVertexBindingDescriptions[j] =
+        info.pVertexInputState->pVertexBindingDescriptions[j];
+    jto(impl->IA_bindings.vertexAttributeDescriptionCount)
+        impl->IA_bindings.pVertexAttributeDescriptions[j] =
+        info.pVertexInputState->pVertexAttributeDescriptions[j];
+    impl->IA_topology = info.pInputAssemblyState->topology;
+    impl->RS_viewports.viewportCount = info.pViewportState->viewportCount;
+    impl->RS_viewports.scissorCount = info.pViewportState->scissorCount;
+    if (info.pViewportState->pViewports != NULL) {
+      jto(impl->RS_viewports.viewportCount) impl->RS_viewports.pViewports[j] =
+          info.pViewportState->pViewports[j];
+    }
+    if (info.pViewportState->pScissors != NULL) {
+      jto(impl->RS_viewports.scissorCount) impl->RS_viewports.pScissors[j] =
+          info.pViewportState->pScissors[j];
+    }
+    impl->RS_state.depthClampEnable =
+        info.pRasterizationState->depthClampEnable;
+    impl->RS_state.rasterizerDiscardEnable =
+        info.pRasterizationState->rasterizerDiscardEnable;
+    impl->RS_state.polygonMode = info.pRasterizationState->polygonMode;
+    impl->RS_state.cullMode = info.pRasterizationState->cullMode;
+    impl->RS_state.frontFace = info.pRasterizationState->frontFace;
+    impl->RS_state.depthBiasEnable = info.pRasterizationState->depthBiasEnable;
+    impl->RS_state.depthBiasConstantFactor =
+        info.pRasterizationState->depthBiasConstantFactor;
+    impl->RS_state.depthBiasClamp = info.pRasterizationState->depthBiasClamp;
+    impl->RS_state.depthBiasSlopeFactor =
+        info.pRasterizationState->depthBiasSlopeFactor;
+    impl->RS_state.lineWidth = info.pRasterizationState->lineWidth;
+
+    impl->DS_state.depthTestEnable = info.pDepthStencilState->depthTestEnable;
+    impl->DS_state.depthWriteEnable = info.pDepthStencilState->depthWriteEnable;
+    impl->DS_state.depthCompareOp = info.pDepthStencilState->depthCompareOp;
+    impl->DS_state.depthBoundsTestEnable =
+        info.pDepthStencilState->depthBoundsTestEnable;
+    impl->DS_state.stencilTestEnable =
+        info.pDepthStencilState->stencilTestEnable;
+    impl->DS_state.front = info.pDepthStencilState->front;
+    impl->DS_state.back = info.pDepthStencilState->back;
+    impl->DS_state.minDepthBounds = info.pDepthStencilState->minDepthBounds;
+    impl->DS_state.maxDepthBounds = info.pDepthStencilState->maxDepthBounds;
+
+    impl->OM_blend_state.logicOp = info.pColorBlendState->logicOp;
+    impl->OM_blend_state.logicOpEnable = info.pColorBlendState->logicOpEnable;
+    impl->OM_blend_state.attachmentCount =
+        info.pColorBlendState->attachmentCount;
+    jto(impl->OM_blend_state.attachmentCount)
+        impl->OM_blend_state.pAttachments[j] =
+        info.pColorBlendState->pAttachments[j];
+    jto(4) impl->OM_blend_state.blendConstants[j] =
+        info.pColorBlendState->blendConstants[j];
+    impl->layout = (vki::VkPipelineLayout_Impl *)info.layout;
+    impl->renderPass = (vki::VkRenderPass_Impl *)info.renderPass;
+    impl->subpass = info.subpass;
+    ASSERT_ALWAYS(impl->subpass == 0);
+    ASSERT_ALWAYS(info.pMultisampleState->rasterizationSamples ==
+                  VkSampleCountFlagBits::VK_SAMPLE_COUNT_1_BIT);
+    pPipelines[i] = (VkPipeline)impl;
+  }
   return VK_SUCCESS;
 }
 
@@ -1237,12 +1658,14 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateComputePipelines(
     VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
     const VkComputePipelineCreateInfo *pCreateInfos,
     const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines) {
+
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyPipeline(VkDevice device, VkPipeline pipeline,
                   const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(pipeline, VkPipeline);
   return;
 }
 
@@ -1309,13 +1732,20 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateDescriptorPool(
     VkDevice device, const VkDescriptorPoolCreateInfo *pCreateInfo,
     const VkAllocationCallbacks *pAllocator,
     VkDescriptorPool *pDescriptorPool) {
+  vki::VkDescriptorPool_Impl *impl = ALLOC_VKOBJ_T(VkDescriptorPool);
+  impl->maxSets = pCreateInfo->maxSets;
+  impl->poolSizeCount = pCreateInfo->poolSizeCount;
+  impl->pPoolSizes = (VkDescriptorPoolSize *)malloc(
+      sizeof(VkDescriptorPoolSize) * impl->poolSizeCount);
+  ito(impl->poolSizeCount) impl->pPoolSizes[i] = pCreateInfo->pPoolSizes[i];
+  *pDescriptorPool = (VkDescriptorPool)impl;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool,
                         const VkAllocationCallbacks *pAllocator) {
-  return;
+  RELEASE_VKOBJ(descriptorPool, VkDescriptorPool);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
@@ -1327,12 +1757,24 @@ vkResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool,
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateDescriptorSets(
     VkDevice device, const VkDescriptorSetAllocateInfo *pAllocateInfo,
     VkDescriptorSet *pDescriptorSets) {
+  ito(pAllocateInfo->descriptorSetCount) {
+    vki::VkDescriptorSet_Impl *impl = ALLOC_VKOBJ_T(VkDescriptorSet);
+    impl->pool = (vki::VkDescriptorPool_Impl *)pAllocateInfo->descriptorPool;
+    impl->layout =
+        (vki::VkDescriptorSetLayout_Impl *)pAllocateInfo->pSetLayouts[i];
+    impl->slots = (vki::VkDescriptorSet_Impl::Slot *)malloc(
+        sizeof(vki::VkDescriptorSet_Impl::Slot) * impl->layout->bindingCount);
+    pDescriptorSets[i] = (VkDescriptorSet)impl;
+  }
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkFreeDescriptorSets(
     VkDevice device, VkDescriptorPool descriptorPool,
     uint32_t descriptorSetCount, const VkDescriptorSet *pDescriptorSets) {
+  ito(descriptorSetCount) {
+    RELEASE_VKOBJ((VkDescriptorSet)pDescriptorSets[i], VkDescriptorSet);
+  }
   return VK_SUCCESS;
 }
 
@@ -1340,7 +1782,30 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(
     VkDevice device, uint32_t descriptorWriteCount,
     const VkWriteDescriptorSet *pDescriptorWrites, uint32_t descriptorCopyCount,
     const VkCopyDescriptorSet *pDescriptorCopies) {
-  return;
+  ito(descriptorWriteCount) {
+    VkWriteDescriptorSet write = pDescriptorWrites[i];
+    vki::VkDescriptorSet_Impl *impl = (vki::VkDescriptorSet_Impl *)write.dstSet;
+    ASSERT_ALWAYS(write.descriptorCount == 1);
+    ASSERT_ALWAYS(write.dstArrayElement == 0);
+    impl->slots[write.dstBinding].type = write.descriptorType;
+    if (write.pImageInfo != NULL) {
+      impl->slots[write.dstBinding].sampler =
+          (vki::VkSampler_Impl *)write.pImageInfo->sampler;
+      impl->slots[write.dstBinding].image_view =
+          (vki::VkImageView_Impl *)write.pImageInfo->imageView;
+    }
+    if (write.pBufferInfo != NULL) {
+      impl->slots[write.dstBinding].buffer =
+          (vki::VkBuffer_Impl *)write.pBufferInfo->buffer;
+      impl->slots[write.dstBinding].range = write.pBufferInfo->range;
+      impl->slots[write.dstBinding].offset = write.pBufferInfo->offset;
+    }
+    if (write.pTexelBufferView != NULL) {
+      impl->slots[write.dstBinding].buf_view =
+          (vki::VkBufferView_Impl *)write.pTexelBufferView;
+    }
+  }
+  ASSERT_ALWAYS(pDescriptorCopies == NULL);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(
@@ -1356,6 +1821,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(
   ito(impl->attachmentCount) impl->pAttachments[i] =
       (vki::VkImageView_Impl *)pCreateInfo->pAttachments[i];
   impl->renderPass = (vki::VkRenderPass_Impl *)pCreateInfo->renderPass;
+  *pFramebuffer = (VkFramebuffer)impl;
   return VK_SUCCESS;
 }
 
@@ -1420,10 +1886,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandPool(
 VKAPI_ATTR VkResult VKAPI_CALL vkAllocateCommandBuffers(
     VkDevice device, const VkCommandBufferAllocateInfo *pAllocateInfo,
     VkCommandBuffer *pCommandBuffers) {
-  *pCommandBuffers = (VkCommandBuffer)(void *)ALLOC_VKOBJ_T(VkCommandBuffer);
-  vki::VkCommandBuffer_Impl *impl =
-      (vki::VkCommandBuffer_Impl *)*pCommandBuffers;
-  impl->init();
+  ito(pAllocateInfo->commandBufferCount) {
+    vki::VkCommandBuffer_Impl *impl = ALLOC_VKOBJ_T(VkCommandBuffer);
+    impl->init();
+    pCommandBuffers[i] = (VkCommandBuffer)impl;
+  }
   return VK_SUCCESS;
 }
 
@@ -1461,62 +1928,106 @@ VKAPI_ATTR VkResult VKAPI_CALL vkResetCommandBuffer(
 VKAPI_ATTR void VKAPI_CALL
 vkCmdBindPipeline(VkCommandBuffer commandBuffer,
                   VkPipelineBindPoint pipelineBindPoint, VkPipeline pipeline) {
-  return;
+
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::BindPipeline cmd;
+  cmd.pipeline = (vki::VkPipeline_Impl *)pipeline;
+  cmd.pipelineBindPoint = pipelineBindPoint;
+  WRITE_CMD(impl, cmd, BindPipeline);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetViewport(VkCommandBuffer commandBuffer,
                                             uint32_t firstViewport,
                                             uint32_t viewportCount,
                                             const VkViewport *pViewports) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetViewport cmd;
+  cmd.firstViewport = firstViewport;
+  cmd.viewportCount = viewportCount;
+  ASSERT_ALWAYS(viewportCount < 0x10);
+  ito(viewportCount) cmd.pViewports[i] = pViewports[i];
+  WRITE_CMD(impl, cmd, SetViewport);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetScissor(VkCommandBuffer commandBuffer,
                                            uint32_t firstScissor,
                                            uint32_t scissorCount,
                                            const VkRect2D *pScissors) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetScissor cmd;
+  cmd.firstScissor = firstScissor;
+  cmd.scissorCount = scissorCount;
+  ASSERT_ALWAYS(scissorCount < 0x10);
+  ito(scissorCount) cmd.pScissors[i] = pScissors[i];
+  WRITE_CMD(impl, cmd, SetScissor);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetLineWidth(VkCommandBuffer commandBuffer,
                                              float lineWidth) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetLineWidth cmd;
+  cmd.lineWidth = lineWidth;
+  WRITE_CMD(impl, cmd, SetLineWidth);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBias(VkCommandBuffer commandBuffer,
                                              float depthBiasConstantFactor,
                                              float depthBiasClamp,
                                              float depthBiasSlopeFactor) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetDepthBias cmd;
+  cmd.depthBiasConstantFactor = depthBiasConstantFactor;
+  cmd.depthBiasClamp = depthBiasClamp;
+  cmd.depthBiasSlopeFactor = depthBiasSlopeFactor;
+  WRITE_CMD(impl, cmd, SetDepthBias);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetBlendConstants(
     VkCommandBuffer commandBuffer, const float blendConstants[4]) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetBlendConstants cmd;
+  ito(4) cmd.blendConstants[i] = blendConstants[i];
+  WRITE_CMD(impl, cmd, SetBlendConstants);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdSetDepthBounds(VkCommandBuffer commandBuffer,
                                                float minDepthBounds,
                                                float maxDepthBounds) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetDepthBounds cmd;
+  cmd.minDepthBounds = minDepthBounds;
+  cmd.maxDepthBounds = maxDepthBounds;
+  WRITE_CMD(impl, cmd, SetDepthBounds);
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkCmdSetStencilCompareMask(VkCommandBuffer commandBuffer,
                            VkStencilFaceFlags faceMask, uint32_t compareMask) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetStencilCompareMask cmd;
+  cmd.faceMask = faceMask;
+  cmd.compareMask = compareMask;
+  WRITE_CMD(impl, cmd, SetStencilCompareMask);
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkCmdSetStencilWriteMask(VkCommandBuffer commandBuffer,
                          VkStencilFaceFlags faceMask, uint32_t writeMask) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetStencilWriteMask cmd;
+  cmd.faceMask = faceMask;
+  cmd.writeMask = writeMask;
+  WRITE_CMD(impl, cmd, SetStencilWriteMask);
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkCmdSetStencilReference(VkCommandBuffer commandBuffer,
                          VkStencilFaceFlags faceMask, uint32_t reference) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::SetStencilReference cmd;
+  cmd.faceMask = faceMask;
+  cmd.reference = reference;
+  WRITE_CMD(impl, cmd, SetStencilReference);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets(
@@ -1524,20 +2035,46 @@ VKAPI_ATTR void VKAPI_CALL vkCmdBindDescriptorSets(
     VkPipelineLayout layout, uint32_t firstSet, uint32_t descriptorSetCount,
     const VkDescriptorSet *pDescriptorSets, uint32_t dynamicOffsetCount,
     const uint32_t *pDynamicOffsets) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::BindDescriptorSets cmd;
+  cmd.pipelineBindPoint = pipelineBindPoint;
+  cmd.layout = (vki::VkPipelineLayout_Impl *)layout;
+  cmd.firstSet = firstSet;
+  cmd.descriptorSetCount = descriptorSetCount;
+  ASSERT_ALWAYS(descriptorSetCount < 0x10);
+  ito(descriptorSetCount) cmd.pDescriptorSets[i] =
+      (vki::VkDescriptorSet_Impl *)pDescriptorSets[i];
+  cmd.dynamicOffsetCount = dynamicOffsetCount;
+  ASSERT_ALWAYS(dynamicOffsetCount < 0x10);
+  ito(dynamicOffsetCount) cmd.pDynamicOffsets[i] = pDynamicOffsets[i];
+  WRITE_CMD(impl, cmd, BindDescriptorSets);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBindIndexBuffer(VkCommandBuffer commandBuffer,
                                                 VkBuffer buffer,
                                                 VkDeviceSize offset,
                                                 VkIndexType indexType) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::BindIndexBuffer cmd;
+  cmd.buffer = (vki::VkBuffer_Impl *)buffer;
+  cmd.offset = offset;
+  cmd.indexType = indexType;
+  WRITE_CMD(impl, cmd, BindIndexBuffer);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBindVertexBuffers(
     VkCommandBuffer commandBuffer, uint32_t firstBinding, uint32_t bindingCount,
     const VkBuffer *pBuffers, const VkDeviceSize *pOffsets) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::BindVertexBuffers cmd;
+  cmd.firstBinding = firstBinding;
+  cmd.bindingCount = bindingCount;
+  ASSERT_ALWAYS(bindingCount < 64);
+  ito(bindingCount) {
+    cmd.pBuffers[i] = (vki::VkBuffer_Impl *)pBuffers[i];
+    cmd.pOffsets[i] = pOffsets[i];
+  }
+  WRITE_CMD(impl, cmd, BindVertexBuffers);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDraw(VkCommandBuffer commandBuffer,
@@ -1545,13 +2082,26 @@ VKAPI_ATTR void VKAPI_CALL vkCmdDraw(VkCommandBuffer commandBuffer,
                                      uint32_t instanceCount,
                                      uint32_t firstVertex,
                                      uint32_t firstInstance) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::Draw cmd;
+  cmd.vertexCount = vertexCount;
+  cmd.instanceCount = instanceCount;
+  cmd.firstVertex = firstVertex;
+  cmd.firstInstance = firstInstance;
+  WRITE_CMD(impl, cmd, Draw);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexed(
     VkCommandBuffer commandBuffer, uint32_t indexCount, uint32_t instanceCount,
     uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::DrawIndexed cmd;
+  cmd.indexCount = indexCount;
+  cmd.instanceCount = instanceCount;
+  cmd.firstIndex = firstIndex;
+  cmd.vertexOffset = vertexOffset;
+  cmd.firstInstance = firstInstance;
+  WRITE_CMD(impl, cmd, DrawIndexed);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndirect(VkCommandBuffer commandBuffer,
@@ -1559,26 +2109,47 @@ VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndirect(VkCommandBuffer commandBuffer,
                                              VkDeviceSize offset,
                                              uint32_t drawCount,
                                              uint32_t stride) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::DrawIndirect cmd;
+  cmd.buffer = (vki::VkBuffer_Impl *)buffer;
+  cmd.offset = offset;
+  cmd.drawCount = drawCount;
+  cmd.stride = stride;
+  WRITE_CMD(impl, cmd, DrawIndirect);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDrawIndexedIndirect(
     VkCommandBuffer commandBuffer, VkBuffer buffer, VkDeviceSize offset,
     uint32_t drawCount, uint32_t stride) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::DrawIndexedIndirect cmd;
+  cmd.buffer = (vki::VkBuffer_Impl *)buffer;
+  cmd.offset = offset;
+  cmd.drawCount = drawCount;
+  cmd.stride = stride;
+  WRITE_CMD(impl, cmd, DrawIndexedIndirect);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDispatch(VkCommandBuffer commandBuffer,
                                          uint32_t groupCountX,
                                          uint32_t groupCountY,
                                          uint32_t groupCountZ) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::Dispatch cmd;
+  cmd.groupCountX = groupCountX;
+  cmd.groupCountY = groupCountY;
+  cmd.groupCountZ = groupCountZ;
+  WRITE_CMD(impl, cmd, Dispatch);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdDispatchIndirect(VkCommandBuffer commandBuffer,
                                                  VkBuffer buffer,
                                                  VkDeviceSize offset) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::DispatchIndirect cmd;
+  cmd.buffer = (vki::VkBuffer_Impl *)buffer;
+  cmd.offset = offset;
+  WRITE_CMD(impl, cmd, DispatchIndirect);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyBuffer(VkCommandBuffer commandBuffer,
@@ -1603,7 +2174,14 @@ VKAPI_ATTR void VKAPI_CALL vkCmdCopyImage(VkCommandBuffer commandBuffer,
                                           VkImageLayout dstImageLayout,
                                           uint32_t regionCount,
                                           const VkImageCopy *pRegions) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::CopyImage cmd;
+  cmd.src = (vki::VkImage_Impl *)srcImage;
+  cmd.dst = (vki::VkImage_Impl *)dstImage;
+  cmd.regionCount = regionCount;
+  ASSERT_ALWAYS(regionCount < 0x10);
+  ito(regionCount) cmd.pRegions[i] = pRegions[i];
+  WRITE_CMD(impl, cmd, CopyImage);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1618,14 +2196,28 @@ VKAPI_ATTR void VKAPI_CALL vkCmdCopyBufferToImage(
     VkCommandBuffer commandBuffer, VkBuffer srcBuffer, VkImage dstImage,
     VkImageLayout dstImageLayout, uint32_t regionCount,
     const VkBufferImageCopy *pRegions) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::CopyBufferToImage cmd;
+  cmd.srcBuffer = (vki::VkBuffer_Impl *)srcBuffer;
+  cmd.dstImage = (vki::VkImage_Impl *)dstImage;
+  cmd.regionCount = regionCount;
+  ASSERT_ALWAYS(regionCount < 0x10);
+  ito(regionCount) cmd.pRegions[i] = pRegions[i];
+  WRITE_CMD(impl, cmd, CopyBufferToImage);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdCopyImageToBuffer(
     VkCommandBuffer commandBuffer, VkImage srcImage,
     VkImageLayout srcImageLayout, VkBuffer dstBuffer, uint32_t regionCount,
     const VkBufferImageCopy *pRegions) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::CopyImageToBuffer cmd;
+  cmd.dstBuffer = (vki::VkBuffer_Impl *)dstBuffer;
+  cmd.srcImage = (vki::VkImage_Impl *)srcImage;
+  cmd.regionCount = regionCount;
+  ASSERT_ALWAYS(regionCount < 0x10);
+  ito(regionCount) cmd.pRegions[i] = pRegions[i];
+  WRITE_CMD(impl, cmd, CopyImageToBuffer);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdUpdateBuffer(VkCommandBuffer commandBuffer,
@@ -1633,7 +2225,13 @@ VKAPI_ATTR void VKAPI_CALL vkCmdUpdateBuffer(VkCommandBuffer commandBuffer,
                                              VkDeviceSize dstOffset,
                                              VkDeviceSize dataSize,
                                              const void *pData) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::UpdateBuffer cmd;
+  cmd.dstBuffer = (vki::VkBuffer_Impl *)dstBuffer;
+  cmd.dataSize = dataSize;
+  cmd.dstOffset = dstOffset;
+  WRITE_CMD(impl, cmd, UpdateBuffer);
+  impl->write(pData, dataSize);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdFillBuffer(VkCommandBuffer commandBuffer,
@@ -1661,7 +2259,13 @@ VKAPI_ATTR void VKAPI_CALL
 vkCmdClearAttachments(VkCommandBuffer commandBuffer, uint32_t attachmentCount,
                       const VkClearAttachment *pAttachments, uint32_t rectCount,
                       const VkClearRect *pRects) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::ClearAttachments cmd;
+  cmd.attachmentCount = attachmentCount;
+  cmd.rectCount = rectCount;
+  ito(attachmentCount) cmd.pAttachments[i] = pAttachments[i];
+  ito(rectCount) cmd.pRects[i] = pRects[i];
+  WRITE_CMD(impl, cmd, ClearAttachments);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdResolveImage(VkCommandBuffer commandBuffer,
@@ -1746,13 +2350,29 @@ VKAPI_ATTR void VKAPI_CALL vkCmdPushConstants(VkCommandBuffer commandBuffer,
                                               VkShaderStageFlags stageFlags,
                                               uint32_t offset, uint32_t size,
                                               const void *pValues) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::PushConstants cmd;
+  cmd.layout = (vki::VkPipelineLayout_Impl *)layout;
+  cmd.stageFlags = stageFlags;
+  cmd.offset = offset;
+  cmd.size = size;
+  WRITE_CMD(impl, cmd, PushConstants);
+  impl->write(pValues, size);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdBeginRenderPass(
     VkCommandBuffer commandBuffer,
     const VkRenderPassBeginInfo *pRenderPassBegin, VkSubpassContents contents) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  vki::cmd::RenderPassBegin cmd;
+  cmd.renderArea = pRenderPassBegin->renderArea;
+  cmd.renderPass = (vki::VkRenderPass_Impl *)pRenderPassBegin->renderPass;
+  cmd.framebuffer = (vki::VkFramebuffer_Impl *)pRenderPassBegin->framebuffer;
+  cmd.clearValueCount = pRenderPassBegin->clearValueCount;
+  ito(cmd.clearValueCount) cmd.pClearValues[i] =
+      pRenderPassBegin->pClearValues[i];
+  ASSERT_ALWAYS(contents == VkSubpassContents::VK_SUBPASS_CONTENTS_INLINE);
+  WRITE_CMD(impl, cmd, RenderPassBegin);
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer,
@@ -1761,7 +2381,8 @@ VKAPI_ATTR void VKAPI_CALL vkCmdNextSubpass(VkCommandBuffer commandBuffer,
 }
 
 VKAPI_ATTR void VKAPI_CALL vkCmdEndRenderPass(VkCommandBuffer commandBuffer) {
-  return;
+  vki::VkCommandBuffer_Impl *impl = (vki::VkCommandBuffer_Impl *)commandBuffer;
+  impl->write_key((uint8_t)vki::cmd::Cmd_t::RenderPassEnd);
 }
 
 VKAPI_ATTR void VKAPI_CALL
@@ -1776,25 +2397,25 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
     VkDevice device, const VkSwapchainCreateInfoKHR *pCreateInfo,
     const VkAllocationCallbacks *pAllocator, VkSwapchainKHR *pSwapchain) {
   NOTNULL(pSwapchain);
-  //  ASSERT_ALWAYS(vki::g_swapchain.id == 0 && "Already created one swap
-  //  chain!");
-  vki::g_swapchain.release();
-  vki::g_swapchain.id = 1;
+  vki::VkSurfaceKHR_Impl *surface =
+      (vki::VkSurfaceKHR_Impl *)pCreateInfo->surface;
+  vki::VkSwapChain_Impl *impl = ALLOC_VKOBJ_T(VkSwapChain);
   xcb_get_geometry_cookie_t cookie;
   xcb_get_geometry_reply_t *reply;
 
-  cookie = xcb_get_geometry(vki::g_connection, vki::g_window);
+  cookie = xcb_get_geometry(surface->connection, surface->window);
   ASSERT_ALWAYS(reply =
-                    xcb_get_geometry_reply(vki::g_connection, cookie, NULL));
+                    xcb_get_geometry_reply(surface->connection, cookie, NULL));
   ASSERT_ALWAYS(pCreateInfo->minImageCount == 2);
-  vki::g_swapchain.width = pCreateInfo->imageExtent.width;
-  vki::g_swapchain.height = pCreateInfo->imageExtent.height;
-  vki::g_swapchain.format = pCreateInfo->imageFormat;
-  vki::g_swapchain.image_count = pCreateInfo->minImageCount;
+  impl->surface = surface;
+  impl->width = pCreateInfo->imageExtent.width;
+  impl->height = pCreateInfo->imageExtent.height;
+  impl->format = pCreateInfo->imageFormat;
+  impl->image_count = pCreateInfo->minImageCount;
   free(reply);
-  *pSwapchain = (VkSwapchainKHR)(void *)&vki::g_swapchain;
+  *pSwapchain = (VkSwapchainKHR)impl;
   uint32_t bpp = 0;
-  switch (vki::g_swapchain.format) {
+  switch (impl->format) {
   case VkFormat::VK_FORMAT_R8G8B8A8_SRGB: {
     bpp = 4;
     break;
@@ -1803,22 +2424,24 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
     ASSERT_ALWAYS(false);
   };
   ASSERT_ALWAYS(bpp != 0);
-  ito(vki::g_swapchain.image_count) {
+  ito(impl->image_count) {
     vki::VkDeviceMemory_Impl *mem = ALLOC_VKOBJ_T(VkDeviceMemory);
-    mem->size = bpp * vki::g_swapchain.width * vki::g_swapchain.height;
+    mem->size = bpp * impl->width * impl->height;
     mem->ptr = (uint8_t *)malloc(mem->size);
-    vki::g_swapchain.images[i].id = i + 1;
-    vki::g_swapchain.images[i].format = vki::g_swapchain.format;
-    vki::g_swapchain.images[i].mem = mem;
-    vki::g_swapchain.images[i].size = mem->size;
-    vki::g_swapchain.images[i].offset = (size_t)0;
+    impl->images[i].id = i + 1;
+    impl->images[i].format = impl->format;
+    impl->images[i].mem = mem;
+    impl->images[i].size = mem->size;
+    impl->images[i].offset = (size_t)0;
   }
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain,
-                      const VkAllocationCallbacks *pAllocator) {}
+                      const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(swapchain, VkSwapChain);
+}
 
 VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(
     VkDevice device, VkSwapchainKHR swapchain, uint32_t *pSwapchainImageCount,
@@ -1827,20 +2450,29 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(
     *pSwapchainImageCount = 2;
     return VK_SUCCESS;
   }
-  ASSERT_ALWAYS(vki::g_swapchain.id != 0);
-  pSwapchainImages[0] = (VkImage)(void *)&vki::g_swapchain.images[0];
-  pSwapchainImages[1] = (VkImage)(void *)&vki::g_swapchain.images[1];
+  vki::VkSwapChain_Impl *impl = (vki::VkSwapChain_Impl *)swapchain;
+  ASSERT_ALWAYS(impl->id != 0);
+  pSwapchainImages[0] = (VkImage)(void *)&impl->images[0];
+  pSwapchainImages[1] = (VkImage)(void *)&impl->images[1];
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(
     VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
     VkSemaphore semaphore, VkFence fence, uint32_t *pImageIndex) {
+  vki::VkSwapChain_Impl *impl = (vki::VkSwapChain_Impl *)swapchain;
+  impl->cur_image = (impl->cur_image + 1) % impl->image_count;
+  *pImageIndex = impl->cur_image;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL
 vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
+  ito(pPresentInfo->swapchainCount) {
+    vki::VkSwapChain_Impl *impl =
+        (vki::VkSwapChain_Impl *)pPresentInfo->pSwapchains[i];
+    impl->present();
+  }
   return VK_SUCCESS;
 }
 
