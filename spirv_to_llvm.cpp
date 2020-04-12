@@ -38,33 +38,6 @@
 #define DLL_EXPORT __attribute__((visibility("default")))
 #define ATTR_USED __attribute__((used))
 
-template <typename T> struct std::vector<T> copy(std::vector<T> const &in) {
-  return in;
-}
-
-template <typename M, typename K>
-bool contains(M const &in, K const &key) {
-  return in.find(key) != in.end();
-}
-
-#define UNIMPLEMENTED_(s)                                                      \
-  {                                                                            \
-    fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);        \
-    (void)(*(int *)(void *)(0) = 0);                                           \
-    abort();                                                                   \
-  }
-
-#define UNIMPLEMENTED UNIMPLEMENTED_("")
-
-void WARNING(char const *fmt, ...) {
-  static char buf[0x100];
-  va_list argptr;
-  va_start(argptr, fmt);
-  vsnprintf(buf, sizeof(buf), fmt, argptr);
-  va_end(argptr);
-  fprintf(stderr, "[WARNING] %s\n", buf);
-}
-
 #define LOOKUP_FN(name)                                                        \
   llvm::Function *name = module->getFunction(#name);                           \
   ASSERT_ALWAYS(name != NULL);
@@ -77,6 +50,15 @@ void llvm_fatal(void *user_data, const std::string &reason,
   fprintf(stderr, "[LLVM_FATAL] %s\n", reason.c_str());
   (void)(*(int *)(void *)(0) = 0);
   abort();
+}
+
+static void WARNING(char const *fmt, ...) {
+  static char buf[0x100];
+  va_list argptr;
+  va_start(argptr, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, argptr);
+  va_end(argptr);
+  fprintf(stderr, "[WARNING] %s\n", buf);
 }
 
 void *read_file(const char *filename, size_t *size,

@@ -1,0 +1,8 @@
+commit 5145656283370b1826b8d55e84f82af020a5e567
+Merge: 845af11 da41894
+Author: Olexa Bilaniuk <obilaniu@users.noreply.github.com>
+Date:   Sat Mar 17 01:08:48 2018 -0400
+
+    Merge pull request #21 from travisdowns/master
+    
+    Аllow makefile to build against an arbitrary kernel version.

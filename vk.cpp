@@ -375,6 +375,7 @@ struct VkCommandBuffer_Impl {
   uint8_t *data;
   size_t data_size;
   size_t data_cursor;
+  size_t read_cursor;
   template <typename T> void write_cmd(T const &cmd) {
     memcpy(data + data_cursor, &cmd, sizeof(cmd));
     data_cursor += sizeof(cmd);
@@ -395,14 +396,32 @@ struct VkCommandBuffer_Impl {
     data_size = 16 * (1 << 20);
     data = (uint8_t *)malloc(data_size);
     data_cursor = 0;
+    read_cursor = 0;
   }
-  void reset() { data_cursor = 0; }
+  void reset() {
+    read_cursor = 0;
+    data_cursor = 0;
+  }
   void release() {
     if (data != NULL) {
       free(data);
     }
     memset(this, 0, sizeof(*this));
   }
+  template <typename T> T consume() {
+    T out = {};
+    memcpy(&out, data + read_cursor, sizeof(T));
+    read_cursor += sizeof(T);
+    ASSERT_ALWAYS(read_cursor <= data_cursor);
+    return out;
+  }
+  void *read(size_t size) {
+    void *ptr = (void *)(data + read_cursor);
+    read_cursor += size;
+    ASSERT_ALWAYS(read_cursor <= data_cursor);
+    return ptr;
+  }
+  bool has_items() { return read_cursor < data_cursor; }
 };
 
 #define OBJ_POOL(type) Pool<type##_Impl> type##_pool = {};
@@ -673,7 +692,66 @@ struct PushConstants {
   uint32_t size;
   // uint8_t pData[size] follows the cmd in the command buffer
 };
-void execute_commands(uint8_t const *pCode, size_t code_size) {}
+void execute_commands(VkCommandBuffer_Impl *cmd_buf) {
+  while (cmd_buf->has_items()) {
+    cmd::Cmd_t op = cmd_buf->consume<Cmd_t>();
+    VkPipeline_Impl *graphics_pipeline = NULL;
+    VkPipeline_Impl *compute_pipeline = NULL;
+    VkRenderPass_Impl *render_pass = NULL;
+    VkFramebuffer_Impl *framebuffer = NULL;
+    VkDescriptorSet_Impl *descriptor_sets[0x10] = {};
+    VkBuffer_Impl *index_buffer = NULL;
+    VkDeviceSize index_buffer_offset = 0;
+    VkIndexType index_type = VkIndexType::VK_INDEX_TYPE_UINT32;
+    VkBuffer_Impl *vertex_buffers[0x10] = {};
+    VkDeviceSize vertex_buffer_offsets[0x10] = {};
+    VkRect2D render_area = {};
+    uint32_t viewport_count = 0;
+    VkViewport viewports[0x10] = {};
+    switch (op) {
+    case Cmd_t::BindIndexBuffer: {
+      cmd::BindIndexBuffer cmd = cmd_buf->consume<cmd::BindIndexBuffer>();
+      index_buffer = cmd.buffer;
+      index_type = cmd.indexType;
+      index_buffer_offset = cmd.offset;
+      break;
+    }
+    case Cmd_t::BindVertexBuffers: {
+      cmd::BindVertexBuffers cmd = cmd_buf->consume<cmd::BindVertexBuffers>();
+      ito(cmd.bindingCount) {
+        vertex_buffers[i + cmd.firstBinding] = cmd.pBuffers[i];
+        vertex_buffer_offsets[i + cmd.firstBinding] = cmd.pOffsets[i];
+      }
+      break;
+    }
+    case Cmd_t::BindDescriptorSets: {
+      cmd::BindDescriptorSets cmd = cmd_buf->consume<cmd::BindDescriptorSets>();
+      ASSERT_ALWAYS(cmd.dynamicOffsetCount == 0);
+      ito(cmd.descriptorSetCount) {
+        descriptor_sets[i + cmd.firstSet] = cmd.pDescriptorSets[i];
+      }
+      break;
+    }
+    case Cmd_t::SetViewport: {
+      cmd::SetViewport cmd = cmd_buf->consume<cmd::SetViewport>();
+      ASSERT_ALWAYS(cmd.viewportCount == 1);
+      viewports[0] = cmd.pViewports[0];
+      viewport_count = 1;
+      break;
+    }
+    case Cmd_t::SetScissor: {
+      // TODO
+      break;
+    }
+    case Cmd_t::DrawIndexed: {
+
+      break;
+    }
+    default:
+      UNIMPLEMENTED;
+    }
+  }
+}
 } // namespace cmd
 #define WRITE_CMD(cmdbuf, cmd, type)                                           \
   {                                                                            \
@@ -1219,7 +1297,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue queue,
     jto(pSubmits[i].commandBufferCount) {
       vki::VkCommandBuffer_Impl *impl =
           (vki::VkCommandBuffer_Impl *)pSubmits[i].pCommandBuffers[j];
-      vki::cmd::execute_commands(impl->data, impl->data_cursor);
+      vki::cmd::execute_commands(impl);
     }
   }
   return VK_SUCCESS;

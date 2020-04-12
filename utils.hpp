@@ -19,7 +19,27 @@
 #define NOTNULL(x) ASSERT_ALWAYS((x) != NULL)
 
 #undef MIN
+#undef MAX
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+
+template <typename T> T copy(T const &in) {
+  return in;
+}
+
+template <typename M, typename K>
+bool contains(M const &in, K const &key) {
+  return in.find(key) != in.end();
+}
+
+#define UNIMPLEMENTED_(s)                                                      \
+  {                                                                            \
+    fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);        \
+    (void)(*(int *)(void *)(0) = 0);                                           \
+    abort();                                                                   \
+  }
+
+#define UNIMPLEMENTED UNIMPLEMENTED_("")
 
 template <typename F> struct __Defer__ {
   F f;
