@@ -19,14 +19,14 @@ declare void @spv_image_write_1d_i32(%image_t %cimg, i32 %in_coord, i32 %in_data
 declare <4 x float> @spv_image_read_2d_float4(%image_t %cimg, <2 x i32> %in_coord)
 declare void @spv_image_write_2d_float4(%image_t %cimg, <2 x i32> %in_coord, <4 x float> %in_data)
 
-declare align 16 i8 *@get_push_constant_ptr(%state_t *) #0
-declare align 16 i8 *@get_uniform_ptr(%state_t *, i32 %set, i32 %binding) #0
-declare align 16 i8 *@get_uniform_const_ptr(%state_t *, i32 %set, i32 %binding) #0
-declare align 16 i8 *@get_storage_ptr(%state_t *, i32 %set, i32 %binding) #0
-declare align 16 i8 *@get_input_ptr(%state_t *) #0
-declare align 16 i8 *@get_output_ptr(%state_t *) #0
-declare align 16 i8 *@get_builtin_output_ptr(%state_t *) #0
-declare align 16 i8 *@get_private_ptr(%state_t *) #0
+declare align 32 i8 *@get_push_constant_ptr(%state_t *) #0
+declare align 32 i8 *@get_uniform_ptr(%state_t *, i32 %set, i32 %binding) #0
+declare align 32 i8 *@get_uniform_const_ptr(%state_t *, i32 %set, i32 %binding) #0
+declare align 32 i8 *@get_storage_ptr(%state_t *, i32 %set, i32 %binding) #0
+declare align 32 i8 *@get_input_ptr(%state_t *) #0
+declare align 32 i8 *@get_output_ptr(%state_t *) #0
+declare align 32 i8 *@get_builtin_output_ptr(%state_t *) #0
+declare align 32 i8 *@get_private_ptr(%state_t *) #0
 
 declare void @kill(%state_t *, %mask_t %mask)
 declare <4 x float> @dummy_sample()
