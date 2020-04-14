@@ -86,6 +86,110 @@ void write_image_2d_i8_ppm(const char *file_name, void *data, uint32_t pitch,
   fclose(file);
 }
 
+uint32_t morton_naive(uint32_t x, uint32_t y) {
+  uint32_t offset = 0;
+  kto(16) {
+    offset |=
+        //
+        (((x >> k) & 1) << (2 * k + 0)) | //
+        (((y >> k) & 1) << (2 * k + 1)) | //
+        //
+        0;
+  }
+  return offset;
+}
+
+uint32_t morton_pdep32(uint32_t x, uint32_t y) {
+  uint32_t x_dep =
+      _pdep_u32(x, 0b01'01'01'01'01'01'01'01'01'01'01'01'01'01'01'01);
+  uint32_t y_dep =
+      _pdep_u32(y, 0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10);
+  return x_dep | y_dep;
+}
+
+void unmorton_pext32(uint32_t address, uint32_t *x, uint32_t *y) {
+  *x = _pext_u32(address, 0b01'01'01'01'01'01'01'01'01'01'01'01'01'01'01'01);
+  *y = _pext_u32(address, 0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10);
+}
+
+void write_image_2d_i8_ppm_zcurve(const char *file_name, void *data,
+                                  uint32_t size_pow) {
+  FILE *file = fopen(file_name, "wb");
+  ASSERT_ALWAYS(file);
+  fprintf(file, "P6\n");
+  uint32_t size = 1 << size_pow;
+  fprintf(file, "%d %d\n", size, size);
+  fprintf(file, "255\n");
+  uint32_t mask = size - 1;
+  ito(size) {
+    jto(size) {
+      uint32_t offset = morton_pdep32(j, i);
+      uint8_t r = *(uint8_t *)(void *)(((uint8_t *)data) + offset);
+      //       fputc(((offset >> 0) & 0xff), file);
+      //       fputc(((offset >> 8) & 0xff), file);
+      //       fputc(((offset >> 16) & 0xff), file);
+      fputc(r, file);
+      fputc(r, file);
+      fputc(r, file);
+    }
+  }
+  fclose(file);
+}
+
+uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
+                    uint32_t tile_pow) {
+  uint32_t tile_mask = (1 << tile_pow) - 1;
+  uint32_t tile_x = (x >> tile_pow);
+  uint32_t tile_y = (y >> tile_pow);
+  return                                                   //
+      (x & tile_mask) |                                    //
+      ((y & tile_mask) << tile_pow) |                      //
+      (tile_x << (tile_pow * 2)) |                         //
+      (tile_y << (tile_pow * 2 + (size_pow - tile_pow))) | //
+      0;
+}
+
+void untile_coord(uint32_t offset, uint32_t *x, uint32_t *y, uint32_t size_pow,
+                  uint32_t tile_pow) {
+  uint32_t tile_mask = (1 << tile_pow) - 1;
+  uint32_t size_mask = ((1 << size_pow) - 1) >> tile_pow;
+  uint32_t local_x = ((offset >> 0) & tile_mask);
+  uint32_t local_y = ((offset >> tile_pow) & tile_mask);
+  uint32_t tile_x = ((offset >> (tile_pow * 2)) & size_mask);
+  uint32_t tile_y =
+      ((offset >> (tile_pow * 2 + (size_pow - tile_pow))) & size_mask);
+  *x = (tile_x << tile_pow) | local_x;
+  *y = (tile_y << tile_pow) | local_y;
+}
+
+void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
+                                 uint32_t size_pow, uint32_t tile_pow) {
+  FILE *file = fopen(file_name, "wb");
+  ASSERT_ALWAYS(file);
+  fprintf(file, "P6\n");
+  uint32_t size = 1 << size_pow;
+  fprintf(file, "%d %d\n", size, size);
+  fprintf(file, "255\n");
+  uint32_t mask = size - 1;
+  ito(size) {
+    jto(size) {
+      uint32_t x = j;
+      uint32_t y = i;
+      uint32_t offset = tile_coord(x, y, size_pow, tile_pow);
+      //      untile_coord(offset, &x, &y, size_pow, tile_pow);
+      //      ASSERT_ALWAYS(x == j && y == i);
+      uint8_t r = *(uint8_t *)(void *)(((uint8_t *)data) + offset);
+      //      fputc(((offset >> 0) & 0xff), file);
+      //      fputc(((offset >> 8) & 0xff), file);
+      //      fputc(((offset >> 16) & 0xff), file);
+      fputc(r, file);
+      fputc(r, file);
+      fputc(r, file);
+    }
+  }
+  fclose(file);
+}
+
 #endif
 
 void clear_image_2d_i32(void *image, uint32_t pitch, uint32_t width,
@@ -154,7 +258,7 @@ void rasterize_triangle_naive_0(float x0, float y0, float x1, float y1,
       float e0 = n0_x * (x - x0) + n0_y * (y - y0);
       float e1 = n1_x * (x - x1) + n1_y * (y - y1);
       float e2 = n2_x * (x - x2) + n2_y * (y - y2);
-      if (e0 > 0.0f && e1 > 0.0f && e2 > 0.0f) {
+      if (e0 >= 0.0f && e1 >= 0.0f && e2 >= 0.0f) {
         image[i * width + j] = value;
       }
     }
@@ -167,57 +271,6 @@ int32_t clamp(int32_t v, int32_t min, int32_t max) {
 
 int16_t clamp(int16_t v, int16_t min, int16_t max) {
   return v < min ? min : v > max ? max : v;
-}
-
-// Nested scalar loops over each pixel in a bounding box
-void rasterize_triangle_naive_1(float _x0, float _y0, float _x1, float _y1,
-                                float _x2, float _y2, uint8_t *image,
-                                uint32_t width_pow, uint32_t height_pow,
-                                uint8_t value) {
-  uint32_t pixel_precision = 15; // bits
-  float k = (float)(1 << pixel_precision);
-  int32_t upper_bound = (1 << pixel_precision) - 1;
-  int32_t lower_bound = 0;
-  int32_t x0 = clamp((int32_t)(_x0 * k), lower_bound, upper_bound);
-  int32_t y0 = clamp((int32_t)(_y0 * k), lower_bound, upper_bound);
-  int32_t x1 = clamp((int32_t)(_x1 * k), lower_bound, upper_bound);
-  int32_t y1 = clamp((int32_t)(_y1 * k), lower_bound, upper_bound);
-  int32_t x2 = clamp((int32_t)(_x2 * k), lower_bound, upper_bound);
-  int32_t y2 = clamp((int32_t)(_y2 * k), lower_bound, upper_bound);
-
-  int32_t n0_x = -(y1 - y0);
-  int32_t n0_y = (x1 - x0);
-  int32_t n1_x = -(y2 - y1);
-  int32_t n1_y = (x2 - x1);
-  int32_t n2_x = -(y0 - y2);
-  int32_t n2_y = (x0 - x2);
-
-  int32_t min_x = MIN(x0, MIN(x1, x2));
-  int32_t max_x = MAX(x0, MAX(x1, x2));
-  int32_t min_y = MIN(y0, MIN(y1, y2));
-  int32_t max_y = MAX(y0, MAX(y1, y2));
-
-  // how many bits there are between pixels
-  ASSERT_ALWAYS(width_pow < 16);
-  ASSERT_ALWAYS(height_pow < 16);
-  uint32_t width_subpixel_precision = pixel_precision - width_pow;
-  uint32_t height_subpixel_precision = pixel_precision - height_pow;
-  int32_t x_delta = 1 << width_subpixel_precision;
-  int32_t y_delta = 1 << height_subpixel_precision;
-  for (int32_t y = min_y; y <= max_y; y += y_delta) {
-    uint8_t *row = image + ((y >> height_subpixel_precision) << width_pow);
-    int32_t e0 = n0_x * (min_x - x0) + n0_y * (y - y0);
-    int32_t e1 = n1_x * (min_x - x1) + n1_y * (y - y1);
-    int32_t e2 = n2_x * (min_x - x2) + n2_y * (y - y2);
-    for (int32_t x = min_x; x <= max_x; x += x_delta) {
-      if (e0 > 0 && e1 > 0 && e2 > 0) {
-        *(row + (x >> height_subpixel_precision)) = value;
-      }
-      e0 += x_delta * n0_x;
-      e1 += x_delta * n1_x;
-      e2 += x_delta * n2_x;
-    }
-  }
 }
 
 using i32x8 = __m256i;
@@ -233,16 +286,17 @@ inline i8x32 cmpeq_i8x32(i8x32 a, i8x32 b) { return _mm256_cmpeq_epi8(a, b); }
 #define init_i8x32 _mm256_setr_epi8
 #define init_i16x16 _mm256_setr_epi16
 #define init_i64x4 _mm256_setr_epi64x
+#define init_i64x2 _mm_setr_epi64x
 #define shuffle_i8x32 _mm256_shuffle_epi8
 #define ymm_or(a, b) _mm256_or_si256(a, b)
 inline int32_t extract_sign_i32x8(i32x8 v) {
   return _mm256_movemask_ps(reinterpret_cast<__m256>((v)));
 }
 // two bits for each lane with total of 32 bits per 16 lanes
-inline uint32_t extract_sign_i16x16(i16x16 v) {
+inline uint16_t extract_sign_i16x16(i16x16 v) {
   uint32_t mask_i8 = (uint32_t)_mm256_movemask_epi8(v);
-  mask_i8 &= (uint32_t)0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10u;
-  return mask_i8 | (mask_i8 >> 1);
+  mask_i8 = _pext_u32(mask_i8, (uint32_t)0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10u);
+  return (uint16_t)mask_i8;
 }
 // maybe use _mm256_set1_epi32/16?
 inline i16x16 broadcast_i16x16(int16_t a) {
@@ -264,34 +318,16 @@ inline i64x4 broadcast_i64x4(int64_t v) {
   return reinterpret_cast<__m256i>(
       _mm256_broadcast_sd(reinterpret_cast<double const *>(&(v))));
 }
-inline uint64_t unpack_mask_i1x4(int32_t mask) {
-  return ((0xff * (((uint64_t)mask >> 0) & 1ull)) << 0) |
-         ((0xff * (((uint64_t)mask >> 1) & 1ull)) << 8) |
-         ((0xff * (((uint64_t)mask >> 2) & 1ull)) << 16) |
-         ((0xff * (((uint64_t)mask >> 3) & 1ull)) << 24) |
-         ((0xff * (((uint64_t)mask >> 4) & 1ull)) << 32) |
-         ((0xff * (((uint64_t)mask >> 5) & 1ull)) << 40) |
-         ((0xff * (((uint64_t)mask >> 6) & 1ull)) << 48) |
-         ((0xff * (((uint64_t)mask >> 7) & 1ull)) << 56) | 0ull;
-}
-inline void unpack_mask_i2x16(uint32_t mask, uint64_t *low, uint64_t *high) {
-  *low = ((0xff * (((uint64_t)mask >> 1) & 1ull)) << 0) |
-         ((0xff * (((uint64_t)mask >> 3) & 1ull)) << 8) |
-         ((0xff * (((uint64_t)mask >> 5) & 1ull)) << 16) |
-         ((0xff * (((uint64_t)mask >> 7) & 1ull)) << 24) |
-         ((0xff * (((uint64_t)mask >> 9) & 1ull)) << 32) |
-         ((0xff * (((uint64_t)mask >> 11) & 1ull)) << 40) |
-         ((0xff * (((uint64_t)mask >> 13) & 1ull)) << 48) |
-         ((0xff * (((uint64_t)mask >> 15) & 1ull)) << 56) | 0ull;
-  mask >>= 16;
-  *high = ((0xff * (((uint64_t)mask >> 1) & 1ull)) << 0) |
-          ((0xff * (((uint64_t)mask >> 3) & 1ull)) << 8) |
-          ((0xff * (((uint64_t)mask >> 5) & 1ull)) << 16) |
-          ((0xff * (((uint64_t)mask >> 7) & 1ull)) << 24) |
-          ((0xff * (((uint64_t)mask >> 9) & 1ull)) << 32) |
-          ((0xff * (((uint64_t)mask >> 11) & 1ull)) << 40) |
-          ((0xff * (((uint64_t)mask >> 13) & 1ull)) << 48) |
-          ((0xff * (((uint64_t)mask >> 15) & 1ull)) << 56) | 0ull;
+
+inline i8x16 unpack_mask_i1x16(uint16_t mask) {
+  uint64_t low = 0;
+  uint64_t high = 0;
+  ito(8)
+    low |= ((0xff * (((uint64_t)mask >> i) & 1ull)) << (8 * i));
+  mask >>= 8;
+  ito(8)
+    high |=  ((0xff * (((uint64_t)mask >> i) & 1ull)) << (8 * i));
+  return _mm_set_epi64(*(__m64*)&high, *(__m64*)&low);
 }
 __m256i get_mask3(const uint32_t mask) {
   i32x8 vmask = broadcast_i32x8((int32_t)mask);
@@ -347,371 +383,16 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
   return ymm_or(local_shuffle, far_pass);
 }
 
-// i32x8 vectorized loop over each pixel in a bounding box
-void rasterize_triangle_naive_2(float _x0, float _y0, float _x1, float _y1,
-                                float _x2, float _y2, void *image,
-                                uint32_t width_pow, uint32_t height_pow,
-                                uint8_t value) {
-  uint32_t pixel_precision = 15; // bits
-  float k = (float)(1 << pixel_precision);
-  int32_t upper_bound = (1 << pixel_precision) - 1;
-  int32_t lower_bound = 0;
-  int32_t x0 = clamp((int32_t)(_x0 * k), lower_bound, upper_bound);
-  int32_t y0 = clamp((int32_t)(_y0 * k), lower_bound, upper_bound);
-  int32_t x1 = clamp((int32_t)(_x1 * k), lower_bound, upper_bound);
-  int32_t y1 = clamp((int32_t)(_y1 * k), lower_bound, upper_bound);
-  int32_t x2 = clamp((int32_t)(_x2 * k), lower_bound, upper_bound);
-  int32_t y2 = clamp((int32_t)(_y2 * k), lower_bound, upper_bound);
+struct Classified_Tile {
+  uint8_t x;
+  uint8_t y;
+  uint16_t mask;
+};
 
-  int32_t n0_x = -(y1 - y0);
-  int32_t n0_y = (x1 - x0);
-  int32_t n1_x = -(y2 - y1);
-  int32_t n1_y = (x2 - x1);
-  int32_t n2_x = -(y0 - y2);
-  int32_t n2_y = (x0 - x2);
-
-  int32_t min_x = MIN(x0, MIN(x1, x2));
-  int32_t max_x = MAX(x0, MAX(x1, x2));
-  int32_t min_y = MIN(y0, MIN(y1, y2));
-  int32_t max_y = MAX(y0, MAX(y1, y2));
-
-  min_x &= (~0x1f);
-
-  // how many bits there are between pixels
-  ASSERT_ALWAYS(width_pow < 16);
-  ASSERT_ALWAYS(height_pow < 16);
-  uint32_t width_subpixel_precision = pixel_precision - width_pow;
-  uint32_t height_subpixel_precision = pixel_precision - height_pow;
-  int32_t x_delta = 1 << width_subpixel_precision;
-  int32_t y_delta = 1 << height_subpixel_precision;
-  // clang-format off
-  i32x8 v_e0_init = init_i32x8(
-    x_delta * n0_x * 0,
-    x_delta * n0_x * 1,
-    x_delta * n0_x * 2,
-    x_delta * n0_x * 3,
-    x_delta * n0_x * 4,
-    x_delta * n0_x * 5,
-    x_delta * n0_x * 6,
-    x_delta * n0_x * 7
-  );
-  i32x8 v_e1_init = init_i32x8(
-    x_delta * n1_x * 0,
-    x_delta * n1_x * 1,
-    x_delta * n1_x * 2,
-    x_delta * n1_x * 3,
-    x_delta * n1_x * 4,
-    x_delta * n1_x * 5,
-    x_delta * n1_x * 6,
-    x_delta * n1_x * 7
-  );
-  i32x8 v_e2_init = init_i32x8(
-    x_delta * n2_x * 0,
-    x_delta * n2_x * 1,
-    x_delta * n2_x * 2,
-    x_delta * n2_x * 3,
-    x_delta * n2_x * 4,
-    x_delta * n2_x * 5,
-    x_delta * n2_x * 6,
-    x_delta * n2_x * 7
-  );
-  i32x8 v_e0_delta = broadcast_i32x8(
-    x_delta * n0_x * 8
-  );
-  i32x8 v_e1_delta = broadcast_i32x8(
-    x_delta * n1_x * 8
-  );
-  i32x8 v_e2_delta = broadcast_i32x8(
-    x_delta * n2_x * 8
-  );
-  uint64_t v_value_full =
-    ((uint64_t)value << 0u)   |
-    ((uint64_t)value << 8u)   |
-    ((uint64_t)value << 16u)  |
-    ((uint64_t)value << 24u)  |
-    ((uint64_t)value << 32u)  |
-    ((uint64_t)value << 40u)  |
-    ((uint64_t)value << 48u)  |
-    ((uint64_t)value << 56u)  |
-  0
-  ;
-  value = 0x40;
-  uint64_t v_value_partial =
-    ((uint64_t)value << 0u)   |
-    ((uint64_t)value << 8u)   |
-    ((uint64_t)value << 16u)  |
-    ((uint64_t)value << 24u)  |
-    ((uint64_t)value << 32u)  |
-    ((uint64_t)value << 40u)  |
-    ((uint64_t)value << 48u)  |
-    ((uint64_t)value << 56u)  |
-  0
-  ;
-  // clang-format on
-  for (int32_t y = min_y; y <= max_y; y += y_delta) {
-    uint64_t *row = (uint64_t *)(size_t)(
-        (uint8_t *)image + ((y >> height_subpixel_precision) << width_pow));
-    int32_t e0 = n0_x * (min_x - x0) + n0_y * (y - y0);
-    int32_t e1 = n1_x * (min_x - x1) + n1_y * (y - y1);
-    int32_t e2 = n2_x * (min_x - x2) + n2_y * (y - y2);
-    i32x8 v_e0 = broadcast_i32x8(e0);
-    i32x8 v_e1 = broadcast_i32x8(e1);
-    i32x8 v_e2 = broadcast_i32x8(e2);
-    v_e0 = add_si32x8(v_e0, v_e0_init);
-    v_e1 = add_si32x8(v_e1, v_e1_init);
-    v_e2 = add_si32x8(v_e2, v_e2_init);
-    for (int32_t x = min_x; x <= max_x; x += x_delta * 8) {
-      // clang-format off
-      int32_t e0_sign = extract_sign_i32x8(v_e0);
-      int32_t e1_sign = extract_sign_i32x8(v_e1);
-      int32_t e2_sign = extract_sign_i32x8(v_e2);
-      int32_t mask =
-      (e0_sign | e1_sign | e2_sign);
-      if (mask == 0) {
-        *(row + ((x >> height_subpixel_precision) >> 3)) = v_value_full;
-      } else if (mask != 0xffu) {
-        *(row + ((x >> height_subpixel_precision) >> 3)) = v_value_partial;
-      }
-      v_e0 = add_si32x8(v_e0, v_e0_delta);
-      v_e1 = add_si32x8(v_e1, v_e1_delta);
-      v_e2 = add_si32x8(v_e2, v_e2_delta);
-      // clang-format on
-    }
-  }
-}
-
-// try using i16 for computation
-void rasterize_triangle_naive_3(float _x0, float _y0, float _x1, float _y1,
-                                float _x2, float _y2, uint8_t *image,
-                                uint32_t width_pow, uint32_t height_pow,
-                                uint8_t value) {
-  int16_t pixel_precision = 8; // bits
-  float k = (float)(1 << pixel_precision);
-  int16_t upper_bound = (int16_t)((int16_t)1 << pixel_precision) - (int16_t)1;
-  int16_t lower_bound = 0;
-  int16_t x0 = clamp((int16_t)(_x0 * k), lower_bound, upper_bound);
-  int16_t y0 = clamp((int16_t)(_y0 * k), lower_bound, upper_bound);
-  int16_t x1 = clamp((int16_t)(_x1 * k), lower_bound, upper_bound);
-  int16_t y1 = clamp((int16_t)(_y1 * k), lower_bound, upper_bound);
-  int16_t x2 = clamp((int16_t)(_x2 * k), lower_bound, upper_bound);
-  int16_t y2 = clamp((int16_t)(_y2 * k), lower_bound, upper_bound);
-
-  int16_t n0_x = -(y1 - y0);
-  int16_t n0_y = (x1 - x0);
-  int16_t n1_x = -(y2 - y1);
-  int16_t n1_y = (x2 - x1);
-  int16_t n2_x = -(y0 - y2);
-  int16_t n2_y = (x0 - x2);
-
-  int16_t min_x = MIN(x0, MIN(x1, x2));
-  int16_t max_x = MAX(x0, MAX(x1, x2));
-  int16_t min_y = MIN(y0, MIN(y1, y2));
-  int16_t max_y = MAX(y0, MAX(y1, y2));
-
-  // how many bits there are between pixels
-  ASSERT_ALWAYS(width_pow <= 8);
-  ASSERT_ALWAYS(height_pow <= 8);
-  int16_t width_subpixel_precision = pixel_precision - (int16_t)width_pow;
-  int16_t height_subpixel_precision = pixel_precision - (int16_t)height_pow;
-  int16_t x_delta = (int16_t)(1 << width_subpixel_precision);
-  int16_t y_delta = (int16_t)(1 << height_subpixel_precision);
-  for (int16_t y = min_y; y <= max_y; y += y_delta) {
-    uint8_t *row = image + ((y >> height_subpixel_precision) << width_pow);
-    int16_t e0 = n0_x * (min_x - x0) + n0_y * (y - y0);
-    int16_t e1 = n1_x * (min_x - x1) + n1_y * (y - y1);
-    int16_t e2 = n2_x * (min_x - x2) + n2_y * (y - y2);
-    for (int16_t x = min_x; x <= max_x; x += x_delta) {
-      if (e0 > 0 && e1 > 0 && e2 > 0) {
-        *(row + (x >> height_subpixel_precision)) = value;
-      }
-      e0 += x_delta * n0_x;
-      e1 += x_delta * n1_x;
-      e2 += x_delta * n2_x;
-    }
-  }
-}
-
-void print_i2x16(uint32_t mask) {
-  ito(16) {
-    fputc((mask & 2) == 0 ? '0' : '1', stdout);
-    mask >>= 2;
-  }
-  fputc('\n', stdout);
-}
-
-void print_i16x16(i16x16 v) {
-#define print_lane_N(N)                                                        \
-  int16_t a_##N = (int16_t)_mm256_extract_epi16(v, N);                         \
-  fprintf(stdout, "%i,", (int32_t)a_##N);
-  print_lane_N(0);
-  print_lane_N(1);
-  print_lane_N(2);
-  print_lane_N(3);
-  print_lane_N(4);
-  print_lane_N(5);
-  print_lane_N(6);
-  print_lane_N(7);
-  print_lane_N(8);
-  print_lane_N(9);
-  print_lane_N(10);
-  print_lane_N(11);
-  print_lane_N(12);
-  print_lane_N(13);
-  print_lane_N(14);
-  print_lane_N(15);
-#undef print_lane_N
-  fputc('\n', stdout);
-}
-
-// 64 bytes a cache line == 8x8 so probably we'd  want to write in chunks of 8x8
-// bytes/8x2 pixels R8G8B8A8? again we don't know how many small triangles there
-// are and if it'll destroy any packetization on pixel level
-
-// i16x16 vectorized loop over pixels in a bounding box
-void rasterize_triangle_naive_4(float _x0, float _y0, float _x1, float _y1,
-                                float _x2, float _y2, uint8_t *image,
-                                uint32_t width_pow, uint32_t height_pow,
-                                uint8_t value) {
-  int16_t pixel_precision = 8; // bits
-  float k = (float)(1 << pixel_precision);
-  int16_t upper_bound = (int16_t)((int16_t)1 << pixel_precision) - (int16_t)1;
-  int16_t lower_bound = 0;
-  int16_t x0 = clamp((int16_t)(_x0 * k), lower_bound, upper_bound);
-  int16_t y0 = clamp((int16_t)(_y0 * k), lower_bound, upper_bound);
-  int16_t x1 = clamp((int16_t)(_x1 * k), lower_bound, upper_bound);
-  int16_t y1 = clamp((int16_t)(_y1 * k), lower_bound, upper_bound);
-  int16_t x2 = clamp((int16_t)(_x2 * k), lower_bound, upper_bound);
-  int16_t y2 = clamp((int16_t)(_y2 * k), lower_bound, upper_bound);
-
-  int16_t n0_x = -(y1 - y0);
-  int16_t n0_y = (x1 - x0);
-  int16_t n1_x = -(y2 - y1);
-  int16_t n1_y = (x2 - x1);
-  int16_t n2_x = -(y0 - y2);
-  int16_t n2_y = (x0 - x2);
-
-  int16_t min_x = MIN(x0, MIN(x1, x2));
-  int16_t max_x = MAX(x0, MAX(x1, x2));
-  int16_t min_y = MIN(y0, MIN(y1, y2));
-  int16_t max_y = MAX(y0, MAX(y1, y2));
-
-  min_x &= (~0x1f);
-
-  // how many bits there are between pixels
-  ASSERT_ALWAYS(width_pow <= 8);
-  ASSERT_ALWAYS(height_pow <= 8);
-  // Aligned to 32 bytes
-  ASSERT_ALWAYS(((size_t)image & 0x1fu) == 0);
-  int16_t width_subpixel_precision = pixel_precision - (int16_t)width_pow;
-  int16_t height_subpixel_precision = pixel_precision - (int16_t)height_pow;
-  int16_t x_delta = (int16_t)(1 << width_subpixel_precision);
-  int16_t y_delta = (int16_t)(1 << height_subpixel_precision);
-  // clang-format off
-  i16x16 v_e0_init = init_i16x16(
-    x_delta * n0_x * 0,
-    x_delta * n0_x * 1,
-    x_delta * n0_x * 2,
-    x_delta * n0_x * 3,
-    x_delta * n0_x * 4,
-    x_delta * n0_x * 5,
-    x_delta * n0_x * 6,
-    x_delta * n0_x * 7,
-    x_delta * n0_x * 8,
-    x_delta * n0_x * 9,
-    x_delta * n0_x * 10,
-    x_delta * n0_x * 11,
-    x_delta * n0_x * 12,
-    x_delta * n0_x * 13,
-    x_delta * n0_x * 14,
-    x_delta * n0_x * 15
-  );
-  i16x16 v_e1_init = init_i16x16(
-    x_delta * n1_x * 0,
-    x_delta * n1_x * 1,
-    x_delta * n1_x * 2,
-    x_delta * n1_x * 3,
-    x_delta * n1_x * 4,
-    x_delta * n1_x * 5,
-    x_delta * n1_x * 6,
-    x_delta * n1_x * 7,
-    x_delta * n1_x * 8,
-    x_delta * n1_x * 9,
-    x_delta * n1_x * 10,
-    x_delta * n1_x * 11,
-    x_delta * n1_x * 12,
-    x_delta * n1_x * 13,
-    x_delta * n1_x * 14,
-    x_delta * n1_x * 15
-  );
-  i16x16 v_e2_init = init_i16x16(
-    x_delta * n2_x * 0,
-    x_delta * n2_x * 1,
-    x_delta * n2_x * 2,
-    x_delta * n2_x * 3,
-    x_delta * n2_x * 4,
-    x_delta * n2_x * 5,
-    x_delta * n2_x * 6,
-    x_delta * n2_x * 7,
-    x_delta * n2_x * 8,
-    x_delta * n2_x * 9,
-    x_delta * n2_x * 10,
-    x_delta * n2_x * 11,
-    x_delta * n2_x * 12,
-    x_delta * n2_x * 13,
-    x_delta * n2_x * 14,
-    x_delta * n2_x * 15
-  );
-  i16x16 v_e0_delta = broadcast_i16x16(
-    x_delta * n0_x * 16
-  );
-  i16x16 v_e1_delta = broadcast_i16x16(
-    x_delta * n1_x * 16
-  );
-  i16x16 v_e2_delta = broadcast_i16x16(
-    x_delta * n2_x * 16
-  );
-//  print_i16x16(v_e0_delta);
-//  print_i16x16(v_e1_delta);
-//  print_i16x16(v_e2_delta);
-  i8x16 v_value_full = broadcast_i8x16(value);
-  i8x16 v_value_partial = broadcast_i8x16(0x40);
-  // clang-format on
-  for (int16_t y = min_y; y <= max_y; y += y_delta) {
-    i8x16 *row = (i8x16 *)(size_t)(
-        (uint8_t *)image +
-        (((uint32_t)y >> height_subpixel_precision) << width_pow) +
-        ((uint32_t)min_x >> width_subpixel_precision));
-    int16_t e0 = n0_x * (min_x - x0) + n0_y * (y - y0);
-    int16_t e1 = n1_x * (min_x - x1) + n1_y * (y - y1);
-    int16_t e2 = n2_x * (min_x - x2) + n2_y * (y - y2);
-    i16x16 v_e0 = broadcast_i16x16(e0);
-    i16x16 v_e1 = broadcast_i16x16(e1);
-    i16x16 v_e2 = broadcast_i16x16(e2);
-    v_e0 = add_si16x16(v_e0, v_e0_init);
-    v_e1 = add_si16x16(v_e1, v_e1_init);
-    v_e2 = add_si16x16(v_e2, v_e2_init);
-    for (int16_t x = min_x; x <= max_x; x += x_delta * 16) {
-
-      uint32_t e0_sign = extract_sign_i16x16(v_e0);
-      uint32_t e1_sign = extract_sign_i16x16(v_e1);
-      uint32_t e2_sign = extract_sign_i16x16(v_e2);
-      uint32_t mask = (e0_sign | e1_sign | e2_sign);
-      if (mask == 0) {
-        *row = v_value_full;
-      } else if (mask != 0xffffffffu) {
-        *row = v_value_partial;
-      }
-      v_e0 = add_si16x16(v_e0, v_e0_delta);
-      v_e1 = add_si16x16(v_e1, v_e1_delta);
-      v_e2 = add_si16x16(v_e2, v_e2_delta);
-      row += 1;
-    }
-  }
-}
-
-void rasterize_triangle_naive_256x256(float _x0, float _y0, float _x1,
-                                      float _y1, float _x2, float _y2,
-                                      uint8_t *image, uint8_t value) {
+void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
+                                                float _y1, float _x2, float _y2,
+                                                Classified_Tile *tile_buffer,
+                                                uint16_t *tile_count) {
   int16_t pixel_precision = 8;
   float k = (float)(1 << pixel_precision);
   int16_t upper_bound = (int16_t)((int16_t)1 << 8) - (int16_t)1;
@@ -736,108 +417,124 @@ void rasterize_triangle_naive_256x256(float _x0, float _y0, float _x1,
   int16_t max_y = MAX(y0, MAX(y1, y2));
 
   min_x &= (~0x1f);
-  // Aligned to 32 bytes
-  ASSERT_ALWAYS(((size_t)image & 0x1fu) == 0);
+  // Work on 4 x 4 tiles
+  //   x 00 01 10 11
+  //  y _____________
+  // 00 |_0|_1|_2|_3|
+  // 01 |_4|_5|_6|_7|
+  // 10 |_8|_9|10|11|
+  // 11 |12|13|14|15|
+  //
   // clang-format off
   i16x16 v_e0_init = init_i16x16(
-    n0_x * 0,
-    n0_x * 1,
-    n0_x * 2,
-    n0_x * 3,
-    n0_x * 4,
-    n0_x * 5,
-    n0_x * 6,
-    n0_x * 7,
-    n0_x * 8,
-    n0_x * 9,
-    n0_x * 10,
-    n0_x * 11,
-    n0_x * 12,
-    n0_x * 13,
-    n0_x * 14,
-    n0_x * 15
+    n0_x * 0 + n0_y * 0,
+    n0_x * 1 + n0_y * 0,
+    n0_x * 2 + n0_y * 0,
+    n0_x * 3 + n0_y * 0,
+    n0_x * 0 + n0_y * 1,
+    n0_x * 1 + n0_y * 1,
+    n0_x * 2 + n0_y * 1,
+    n0_x * 3 + n0_y * 1,
+    n0_x * 0 + n0_y * 2,
+    n0_x * 1 + n0_y * 2,
+    n0_x * 2 + n0_y * 2,
+    n0_x * 3 + n0_y * 2,
+    n0_x * 0 + n0_y * 3,
+    n0_x * 1 + n0_y * 3,
+    n0_x * 2 + n0_y * 3,
+    n0_x * 3 + n0_y * 3
   );
   i16x16 v_e1_init = init_i16x16(
-    n1_x * 0,
-    n1_x * 1,
-    n1_x * 2,
-    n1_x * 3,
-    n1_x * 4,
-    n1_x * 5,
-    n1_x * 6,
-    n1_x * 7,
-    n1_x * 8,
-    n1_x * 9,
-    n1_x * 10,
-    n1_x * 11,
-    n1_x * 12,
-    n1_x * 13,
-    n1_x * 14,
-    n1_x * 15
+    n1_x * 0 + n1_y * 0,
+    n1_x * 1 + n1_y * 0,
+    n1_x * 2 + n1_y * 0,
+    n1_x * 3 + n1_y * 0,
+    n1_x * 0 + n1_y * 1,
+    n1_x * 1 + n1_y * 1,
+    n1_x * 2 + n1_y * 1,
+    n1_x * 3 + n1_y * 1,
+    n1_x * 0 + n1_y * 2,
+    n1_x * 1 + n1_y * 2,
+    n1_x * 2 + n1_y * 2,
+    n1_x * 3 + n1_y * 2,
+    n1_x * 0 + n1_y * 3,
+    n1_x * 1 + n1_y * 3,
+    n1_x * 2 + n1_y * 3,
+    n1_x * 3 + n1_y * 3
   );
   i16x16 v_e2_init = init_i16x16(
-    n2_x * 0,
-    n2_x * 1,
-    n2_x * 2,
-    n2_x * 3,
-    n2_x * 4,
-    n2_x * 5,
-    n2_x * 6,
-    n2_x * 7,
-    n2_x * 8,
-    n2_x * 9,
-    n2_x * 10,
-    n2_x * 11,
-    n2_x * 12,
-    n2_x * 13,
-    n2_x * 14,
-    n2_x * 15
+    n2_x * 0 + n2_y * 0,
+    n2_x * 1 + n2_y * 0,
+    n2_x * 2 + n2_y * 0,
+    n2_x * 3 + n2_y * 0,
+    n2_x * 0 + n2_y * 1,
+    n2_x * 1 + n2_y * 1,
+    n2_x * 2 + n2_y * 1,
+    n2_x * 3 + n2_y * 1,
+    n2_x * 0 + n2_y * 2,
+    n2_x * 1 + n2_y * 2,
+    n2_x * 2 + n2_y * 2,
+    n2_x * 3 + n2_y * 2,
+    n2_x * 0 + n2_y * 3,
+    n2_x * 1 + n2_y * 3,
+    n2_x * 2 + n2_y * 3,
+    n2_x * 3 + n2_y * 3
   );
-  i16x16 v_e0_delta = broadcast_i16x16(
-    n0_x * 16
+  i16x16 v_e0_delta_x = broadcast_i16x16(
+    n0_x * 4
   );
-  i16x16 v_e1_delta = broadcast_i16x16(
-    n1_x * 16
+  i16x16 v_e0_delta_y = broadcast_i16x16(
+    n0_y * 4
   );
-  i16x16 v_e2_delta = broadcast_i16x16(
-    n2_x * 16
+  i16x16 v_e1_delta_x = broadcast_i16x16(
+    n1_x * 4
   );
-//  print_i16x16(v_e0_delta);
-//  print_i16x16(v_e1_delta);
-//  print_i16x16(v_e2_delta);
-  i8x16 v_value_full = broadcast_i8x16(value);
-  i8x16 v_value_partial = broadcast_i8x16(0x40);
+  i16x16 v_e1_delta_y = broadcast_i16x16(
+    n1_y * 4
+  );
+  i16x16 v_e2_delta_x = broadcast_i16x16(
+    n2_x * 4
+  );
+  i16x16 v_e2_delta_y = broadcast_i16x16(
+    n2_y * 4
+  );
+  int16_t e0_0 = n0_x * (min_x - x0) + n0_y * (min_y - y0);
+  int16_t e1_0 = n1_x * (min_x - x1) + n1_y * (min_y - y1);
+  int16_t e2_0 = n2_x * (min_x - x2) + n2_y * (min_y - y2);
+  i16x16 v_e0_0 = broadcast_i16x16(e0_0);
+  i16x16 v_e1_0 = broadcast_i16x16(e1_0);
+  i16x16 v_e2_0 = broadcast_i16x16(e2_0);
+  v_e0_0 = add_si16x16(v_e0_0, v_e0_init);
+  v_e1_0 = add_si16x16(v_e1_0, v_e1_init);
+  v_e2_0 = add_si16x16(v_e2_0, v_e2_init);
+  uint8_t min_y_tile = 0xff & (min_y >> 2);
+  uint8_t max_y_tile = 0xff & (max_y >> 2);
+  uint8_t min_x_tile = 0xff & (min_x >> 2);
+  uint8_t max_x_tile = 0xff & (max_x >> 2);
   // clang-format on
-  for (int16_t y = min_y; y <= max_y; y += 1) {
-    i8x16 *row =
-        (i8x16 *)(size_t)((uint8_t *)image + ((uint32_t)y << 8) + min_x);
-    int16_t e0 = n0_x * (min_x - x0) + n0_y * (y - y0);
-    int16_t e1 = n1_x * (min_x - x1) + n1_y * (y - y1);
-    int16_t e2 = n2_x * (min_x - x2) + n2_y * (y - y2);
-    i16x16 v_e0 = broadcast_i16x16(e0);
-    i16x16 v_e1 = broadcast_i16x16(e1);
-    i16x16 v_e2 = broadcast_i16x16(e2);
-    v_e0 = add_si16x16(v_e0, v_e0_init);
-    v_e1 = add_si16x16(v_e1, v_e1_init);
-    v_e2 = add_si16x16(v_e2, v_e2_init);
-    for (int16_t x = min_x; x <= max_x; x += 16) {
-
-      uint32_t e0_sign = extract_sign_i16x16(v_e0);
-      uint32_t e1_sign = extract_sign_i16x16(v_e1);
-      uint32_t e2_sign = extract_sign_i16x16(v_e2);
-      uint32_t mask = // e1_sign;
-          (e0_sign | e1_sign | e2_sign);
-      if (mask == 0) {
-        *row = v_value_full;
-      } else if (mask != 0xffffffffu) {
-        *row = v_value_partial;
+  *tile_count = 0;
+  // ~15 cycles per tile
+  for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
+    i16x16 v_e0_1 = v_e0_0;
+    i16x16 v_e1_1 = v_e1_0;
+    i16x16 v_e2_1 = v_e2_0;
+    for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
+      uint16_t e0_sign_0 = extract_sign_i16x16(v_e0_1);
+      uint16_t e1_sign_0 = extract_sign_i16x16(v_e1_1);
+      uint16_t e2_sign_0 = extract_sign_i16x16(v_e2_1);
+      uint16_t mask_0 = (e0_sign_0 | e1_sign_0 | e2_sign_0);
+      if (mask_0 == 0 || mask_0 != 0xffffu) {
+        tile_buffer[*tile_count] = {x, y, (uint16_t)~mask_0};
+        *tile_count = *tile_count + 1;
       }
-      v_e0 = add_si16x16(v_e0, v_e0_delta);
-      v_e1 = add_si16x16(v_e1, v_e1_delta);
-      v_e2 = add_si16x16(v_e2, v_e2_delta);
-      row += 1;
+      v_e0_1 = add_si16x16(v_e0_1, v_e0_delta_x);
+      v_e1_1 = add_si16x16(v_e1_1, v_e1_delta_x);
+      v_e2_1 = add_si16x16(v_e2_1, v_e2_delta_x);
     }
-  }
+    v_e0_0 = add_si16x16(v_e0_0, v_e0_delta_y);
+    v_e1_0 = add_si16x16(v_e1_0, v_e1_delta_y);
+    v_e2_0 = add_si16x16(v_e2_0, v_e2_delta_y);
+  };
 }
 
 #ifdef RASTER_EXE
@@ -860,48 +557,27 @@ int main(int argc, char **argv) {
   float test_y1 = 0.0f;
   float test_x2 = 0.25f;
   float test_y2 = 0.25f;
-  PRINT_CLOCKS(rasterize_triangle_naive_0(
+  // ~5k cycles
+  Classified_Tile tiles[0x1000];
+  uint16_t tile_count = 0;
+  PRINT_CLOCKS(rasterize_triangle_tiled_4x4_256x256_defer(
       // clang-format off
-        test_x0, test_y0, // p0
-        test_x1, test_y1, // p1
-        test_x2, test_y2, // p2
-        image_i8, width, height, 0xff
+          test_x0, test_y0, // p0
+          test_x1, test_y1, // p1
+          test_x2 + 0.5f, test_y2 + 0.5f, // p2
+          &tiles[0], &tile_count
       // clang-format on
       ));
-
-  PRINT_CLOCKS(rasterize_triangle_naive_2(
-      // clang-format off
-        test_x0 + 0.25f, test_y0, // p0
-        test_x1 + 0.25f, test_y1, // p1
-        test_x2 + 0.25f, test_y2, // p2
-        image_i8, width_pow, height_pow, 0xff
-      // clang-format on
-      ));
-
-  PRINT_CLOCKS(rasterize_triangle_naive_3(
-      // clang-format off
-        test_x0, test_y0 + 0.25f, // p0
-        test_x1, test_y1 + 0.25f, // p1
-        test_x2, test_y2 + 0.25f, // p2
-        image_i8, width_pow, height_pow, 0xff
-      // clang-format on
-      ));
-  PRINT_CLOCKS(rasterize_triangle_naive_4(
-      // clang-format off
-        test_x0 + 0.25f, test_y0 + 0.25f, // p0
-        test_x1 + 0.25f, test_y1 + 0.25f, // p1
-        test_x2 + 0.25f, test_y2 + 0.25f, // p2
-        image_i8, width_pow, height_pow, 0xff
-      // clang-format on
-      ));
-  PRINT_CLOCKS(rasterize_triangle_naive_256x256(
-      // clang-format off
-        test_x0 + 0.25f, test_y0 + 0.5f, // p0
-        test_x1 + 0.25f, test_y1 + 0.5f, // p1
-        test_x2 + 0.25f, test_y2 + 0.5f, // p2
-        image_i8, 0xff
-      // clang-format on
-      ));
+  PRINT_CLOCKS({
+    i8x16 *data = (i8x16 *)((size_t)image_i8 & (~0x1fULL));
+    i8x16 v_value = broadcast_i8x16(0xff);
+    ito(tile_count) {
+      uint8_t x = tiles[i].x;
+      uint8_t y = tiles[i].y;
+      uint32_t offset = tile_coord((uint32_t)x * 4, (uint32_t)y * 4, 8, 2);
+      data[offset / 16] = unpack_mask_i1x16(tiles[i].mask);
+    }
+  });
   //  ito(1000) {
   //    rasterize_triangle_naive_4(
   //        // clang-format off
@@ -912,7 +588,7 @@ int main(int argc, char **argv) {
   //        // clang-format on
   //    );
   //  }
-  write_image_2d_i8_ppm("image.ppm", image_i8, width * 1, width, height);
+  write_image_2d_i8_ppm_tiled("image.ppm", image_i8, width_pow, 2);
   return 0;
 }
 #endif
