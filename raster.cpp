@@ -295,7 +295,8 @@ inline int32_t extract_sign_i32x8(i32x8 v) {
 // two bits for each lane with total of 32 bits per 16 lanes
 inline uint16_t extract_sign_i16x16(i16x16 v) {
   uint32_t mask_i8 = (uint32_t)_mm256_movemask_epi8(v);
-  mask_i8 = _pext_u32(mask_i8, (uint32_t)0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10u);
+  mask_i8 = _pext_u32(
+      mask_i8, (uint32_t)0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10u);
   return (uint16_t)mask_i8;
 }
 // maybe use _mm256_set1_epi32/16?
@@ -322,12 +323,10 @@ inline i64x4 broadcast_i64x4(int64_t v) {
 inline i8x16 unpack_mask_i1x16(uint16_t mask) {
   uint64_t low = 0;
   uint64_t high = 0;
-  ito(8)
-    low |= ((0xff * (((uint64_t)mask >> i) & 1ull)) << (8 * i));
+  ito(8) low |= ((0xff * (((uint64_t)mask >> i) & 1ull)) << (8 * i));
   mask >>= 8;
-  ito(8)
-    high |=  ((0xff * (((uint64_t)mask >> i) & 1ull)) << (8 * i));
-  return _mm_set_epi64(*(__m64*)&high, *(__m64*)&low);
+  ito(8) high |= ((0xff * (((uint64_t)mask >> i) & 1ull)) << (8 * i));
+  return _mm_set_epi64(*(__m64 *)&high, *(__m64 *)&low);
 }
 __m256i get_mask3(const uint32_t mask) {
   i32x8 vmask = broadcast_i32x8((int32_t)mask);
@@ -340,8 +339,8 @@ __m256i get_mask3(const uint32_t mask) {
 }
 
 inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
-  // the problem with just avx2 shuffle is that you can't move bites
-  // across 128 bit (16 bytes) boundary.
+  // the problem with just avx2 shuffle is that you can't move bytes
+  // across 128 bit (16 byte) boundary.
   // a shuffle mask is a set of 32 bytes each representing an address
   // for the destination register to grab from.
   // the 8th bit says to put zero. [3:0] bits in each byte is an address
@@ -357,7 +356,7 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
   // 0x70 == 0111'0000 is meant to have 8th bit set whenever an address is
   // bigger than 4 bits(crosses 128 bit for lowest lane) so the destination is
   // zeroed. 0xF0 == 1111'0000 is meant to nullify the destination whenever an
-  // address is lesser than 4 bits(crosses 128 bits for highest lane)
+  // address is less than 16(0b10000) (crosses 128 bits for the high lane)
   //////////////////////////////////////////////
   // Second pass: move across 128 bit lanes
   // _mm256_permute4x64_epi64 is used to make different 128 bit lanes accessible
@@ -383,11 +382,15 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
   return ymm_or(local_shuffle, far_pass);
 }
 
+#pragma push pack(1)
 struct Classified_Tile {
   uint8_t x;
   uint8_t y;
   uint16_t mask;
 };
+#pragma pop
+
+static_assert(sizeof(Classified_Tile) == 4, "incorrect padding");
 
 void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
                                                 float _y1, float _x2, float _y2,
@@ -513,6 +516,7 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
   uint8_t max_x_tile = 0xff & (max_x >> 2);
   // clang-format on
   *tile_count = 0;
+  uint16_t _tile_count = 0;
   // ~15 cycles per tile
   for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
     i16x16 v_e0_1 = v_e0_0;
@@ -524,8 +528,8 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
       uint16_t e2_sign_0 = extract_sign_i16x16(v_e2_1);
       uint16_t mask_0 = (e0_sign_0 | e1_sign_0 | e2_sign_0);
       if (mask_0 == 0 || mask_0 != 0xffffu) {
-        tile_buffer[*tile_count] = {x, y, (uint16_t)~mask_0};
-        *tile_count = *tile_count + 1;
+        tile_buffer[_tile_count] = {x, y, (uint16_t)~mask_0};
+        _tile_count = _tile_count + 1;
       }
       v_e0_1 = add_si16x16(v_e0_1, v_e0_delta_x);
       v_e1_1 = add_si16x16(v_e1_1, v_e1_delta_x);
@@ -535,6 +539,7 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
     v_e1_0 = add_si16x16(v_e1_0, v_e1_delta_y);
     v_e2_0 = add_si16x16(v_e2_0, v_e2_delta_y);
   };
+  *tile_count = _tile_count;
 }
 
 #ifdef RASTER_EXE

@@ -113,51 +113,75 @@
 // TODO(aschrein): Nuke this from the orbit
 namespace vki {
 struct VkDevice_Impl {
-  uint32_t id;
-  void release() { memset(this, 0, sizeof(*this)); }
+  uint32_t refcnt;
+  void release() {
+    if (--refcnt == 0)
+      memset(this, 0, sizeof(*this));
+  }
 };
 struct VkSurfaceKHR_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   xcb_connection_t *connection;
   xcb_window_t window;
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0)
+      memset(this, 0, sizeof(*this));
+  }
 };
 struct VkPhysicalDevice_Impl {
-  uint32_t id;
-  void release() { memset(this, 0, sizeof(*this)); }
+  uint32_t refcnt;
+  void release() {
+    if (--refcnt == 0)
+      memset(this, 0, sizeof(*this));
+  }
 };
 
 struct VkInstance_Impl {
-  uint32_t id;
-  void release() { memset(this, 0, sizeof(*this)); }
+  uint32_t refcnt;
+  void release() {
+    if (--refcnt == 0)
+      memset(this, 0, sizeof(*this));
+  }
 };
 struct VkDeviceMemory_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   uint8_t *ptr;
   size_t size;
   void release() {
-    id = 0;
-    if (ptr != NULL)
-      free(ptr);
-    size = 0;
+    if (--refcnt == 0) {
+      if (ptr != NULL)
+        free(ptr);
+      size = 0;
+    }
   }
 };
 struct VkBuffer_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   VkDeviceMemory_Impl *mem;
   size_t offset;
   size_t size;
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0) {
+      mem->release();
+      memset(this, 0, sizeof(*this));
+    }
+  }
+  uint8_t *get_ptr() { return mem->ptr + this->offset; }
 };
 struct VkBufferView_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   VkBuffer_Impl *buf;
   VkFormat format;
   size_t offset;
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0) {
+      buf->release();
+      memset(this, 0, sizeof(*this));
+    }
+  }
 };
 struct VkImage_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   VkDeviceMemory_Impl *mem;
   size_t offset;
   size_t size;
@@ -167,47 +191,66 @@ struct VkImage_Impl {
   uint32_t arrayLayers;
   VkSampleCountFlagBits samples;
   VkImageLayout initialLayout;
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0) {
+      mem->release();
+      memset(this, 0, sizeof(*this));
+    }
+  }
 };
 struct VkDescriptorSetLayout_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   uint32_t bindingCount;
   VkDescriptorSetLayoutBinding *pBindings;
   void release() {
-    if (pBindings != NULL)
-      free(pBindings);
-    memset(this, 0, sizeof(*this));
+    if (--refcnt == 0) {
+      if (pBindings != NULL)
+        free(pBindings);
+      memset(this, 0, sizeof(*this));
+    }
   }
 };
 struct VkPipelineLayout_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   uint32_t setLayoutCount;
   VkDescriptorSetLayout_Impl *pSetLayouts[0x10];
   uint32_t pushConstantRangeCount;
   VkPushConstantRange pPushConstantRanges[0x10];
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0) {
+      ito(setLayoutCount) pSetLayouts[i]->release();
+      memset(this, 0, sizeof(*this));
+    }
+  }
 };
 struct VkImageView_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   VkImage_Impl *img;
   VkImageViewType type;
   VkFormat format;
   VkComponentMapping components;
   VkImageSubresourceRange subresourceRange;
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0) {
+      img->release();
+      memset(this, 0, sizeof(*this));
+    }
+  }
 };
 extern "C" void *compile_spirv(uint32_t const *pCode, size_t code_size);
 extern "C" void release_spirv(void *ptr);
 struct VkShaderModule_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   void *jitted_code;
   void init(uint32_t const *pCode, size_t code_size) {
     jitted_code = compile_spirv(pCode, code_size);
   }
   void release() {
-    if (jitted_code != NULL)
-      release_spirv(jitted_code);
-    memset(this, 0, sizeof(*this));
+    if (--refcnt == 0) {
+      if (jitted_code != NULL)
+        release_spirv(jitted_code);
+      memset(this, 0, sizeof(*this));
+    }
   }
 };
 static constexpr uint32_t MAX_OBJECTS = 1000;
@@ -220,7 +263,7 @@ template <typename T, int N = MAX_OBJECTS> struct Pool {
   void find_next_free_slot() {
     bool first_attempt = true;
     while (true) {
-      while (next_free_slot < N && pool[next_free_slot].id != 0) {
+      while (next_free_slot < N && pool[next_free_slot].refcnt != 0) {
         next_free_slot += 1;
       }
       if (next_free_slot != N)
@@ -233,15 +276,15 @@ template <typename T, int N = MAX_OBJECTS> struct Pool {
   T *alloc() {
     find_next_free_slot();
     T *out = &pool[next_free_slot];
-    ASSERT_ALWAYS(out->id == 0);
+    ASSERT_ALWAYS(out->refcnt == 0);
     memset(out, 0, sizeof(T));
-    out->id = next_free_slot + 1;
+    out->refcnt = 1;
     return out;
   }
 };
 
 struct VkSwapChain_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   uint32_t cur_image = 0;
   VkImage_Impl images[3];
   uint32_t image_count;
@@ -251,27 +294,46 @@ struct VkSwapChain_Impl {
   VkSurfaceKHR_Impl *surface;
   void present() {}
   void release() {
-    for (auto &image : images) {
-      if (image.mem != 0) {
-        image.mem->release();
+    if (--refcnt == 0) {
+      surface->release();
+      for (auto &image : images) {
+        if (image.mem != 0) {
+          image.mem->release();
+        }
       }
+      MEMZERO((*this));
     }
-    MEMZERO((*this));
   }
 };
 
 struct VkRenderPass_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   uint32_t attachmentCount;
   VkAttachmentDescription pAttachments[10];
   uint32_t subpassCount;
-  VkSubpassDescription pSubpasses[10];
+  struct VkSubpassDescription_Impl {
+    VkSubpassDescriptionFlags flags;
+    VkPipelineBindPoint pipelineBindPoint;
+    uint32_t inputAttachmentCount;
+    VkAttachmentReference pInputAttachments[0x10];
+    uint32_t colorAttachmentCount;
+    VkAttachmentReference pColorAttachments[0x10];
+    VkAttachmentReference pResolveAttachments[0x10];
+    bool has_depth_stencil_attachment;
+    VkAttachmentReference pDepthStencilAttachment;
+    uint32_t preserveAttachmentCount;
+    uint32_t pPreserveAttachments[0x10];
+  };
+  VkSubpassDescription_Impl pSubpasses[10];
   uint32_t dependencyCount;
   VkSubpassDependency pDependencies[10];
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0)
+      memset(this, 0, sizeof(*this));
+  }
 };
 struct VkPipeline_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   bool is_graphics;
   // Compute state
   VkShaderModule_Impl *cs;
@@ -332,26 +394,43 @@ struct VkPipeline_Impl {
   VkPipelineLayout_Impl *layout;
   VkRenderPass_Impl *renderPass;
   uint32_t subpass;
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0) {
+      if (cs != NULL)
+        cs->release();
+      if (vs != NULL)
+        vs->release();
+      if (ps != NULL)
+        ps->release();
+      layout->release();
+      renderPass->release();
+      memset(this, 0, sizeof(*this));
+    }
+  }
 };
 struct VkDescriptorPool_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   uint32_t maxSets;
   uint32_t poolSizeCount;
   VkDescriptorPoolSize *pPoolSizes;
   void release() {
-    if (pPoolSizes != NULL) {
-      free(pPoolSizes);
+    if (--refcnt == 0) {
+      if (pPoolSizes != NULL) {
+        free(pPoolSizes);
+      }
+      memset(this, 0, sizeof(*this));
     }
-    memset(this, 0, sizeof(*this));
   }
 };
 struct VkSampler_Impl {
-  uint32_t id;
-  void release() { memset(this, 0, sizeof(*this)); }
+  uint32_t refcnt;
+  void release() {
+    if (--refcnt == 0)
+      memset(this, 0, sizeof(*this));
+  }
 };
 struct VkDescriptorSet_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   VkDescriptorPool_Impl *pool;
   VkDescriptorSetLayout_Impl *layout;
   struct Slot {
@@ -365,13 +444,27 @@ struct VkDescriptorSet_Impl {
   };
   Slot *slots;
   void release() {
-    if (slots)
-      free(slots);
-    memset(this, 0, sizeof(*this));
+    if (--refcnt == 0) {
+      ito(layout->bindingCount) {
+        if (slots[i].buffer != NULL)
+          slots[i].buffer->release();
+        if (slots[i].image_view != NULL)
+          slots[i].image_view->release();
+        if (slots[i].buf_view != NULL)
+          slots[i].buf_view->release();
+        if (slots[i].sampler != NULL)
+          slots[i].sampler->release();
+      }
+      layout->release();
+      pool->release();
+      if (slots)
+        free(slots);
+      memset(this, 0, sizeof(*this));
+    }
   }
 };
 struct VkCommandBuffer_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   uint8_t *data;
   size_t data_size;
   size_t data_cursor;
@@ -403,10 +496,12 @@ struct VkCommandBuffer_Impl {
     data_cursor = 0;
   }
   void release() {
-    if (data != NULL) {
-      free(data);
+    if (--refcnt == 0) {
+      if (data != NULL) {
+        free(data);
+      }
+      memset(this, 0, sizeof(*this));
     }
-    memset(this, 0, sizeof(*this));
   }
   template <typename T> T consume() {
     T out = {};
@@ -448,8 +543,11 @@ OBJ_POOL(VkSwapChain)
 
 #define DECL_IMPL(type)                                                        \
   struct type##_Impl {                                                         \
-    uint32_t id;                                                               \
-    void release() { memset(this, 0, sizeof(*this)); }                         \
+    uint32_t refcnt;                                                           \
+    void release() {                                                           \
+      if (--refcnt == 0)                                                       \
+        memset(this, 0, sizeof(*this));                                        \
+    }                                                                          \
   };
 
 #define OBJ_POOL_DUMMY(type)                                                   \
@@ -464,7 +562,7 @@ OBJ_POOL_DUMMY(VkEvent)
 OBJ_POOL_DUMMY(VkPipelineCache)
 
 struct VkFramebuffer_Impl {
-  uint32_t id;
+  uint32_t refcnt;
   VkFramebufferCreateFlags flags;
   VkRenderPass_Impl *renderPass;
   uint32_t attachmentCount;
@@ -472,13 +570,18 @@ struct VkFramebuffer_Impl {
   uint32_t width;
   uint32_t height;
   uint32_t layers;
-  void release() { memset(this, 0, sizeof(*this)); }
+  void release() {
+    if (--refcnt == 0) {
+      ito(attachmentCount) pAttachments[i]->release();
+      renderPass->release();
+      memset(this, 0, sizeof(*this));
+    }
+  }
 };
 OBJ_POOL(VkFramebuffer)
 
 #define ALLOC_VKOBJ(type) (type)(void *) vki::type##_pool.alloc()
 #define ALLOC_VKOBJ_T(type) vki::type##_pool.alloc()
-#define GET_VKOBJ(type, id) (&vki::type##_pool.pool[id])
 #define RELEASE_VKOBJ(obj, type)                                               \
   do {                                                                         \
     NOTNULL(obj);                                                              \
@@ -692,66 +795,109 @@ struct PushConstants {
   uint32_t size;
   // uint8_t pData[size] follows the cmd in the command buffer
 };
-void execute_commands(VkCommandBuffer_Impl *cmd_buf) {
-  while (cmd_buf->has_items()) {
-    cmd::Cmd_t op = cmd_buf->consume<Cmd_t>();
-    VkPipeline_Impl *graphics_pipeline = NULL;
-    VkPipeline_Impl *compute_pipeline = NULL;
-    VkRenderPass_Impl *render_pass = NULL;
-    VkFramebuffer_Impl *framebuffer = NULL;
-    VkDescriptorSet_Impl *descriptor_sets[0x10] = {};
-    VkBuffer_Impl *index_buffer = NULL;
-    VkDeviceSize index_buffer_offset = 0;
-    VkIndexType index_type = VkIndexType::VK_INDEX_TYPE_UINT32;
-    VkBuffer_Impl *vertex_buffers[0x10] = {};
-    VkDeviceSize vertex_buffer_offsets[0x10] = {};
-    VkRect2D render_area = {};
-    uint32_t viewport_count = 0;
-    VkViewport viewports[0x10] = {};
-    switch (op) {
-    case Cmd_t::BindIndexBuffer: {
-      cmd::BindIndexBuffer cmd = cmd_buf->consume<cmd::BindIndexBuffer>();
-      index_buffer = cmd.buffer;
-      index_type = cmd.indexType;
-      index_buffer_offset = cmd.offset;
-      break;
-    }
-    case Cmd_t::BindVertexBuffers: {
-      cmd::BindVertexBuffers cmd = cmd_buf->consume<cmd::BindVertexBuffers>();
-      ito(cmd.bindingCount) {
-        vertex_buffers[i + cmd.firstBinding] = cmd.pBuffers[i];
-        vertex_buffer_offsets[i + cmd.firstBinding] = cmd.pOffsets[i];
+struct GPU_State { // doesn't do any ref counting here
+  VkPipeline_Impl *graphics_pipeline = NULL;
+  VkPipeline_Impl *compute_pipeline = NULL;
+  VkRenderPass_Impl *render_pass = NULL;
+  VkFramebuffer_Impl *framebuffer = NULL;
+  VkDescriptorSet_Impl *descriptor_sets[0x10] = {};
+  VkBuffer_Impl *index_buffer = NULL;
+  VkDeviceSize index_buffer_offset = 0;
+  VkIndexType index_type = VkIndexType::VK_INDEX_TYPE_UINT32;
+  VkBuffer_Impl *vertex_buffers[0x10] = {};
+  VkDeviceSize vertex_buffer_offsets[0x10] = {};
+  VkRect2D render_area = {};
+  uint32_t viewport_count = 0;
+  VkViewport viewports[0x10] = {};
+  void reset_state() { memset(this, 0, sizeof(*this)); }
+  void execute_commands(VkCommandBuffer_Impl *cmd_buf) {
+    reset_state();
+    while (cmd_buf->has_items()) {
+      cmd::Cmd_t op = cmd_buf->consume<Cmd_t>();
+      switch (op) {
+      case Cmd_t::BindIndexBuffer: {
+        cmd::BindIndexBuffer cmd = cmd_buf->consume<cmd::BindIndexBuffer>();
+        index_buffer = cmd.buffer;
+        index_type = cmd.indexType;
+        index_buffer_offset = cmd.offset;
+        break;
       }
-      break;
-    }
-    case Cmd_t::BindDescriptorSets: {
-      cmd::BindDescriptorSets cmd = cmd_buf->consume<cmd::BindDescriptorSets>();
-      ASSERT_ALWAYS(cmd.dynamicOffsetCount == 0);
-      ito(cmd.descriptorSetCount) {
-        descriptor_sets[i + cmd.firstSet] = cmd.pDescriptorSets[i];
+      case Cmd_t::BindVertexBuffers: {
+        cmd::BindVertexBuffers cmd = cmd_buf->consume<cmd::BindVertexBuffers>();
+        ito(cmd.bindingCount) {
+          vertex_buffers[i + cmd.firstBinding] = cmd.pBuffers[i];
+          vertex_buffer_offsets[i + cmd.firstBinding] = cmd.pOffsets[i];
+        }
+        break;
       }
-      break;
-    }
-    case Cmd_t::SetViewport: {
-      cmd::SetViewport cmd = cmd_buf->consume<cmd::SetViewport>();
-      ASSERT_ALWAYS(cmd.viewportCount == 1);
-      viewports[0] = cmd.pViewports[0];
-      viewport_count = 1;
-      break;
-    }
-    case Cmd_t::SetScissor: {
-      // TODO
-      break;
-    }
-    case Cmd_t::DrawIndexed: {
-
-      break;
-    }
-    default:
-      UNIMPLEMENTED;
+      case Cmd_t::BindDescriptorSets: {
+        cmd::BindDescriptorSets cmd =
+            cmd_buf->consume<cmd::BindDescriptorSets>();
+        ASSERT_ALWAYS(cmd.dynamicOffsetCount == 0);
+        ito(cmd.descriptorSetCount) {
+          descriptor_sets[i + cmd.firstSet] = cmd.pDescriptorSets[i];
+        }
+        break;
+      }
+      case Cmd_t::BindPipeline: {
+        cmd::BindPipeline cmd = cmd_buf->consume<cmd::BindPipeline>();
+        if (cmd.pipelineBindPoint ==
+            VkPipelineBindPoint::VK_PIPELINE_BIND_POINT_GRAPHICS) {
+          graphics_pipeline = cmd.pipeline;
+        } else {
+          compute_pipeline = cmd.pipeline;
+        }
+        break;
+      }
+      case Cmd_t::RenderPassBegin: {
+        cmd::RenderPassBegin cmd = cmd_buf->consume<cmd::RenderPassBegin>();
+        ASSERT_ALWAYS(cmd.renderPass != NULL);
+        render_pass = cmd.renderPass;
+        render_area = cmd.renderArea;
+        framebuffer = cmd.framebuffer;
+        ito(cmd.clearValueCount) {
+          // TODO
+          (void)cmd.pClearValues[i];
+        }
+        break;
+      }
+      case Cmd_t::RenderPassEnd: {
+        render_pass = NULL;
+        render_area = {};
+        framebuffer = NULL;
+        break;
+      }
+      case Cmd_t::SetViewport: {
+        cmd::SetViewport cmd = cmd_buf->consume<cmd::SetViewport>();
+        ASSERT_ALWAYS(cmd.viewportCount == 1);
+        viewports[0] = cmd.pViewports[0];
+        viewport_count = 1;
+        break;
+      }
+      case Cmd_t::CopyBuffer: {
+        cmd::CopyBuffer cmd = cmd_buf->consume<cmd::CopyBuffer>();
+        ito(cmd.regionCount) {
+          memcpy(cmd.dst->get_ptr() + cmd.pRegions[i].dstOffset,
+                 cmd.src->get_ptr() + cmd.pRegions[i].srcOffset,
+                 cmd.pRegions[i].size);
+        }
+        break;
+      }
+      case Cmd_t::SetScissor: {
+        cmd::SetScissor cmd = cmd_buf->consume<cmd::SetScissor>();
+        // TODO
+        break;
+      }
+      case Cmd_t::DrawIndexed: {
+        cmd::DrawIndexed cmd = cmd_buf->consume<cmd::DrawIndexed>();
+        break;
+      }
+      default:
+        UNIMPLEMENTED;
+      }
     }
   }
-}
+} g_gpu_state;
 } // namespace cmd
 #define WRITE_CMD(cmdbuf, cmd, type)                                           \
   {                                                                            \
@@ -1297,7 +1443,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue queue,
     jto(pSubmits[i].commandBufferCount) {
       vki::VkCommandBuffer_Impl *impl =
           (vki::VkCommandBuffer_Impl *)pSubmits[i].pCommandBuffers[j];
-      vki::cmd::execute_commands(impl);
+      vki::cmd::g_gpu_state.execute_commands(impl);
     }
   }
   return VK_SUCCESS;
@@ -1368,6 +1514,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindBufferMemory(VkDevice device,
   NOTNULL(buf_impl);
   NOTNULL(mem_impl);
   buf_impl->mem = mem_impl;
+  mem_impl->refcnt++;
   buf_impl->offset = memoryOffset;
   return VK_SUCCESS;
 }
@@ -1378,6 +1525,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkBindImageMemory(VkDevice device, VkImage image,
   vki::VkDeviceMemory_Impl *mem = (vki::VkDeviceMemory_Impl *)memory;
   vki::VkImage_Impl *impl = (vki::VkImage_Impl *)image;
   impl->mem = mem;
+  mem->refcnt++;
   impl->offset = memoryOffset;
   return VK_SUCCESS;
 }
@@ -1534,6 +1682,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateBufferView(
     const VkAllocationCallbacks *pAllocator, VkBufferView *pView) {
   vki::VkBufferView_Impl *impl = ALLOC_VKOBJ_T(VkBufferView);
   impl->buf = (vki::VkBuffer_Impl *)pCreateInfo->buffer;
+  impl->buf->refcnt++;
   impl->format = pCreateInfo->format;
   impl->offset = pCreateInfo->offset;
   *pView = (VkBufferView)impl;
@@ -1582,6 +1731,7 @@ vkCreateImageView(VkDevice device, const VkImageViewCreateInfo *pCreateInfo,
   vki::VkImage_Impl *img = (vki::VkImage_Impl *)pCreateInfo->image;
   vki::VkImageView_Impl *img_view = ALLOC_VKOBJ_T(VkImageView);
   img_view->img = img;
+  img->refcnt++;
   img_view->type = pCreateInfo->viewType;
   img_view->format = pCreateInfo->format;
   img_view->components = pCreateInfo->components;
@@ -1648,15 +1798,18 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(
   ito(createInfoCount) {
     vki::VkPipeline_Impl *impl = ALLOC_VKOBJ_T(VkPipeline);
     VkGraphicsPipelineCreateInfo info = pCreateInfos[i];
+    impl->is_graphics = true;
     jto(info.stageCount) {
       switch (info.pStages[j].stage) {
       case VkShaderStageFlagBits::VK_SHADER_STAGE_VERTEX_BIT: {
         impl->vs = (vki::VkShaderModule_Impl *)info.pStages[j].module;
+        impl->vs->refcnt++;
         ASSERT_ALWAYS(strcmp(info.pStages[j].pName, "main") == 0);
         break;
       }
       case VkShaderStageFlagBits::VK_SHADER_STAGE_FRAGMENT_BIT: {
         impl->ps = (vki::VkShaderModule_Impl *)info.pStages[j].module;
+        impl->ps->refcnt++;
         ASSERT_ALWAYS(strcmp(info.pStages[j].pName, "main") == 0);
         break;
       }
@@ -1722,7 +1875,9 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateGraphicsPipelines(
     jto(4) impl->OM_blend_state.blendConstants[j] =
         info.pColorBlendState->blendConstants[j];
     impl->layout = (vki::VkPipelineLayout_Impl *)info.layout;
+    impl->layout->refcnt++;
     impl->renderPass = (vki::VkRenderPass_Impl *)info.renderPass;
+    impl->renderPass->refcnt++;
     impl->subpass = info.subpass;
     ASSERT_ALWAYS(impl->subpass == 0);
     ASSERT_ALWAYS(info.pMultisampleState->rasterizationSamples ==
@@ -1759,6 +1914,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreatePipelineLayout(
   ito(impl->setLayoutCount) {
     impl->pSetLayouts[i] =
         (vki::VkDescriptorSetLayout_Impl *)pCreateInfo->pSetLayouts[i];
+    impl->pSetLayouts[i]->refcnt++;
   }
   ito(impl->pushConstantRangeCount) {
     impl->pPushConstantRanges[i] = pCreateInfo->pPushConstantRanges[i];
@@ -1838,10 +1994,15 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateDescriptorSets(
   ito(pAllocateInfo->descriptorSetCount) {
     vki::VkDescriptorSet_Impl *impl = ALLOC_VKOBJ_T(VkDescriptorSet);
     impl->pool = (vki::VkDescriptorPool_Impl *)pAllocateInfo->descriptorPool;
+    impl->pool->refcnt++;
     impl->layout =
         (vki::VkDescriptorSetLayout_Impl *)pAllocateInfo->pSetLayouts[i];
+    impl->layout->refcnt++;
     impl->slots = (vki::VkDescriptorSet_Impl::Slot *)malloc(
         sizeof(vki::VkDescriptorSet_Impl::Slot) * impl->layout->bindingCount);
+    memset(impl->slots, 0,
+           sizeof(vki::VkDescriptorSet_Impl::Slot) *
+               impl->layout->bindingCount);
     pDescriptorSets[i] = (VkDescriptorSet)impl;
   }
   return VK_SUCCESS;
@@ -1867,20 +2028,32 @@ VKAPI_ATTR void VKAPI_CALL vkUpdateDescriptorSets(
     ASSERT_ALWAYS(write.dstArrayElement == 0);
     impl->slots[write.dstBinding].type = write.descriptorType;
     if (write.pImageInfo != NULL) {
+      if (impl->slots[write.dstBinding].sampler != NULL)
+        impl->slots[write.dstBinding].sampler->release();
       impl->slots[write.dstBinding].sampler =
           (vki::VkSampler_Impl *)write.pImageInfo->sampler;
+      impl->slots[write.dstBinding].sampler->refcnt++;
+      if (impl->slots[write.dstBinding].image_view != NULL)
+        impl->slots[write.dstBinding].image_view->release();
       impl->slots[write.dstBinding].image_view =
           (vki::VkImageView_Impl *)write.pImageInfo->imageView;
+      impl->slots[write.dstBinding].image_view->refcnt++;
     }
     if (write.pBufferInfo != NULL) {
+      if (impl->slots[write.dstBinding].buffer != NULL)
+        impl->slots[write.dstBinding].buffer->release();
       impl->slots[write.dstBinding].buffer =
           (vki::VkBuffer_Impl *)write.pBufferInfo->buffer;
+      impl->slots[write.dstBinding].buffer->refcnt++;
       impl->slots[write.dstBinding].range = write.pBufferInfo->range;
       impl->slots[write.dstBinding].offset = write.pBufferInfo->offset;
     }
     if (write.pTexelBufferView != NULL) {
+      if (impl->slots[write.dstBinding].buf_view != NULL)
+        impl->slots[write.dstBinding].buf_view->release();
       impl->slots[write.dstBinding].buf_view =
           (vki::VkBufferView_Impl *)write.pTexelBufferView;
+      impl->slots[write.dstBinding].buf_view->refcnt++;
     }
   }
   ASSERT_ALWAYS(pDescriptorCopies == NULL);
@@ -1896,9 +2069,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateFramebuffer(
   impl->layers = pCreateInfo->layers;
   impl->attachmentCount = pCreateInfo->attachmentCount;
   ASSERT_ALWAYS(impl->attachmentCount < 0x10);
-  ito(impl->attachmentCount) impl->pAttachments[i] =
-      (vki::VkImageView_Impl *)pCreateInfo->pAttachments[i];
+  ito(impl->attachmentCount) {
+    impl->pAttachments[i] =
+        (vki::VkImageView_Impl *)pCreateInfo->pAttachments[i];
+    impl->pAttachments[i]->refcnt++;
+  }
   impl->renderPass = (vki::VkRenderPass_Impl *)pCreateInfo->renderPass;
+  impl->renderPass->refcnt++;
   *pFramebuffer = (VkFramebuffer)impl;
   return VK_SUCCESS;
 }
@@ -1920,8 +2097,30 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateRenderPass(
          sizeof(impl->pAttachments[0]) * impl->attachmentCount);
   impl->subpassCount = pCreateInfo->subpassCount;
   ASSERT_ALWAYS(impl->subpassCount < 10);
-  memcpy(impl->pSubpasses, pCreateInfo->pSubpasses,
-         sizeof(impl->pSubpasses[0]) * impl->subpassCount);
+  ito(impl->subpassCount) {
+    vki::VkRenderPass_Impl::VkSubpassDescription_Impl *simpl =
+        &impl->pSubpasses[i];
+    simpl->flags = pCreateInfo->pSubpasses[i].flags;
+    simpl->colorAttachmentCount =
+        pCreateInfo->pSubpasses[i].colorAttachmentCount;
+    simpl->inputAttachmentCount =
+        pCreateInfo->pSubpasses[i].inputAttachmentCount;
+    simpl->pipelineBindPoint = pCreateInfo->pSubpasses[i].pipelineBindPoint;
+    simpl->preserveAttachmentCount =
+        pCreateInfo->pSubpasses[i].preserveAttachmentCount;
+    jto(simpl->preserveAttachmentCount) simpl->pPreserveAttachments[j] =
+        pCreateInfo->pSubpasses[i].pPreserveAttachments[j];
+    jto(simpl->colorAttachmentCount) simpl->pColorAttachments[j] =
+        pCreateInfo->pSubpasses[i].pColorAttachments[j];
+    jto(simpl->inputAttachmentCount) simpl->pInputAttachments[j] =
+        pCreateInfo->pSubpasses[i].pInputAttachments[j];
+    ASSERT_ALWAYS(pCreateInfo->pSubpasses[i].pResolveAttachments == NULL);
+    if (pCreateInfo->pSubpasses[i].pDepthStencilAttachment != NULL) {
+      simpl->has_depth_stencil_attachment = true;
+      simpl->pDepthStencilAttachment =
+          pCreateInfo->pSubpasses[i].pDepthStencilAttachment[0];
+    }
+  }
   impl->dependencyCount = pCreateInfo->dependencyCount;
   ASSERT_ALWAYS(impl->dependencyCount < 10);
   memcpy(impl->pDependencies, pCreateInfo->pDependencies,
@@ -2486,6 +2685,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
                     xcb_get_geometry_reply(surface->connection, cookie, NULL));
   ASSERT_ALWAYS(pCreateInfo->minImageCount == 2);
   impl->surface = surface;
+  impl->surface->refcnt++;
   impl->width = pCreateInfo->imageExtent.width;
   impl->height = pCreateInfo->imageExtent.height;
   impl->format = pCreateInfo->imageFormat;
@@ -2506,7 +2706,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
     vki::VkDeviceMemory_Impl *mem = ALLOC_VKOBJ_T(VkDeviceMemory);
     mem->size = bpp * impl->width * impl->height;
     mem->ptr = (uint8_t *)malloc(mem->size);
-    impl->images[i].id = i + 1;
+    impl->images[i].refcnt = 1;
     impl->images[i].format = impl->format;
     impl->images[i].mem = mem;
     impl->images[i].size = mem->size;
@@ -2529,7 +2729,6 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesKHR(
     return VK_SUCCESS;
   }
   vki::VkSwapChain_Impl *impl = (vki::VkSwapChain_Impl *)swapchain;
-  ASSERT_ALWAYS(impl->id != 0);
   pSwapchainImages[0] = (VkImage)(void *)&impl->images[0];
   pSwapchainImages[1] = (VkImage)(void *)&impl->images[1];
   return VK_SUCCESS;
