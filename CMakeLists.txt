@@ -23,31 +23,41 @@ message(STATUS "LLVM_LIBRARY_LIST:" ${LLVM_LIBRARY_LIST})
 
 # ATTENTION: COPY PASTE
 # SIMD1 | sed 's/llvm_stdlib/llvm_stdlib_1/g'
+#message("${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm -o ${LLVM_TOOLS_BINARY_DIR}/spv_stdlib.ll")
 add_custom_command(
 OUTPUT llvm_stdlib_1.h
-DEPENDS ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll
-COMMAND python3 ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll 1
-                  > llvm_stdlib_1.ll &&
-                  ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_1.ll -o llvm_stdlib_1.bc &&
-                  xxd -i llvm_stdlib_1.bc  > llvm_stdlib_1.h
+DEPENDS ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
+        python3 ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll 1 > llvm_stdlib_1.ll &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_1.ll -o llvm_stdlib_1.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-as spv_stdlib.ll -o spv_stdlib.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-link spv_stdlib.bc llvm_stdlib_1.bc -o llvm_stdlib_1.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-dis llvm_stdlib_1.bc -o llvm_stdlib_1.final.ll &&
+        xxd -i llvm_stdlib_1.bc  > llvm_stdlib_1.h
 )
 # SIMD4
 add_custom_command(
 OUTPUT llvm_stdlib_4.h
-DEPENDS ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll
-COMMAND python3 ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll 4
-                  > llvm_stdlib_4.ll &&
-                  ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_4.ll -o llvm_stdlib_4.bc &&
-                  xxd -i llvm_stdlib_4.bc > llvm_stdlib_4.h
+DEPENDS ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
+        python3 ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll 4 > llvm_stdlib_4.ll &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_4.ll -o llvm_stdlib_4.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-as spv_stdlib.ll -o spv_stdlib.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-link spv_stdlib.bc llvm_stdlib_4.bc -o llvm_stdlib_4.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-dis llvm_stdlib_4.bc -o llvm_stdlib_4.final.ll &&
+        xxd -i llvm_stdlib_4.bc  > llvm_stdlib_4.h
 )
 # SIMD64
 add_custom_command(
 OUTPUT llvm_stdlib_64.h
-DEPENDS ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll
-COMMAND python3 ${CMAKE_SOURCE_DIR}/stdlibgen.py ${CMAKE_SOURCE_DIR}/default_stdlib.ll 64
-                  > llvm_stdlib_64.ll &&
-                  ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_64.ll -o llvm_stdlib_64.bc &&
-                  xxd -i llvm_stdlib_64.bc > llvm_stdlib_64.h
+DEPENDS ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
+        python3 ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll 64 > llvm_stdlib_64.ll &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_64.ll -o llvm_stdlib_64.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-as spv_stdlib.ll -o spv_stdlib.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-link spv_stdlib.bc llvm_stdlib_64.bc -o llvm_stdlib_64.bc &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-dis llvm_stdlib_64.bc -o llvm_stdlib_64.final.ll &&
+        xxd -i llvm_stdlib_64.bc  > llvm_stdlib_64.h
 )
 ### END OF COPY PASTE
 configure_file(icd_template.json icd.json)

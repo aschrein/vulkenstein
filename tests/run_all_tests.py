@@ -4,7 +4,7 @@ start = 0
 end = 0xffffffff
 
 """
-Usage python3 run_all_tests.py [start:i32 [end:i32]]
+Usage cd {PROJECT_ROOT} && python3 run_all_tests.py [start:i32 [end:i32]]
 """
 
 if len(sys.argv) > 1:
@@ -15,9 +15,10 @@ if len(sys.argv) > 2:
 
 counter = 0
 
-for root, dirs, files in os.walk("tests"):
-  path = root.split(os.sep)
+for root, dirs, files in os.walk("."):
   for file in files:
+    if not "glsl" in root and not "hlsl" in root:
+      continue
     if counter < start:
       counter += 1
       continue
@@ -25,7 +26,7 @@ for root, dirs, files in os.walk("tests"):
       exit(0)
     file_path = root + "/" + file
     import subprocess
-    cmd = "sh test_shader.sh " + file_path + ""
+    cmd = "sh tests/test_shader.sh " + file_path + ""
     print("running id: " + str(counter) + " cmd: " + cmd)
     process = subprocess.Popen(cmd.split(' '), stdout=subprocess.PIPE)
     stdout, stderr = process.communicate()

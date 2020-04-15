@@ -382,13 +382,13 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
   return ymm_or(local_shuffle, far_pass);
 }
 
-#pragma push pack(1)
+#pragma pack(push, 1)
 struct Classified_Tile {
   uint8_t x;
   uint8_t y;
   uint16_t mask;
 };
-#pragma pop
+#pragma pack(pop)
 
 static_assert(sizeof(Classified_Tile) == 4, "incorrect padding");
 

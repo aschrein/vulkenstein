@@ -1,6 +1,6 @@
 export SCRIPT=`realpath $0`
 export SCRIPTPATH=`dirname $SCRIPT`
-export PATH=$SCRIPTPATH/build:$PATH
+export PATH=$SCRIPTPATH/../build:$PATH
 export PATH=/home/aschrein/dev/llvm/build/Release/bin:$PATH
 echo "using $(which clang)"
 export WAVE_WIDTH=4
@@ -14,13 +14,13 @@ if [ -z "$1" ]
     exit
 fi
 export INPUT=`realpath $1`
-rm -rf $SCRIPTPATH/build/tests
-mkdir -p $SCRIPTPATH/build/tests && cd $SCRIPTPATH/build/tests && \
+rm -rf $SCRIPTPATH/../build/tests
+mkdir -p $SCRIPTPATH/../build/tests && cd $SCRIPTPATH/../build/tests && \
 python3 $INPUT && \
 spirv-dis --raw-id shader.spv -o shader.spv.S && \
 s2l shader.spv $WAVE_WIDTH > shader.ll && \
 llvm-as shader.ll -o shader.bc && \
-clang++ -I$SCRIPTPATH -DWAVE_WIDTH="$WAVE_WIDTH" -fPIC -g runner.cpp -c -o runner.o && \
+clang++ -I$SCRIPTPATH -I$SCRIPTPATH/.. -DWAVE_WIDTH="$WAVE_WIDTH" -fPIC -g runner.cpp -c -o runner.o && \
 opt -O3  shader.bc -o shader.bc && \
 llvm-dis shader.bc -o shader.opt.ll && \
 llc -mattr=+avx2 -O3 --relocation-model=pic --mtriple=x86_64-unknown-linux-gnu -filetype=obj shader.bc -o shader.o && \

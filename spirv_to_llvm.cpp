@@ -522,7 +522,7 @@ struct Spirv_Builder {
       ASSERT_ALWAYS(fun != NULL);
       return fun;
     };
-    llvm::Type *state_t = llvm::Type::getInt8Ty(c);
+    llvm::Type *state_t = module->getTypeByName("struct.Invocation_Info");
     // Force 64 bit pointers
     llvm::Type *llvm_int_ptr_t = llvm::Type::getInt64Ty(c);
     llvm::Type *state_t_ptr = llvm::PointerType::get(state_t, 0);
@@ -713,6 +713,17 @@ struct Spirv_Builder {
       case DeclTy::StructTy: {
         ASSERT_HAS(struct_types);
         StructTy type = struct_types.find(item.first)->second;
+        // For builtin structures we just emit struct <{<4 x float>}> for
+        // gl_Position and assume that other members are not written to
+        // @TODO: Implement other output structures
+        if (type.is_builtin) {
+          llvm::Type *struct_type = llvm::StructType::create(
+              c, {llvm::VectorType::get(llvm::Type::getFloatTy(c), 4)},
+              get_spv_name(type.id), true);
+          member_reloc[struct_type] = {0};
+          llvm_types[type.id] = struct_type;
+          break;
+        }
         std::vector<llvm::Type *> members;
         size_t offset = 0;
         // We manually insert padding bytes which offsets the structure members
@@ -2895,6 +2906,60 @@ struct Spirv_Builder {
           c, llvm::ConstantInt::get(c, llvm::APInt(32, private_storage_size)),
           bb);
     }
+    // Function returns the amount of items that this module generates
+    // Like in this case there would be 4 items
+    // OpName %17 "gl_PerVertex"
+    // OpMemberName %17 0 "gl_Position"
+    // OpMemberName %17 1 "gl_PointSize"
+    // OpMemberName %17 2 "gl_ClipDistance"
+    // OpMemberName %17 3 "gl_CullDistance"
+    {
+      llvm::Function *get_export_count = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_export_count",
+          module.get());
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_export_count);
+      uint32_t field_count = 0;
+      for (auto &item : struct_types) {
+        if (item.second.is_builtin) {
+          ASSERT_ALWAYS(field_count == 0 &&
+                        "Only one export structure per module is allowed");
+          field_count = (uint32_t)item.second.member_types.size();
+        }
+      }
+      llvm::ReturnInst::Create(
+          c, llvm::ConstantInt::get(c, llvm::APInt(32, field_count)), bb);
+    }
+    // Now enumerate all the items that are exported
+    {
+      llvm::Function *get_export_items = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::Type::getVoidTy(c),
+                                  {llvm::Type::getInt32PtrTy(c)}, false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_export_items",
+          module.get());
+      llvm::Value *ptr_arg = get_export_items->getArg(0);
+      NOTNULL(ptr_arg);
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_export_items);
+      std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
+      llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
+
+      for (auto &item : struct_types) {
+        uint32_t i = 0;
+        if (item.second.is_builtin) {
+          ASSERT_ALWAYS(i == 0);
+          for (auto &member_builtin_id : item.second.member_builtins) {
+            llvm::Value *gep =
+                llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(i));
+            llvm_builder->CreateStore(llvm_get_constant_i32(member_builtin_id),
+                                      gep);
+            i++;
+          }
+        }
+      }
+      llvm::ReturnInst::Create(c, bb);
+    }
     // TODO(aschrein): investigate why LLVM removes code after tail calls in
     // this module.
     // Disable tail call crap
@@ -3118,10 +3183,6 @@ struct Spirv_Builder {
                                        type.id, i)
                     .param1;
           }
-        }
-        if (type.is_builtin) {
-          // things can get funky if it aint true. FIXME
-          ASSERT_ALWAYS(type.member_types.size() == 1);
         }
         type.size = 0;
         struct_types[word1] = type;
@@ -4039,11 +4100,11 @@ extern "C" DLL_EXPORT void *compile_spirv(uint32_t const *pCode,
   ExitOnErr(J->addIRModule(std::move(bundle)));
   Jitted_Shader *jitted_shader = new Jitted_Shader();
   jitted_shader->lljit = std::move(J);
-  return (void*)jitted_shader;
+  return (void *)jitted_shader;
 }
 
 extern "C" DLL_EXPORT void release_spirv(void *ptr) {
-  Jitted_Shader *jitted_shader  = (Jitted_Shader*)ptr;
+  Jitted_Shader *jitted_shader = (Jitted_Shader *)ptr;
   delete jitted_shader;
 }
 

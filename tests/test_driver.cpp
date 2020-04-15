@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #define UTILS_IMPL
-#include "utils.hpp"
+#include "../utils.hpp"
 #include <dlfcn.h>
 
 extern "C" {

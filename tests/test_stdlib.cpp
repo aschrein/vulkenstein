@@ -1,6 +1,7 @@
 #include <cmath>
 #include <stdint.h>
-#include "spv_stdlib.h"
+#define SPV_STDLIB_JUST_TYPES
+#include "../spv_stdlib/spv_stdlib.cpp"
 
 extern "C" {
 typedef int (*printf_t)(const char *__restrict __format, ...);
