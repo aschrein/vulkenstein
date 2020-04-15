@@ -41,6 +41,7 @@ struct Invocation_Info {
   void *builtin_output;
   void *output;
   uint8_t push_constants[0x100];
+  void *print_fn;
 };
 
 struct Image1D {
@@ -202,5 +203,25 @@ FNATTR uint64_t spv_lsb_i64(uint64_t num) {
   const uint64_t debruijn = 0x0218A392CD3D5DBFULL;
   return arr[((num & (~num + 1)) * debruijn) >> 58];
 }
+
+FNATTR void dump_float4x4(Invocation_Info *state, float *m) {
+  typedef int (*printf_t)(const char *__restrict __format, ...);
+  ((printf_t)state->print_fn)("[%f %f %f %f]\n", m[0], m[1], m[2], m[3]);
+  ((printf_t)state->print_fn)("[%f %f %f %f]\n", m[4], m[5], m[6], m[7]);
+  ((printf_t)state->print_fn)("[%f %f %f %f]\n", m[8], m[9], m[10], m[11]);
+  ((printf_t)state->print_fn)("[%f %f %f %f]\n", m[12], m[13], m[14], m[15]);
+  ((printf_t)state->print_fn)("________________\n");
+}
+FNATTR void dump_float4(Invocation_Info *state, float *m) {
+  typedef int (*printf_t)(const char *__restrict __format, ...);
+  ((printf_t)state->print_fn)("<%f %f %f %f>\n", m[0], m[1], m[2], m[3]);
+  ((printf_t)state->print_fn)("________________\n");
+}
+FNATTR void dump_string(Invocation_Info *state, char const *str) {
+  typedef int (*printf_t)(const char *__restrict __format, ...);
+  ((printf_t)state->print_fn)("%s\n", str);
+  ((printf_t)state->print_fn)("________________\n");
+}
+
 }
 #endif

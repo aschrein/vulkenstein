@@ -403,114 +403,96 @@ struct PushConstants {
   uint32_t size;
   // uint8_t pData[size] follows the cmd in the command buffer
 };
-struct GPU_State { // doesn't do any ref counting here
-  VkPipeline_Impl *graphics_pipeline = NULL;
-  VkPipeline_Impl *compute_pipeline = NULL;
-  VkRenderPass_Impl *render_pass = NULL;
-  VkFramebuffer_Impl *framebuffer = NULL;
-  VkDescriptorSet_Impl *descriptor_sets[0x10] = {};
-  VkBuffer_Impl *index_buffer = NULL;
-  VkDeviceSize index_buffer_offset = 0;
-  VkIndexType index_type = VkIndexType::VK_INDEX_TYPE_UINT32;
-  VkBuffer_Impl *vertex_buffers[0x10] = {};
-  VkDeviceSize vertex_buffer_offsets[0x10] = {};
-  VkRect2D render_area = {};
-  uint32_t viewport_count = 0;
-  VkViewport viewports[0x10] = {};
-  void reset_state() { memset(this, 0, sizeof(*this)); }
-  void execute_commands(VkCommandBuffer_Impl *cmd_buf) {
-    reset_state();
-    while (cmd_buf->has_items()) {
-      cmd::Cmd_t op = cmd_buf->consume<Cmd_t>();
-      switch (op) {
-      case Cmd_t::BindIndexBuffer: {
-        cmd::BindIndexBuffer cmd = cmd_buf->consume<cmd::BindIndexBuffer>();
-        index_buffer = cmd.buffer;
-        index_type = cmd.indexType;
-        index_buffer_offset = cmd.offset;
-        break;
+void GPU_State::execute_commands(VkCommandBuffer_Impl *cmd_buf) {
+  reset_state();
+  while (cmd_buf->has_items()) {
+    cmd::Cmd_t op = cmd_buf->consume<Cmd_t>();
+    switch (op) {
+    case Cmd_t::BindIndexBuffer: {
+      cmd::BindIndexBuffer cmd = cmd_buf->consume<cmd::BindIndexBuffer>();
+      index_buffer = cmd.buffer;
+      index_type = cmd.indexType;
+      index_buffer_offset = cmd.offset;
+      break;
+    }
+    case Cmd_t::BindVertexBuffers: {
+      cmd::BindVertexBuffers cmd = cmd_buf->consume<cmd::BindVertexBuffers>();
+      ito(cmd.bindingCount) {
+        vertex_buffers[i + cmd.firstBinding] = cmd.pBuffers[i];
+        vertex_buffer_offsets[i + cmd.firstBinding] = cmd.pOffsets[i];
       }
-      case Cmd_t::BindVertexBuffers: {
-        cmd::BindVertexBuffers cmd = cmd_buf->consume<cmd::BindVertexBuffers>();
-        ito(cmd.bindingCount) {
-          vertex_buffers[i + cmd.firstBinding] = cmd.pBuffers[i];
-          vertex_buffer_offsets[i + cmd.firstBinding] = cmd.pOffsets[i];
-        }
-        break;
+      break;
+    }
+    case Cmd_t::BindDescriptorSets: {
+      cmd::BindDescriptorSets cmd = cmd_buf->consume<cmd::BindDescriptorSets>();
+      ASSERT_ALWAYS(cmd.dynamicOffsetCount == 0);
+      ito(cmd.descriptorSetCount) {
+        descriptor_sets[i + cmd.firstSet] = cmd.pDescriptorSets[i];
       }
-      case Cmd_t::BindDescriptorSets: {
-        cmd::BindDescriptorSets cmd =
-            cmd_buf->consume<cmd::BindDescriptorSets>();
-        ASSERT_ALWAYS(cmd.dynamicOffsetCount == 0);
-        ito(cmd.descriptorSetCount) {
-          descriptor_sets[i + cmd.firstSet] = cmd.pDescriptorSets[i];
-        }
-        break;
+      break;
+    }
+    case Cmd_t::BindPipeline: {
+      cmd::BindPipeline cmd = cmd_buf->consume<cmd::BindPipeline>();
+      if (cmd.pipelineBindPoint ==
+          VkPipelineBindPoint::VK_PIPELINE_BIND_POINT_GRAPHICS) {
+        graphics_pipeline = cmd.pipeline;
+      } else {
+        compute_pipeline = cmd.pipeline;
       }
-      case Cmd_t::BindPipeline: {
-        cmd::BindPipeline cmd = cmd_buf->consume<cmd::BindPipeline>();
-        if (cmd.pipelineBindPoint ==
-            VkPipelineBindPoint::VK_PIPELINE_BIND_POINT_GRAPHICS) {
-          graphics_pipeline = cmd.pipeline;
-        } else {
-          compute_pipeline = cmd.pipeline;
-        }
-        break;
-      }
-      case Cmd_t::RenderPassBegin: {
-        cmd::RenderPassBegin cmd = cmd_buf->consume<cmd::RenderPassBegin>();
-        ASSERT_ALWAYS(cmd.renderPass != NULL);
-        render_pass = cmd.renderPass;
-        render_area = cmd.renderArea;
-        framebuffer = cmd.framebuffer;
-        ito(cmd.clearValueCount) {
-          // TODO
-          (void)cmd.pClearValues[i];
-        }
-        break;
-      }
-      case Cmd_t::RenderPassEnd: {
-        render_pass = NULL;
-        render_area = {};
-        framebuffer = NULL;
-        break;
-      }
-      case Cmd_t::SetViewport: {
-        cmd::SetViewport cmd = cmd_buf->consume<cmd::SetViewport>();
-        ASSERT_ALWAYS(cmd.viewportCount == 1);
-        viewports[0] = cmd.pViewports[0];
-        viewport_count = 1;
-        break;
-      }
-      case Cmd_t::CopyBuffer: {
-        cmd::CopyBuffer cmd = cmd_buf->consume<cmd::CopyBuffer>();
-        ito(cmd.regionCount) {
-          memcpy(cmd.dst->get_ptr() + cmd.pRegions[i].dstOffset,
-                 cmd.src->get_ptr() + cmd.pRegions[i].srcOffset,
-                 cmd.pRegions[i].size);
-        }
-        break;
-      }
-      case Cmd_t::SetScissor: {
-        cmd::SetScissor cmd = cmd_buf->consume<cmd::SetScissor>();
+      break;
+    }
+    case Cmd_t::RenderPassBegin: {
+      cmd::RenderPassBegin cmd = cmd_buf->consume<cmd::RenderPassBegin>();
+      ASSERT_ALWAYS(cmd.renderPass != NULL);
+      render_pass = cmd.renderPass;
+      render_area = cmd.renderArea;
+      framebuffer = cmd.framebuffer;
+      ito(cmd.clearValueCount) {
         // TODO
-        break;
+        (void)cmd.pClearValues[i];
       }
-      case Cmd_t::DrawIndexed: {
-        cmd::DrawIndexed cmd = cmd_buf->consume<cmd::DrawIndexed>();
-        size_t attribute_size = 0;
-        NOTNULL(graphics_pipeline);
-        ito(graphics_pipeline->IA_bindings.vertexBindingDescriptionCount) {
-
-        }
-        break;
+      break;
+    }
+    case Cmd_t::RenderPassEnd: {
+      render_pass = NULL;
+      render_area = {};
+      framebuffer = NULL;
+      break;
+    }
+    case Cmd_t::SetViewport: {
+      cmd::SetViewport cmd = cmd_buf->consume<cmd::SetViewport>();
+      ASSERT_ALWAYS(cmd.viewportCount == 1);
+      viewports[0] = cmd.pViewports[0];
+      viewport_count = 1;
+      break;
+    }
+    case Cmd_t::CopyBuffer: {
+      cmd::CopyBuffer cmd = cmd_buf->consume<cmd::CopyBuffer>();
+      ito(cmd.regionCount) {
+        memcpy(cmd.dst->get_ptr() + cmd.pRegions[i].dstOffset,
+               cmd.src->get_ptr() + cmd.pRegions[i].srcOffset,
+               cmd.pRegions[i].size);
       }
-      default:
-        UNIMPLEMENTED;
-      }
+      break;
+    }
+    case Cmd_t::SetScissor: {
+      cmd::SetScissor cmd = cmd_buf->consume<cmd::SetScissor>();
+      // TODO
+      break;
+    }
+    case Cmd_t::DrawIndexed: {
+      cmd::DrawIndexed cmd = cmd_buf->consume<cmd::DrawIndexed>();
+      NOTNULL(graphics_pipeline);
+      draw_indexed(this, cmd.indexCount, cmd.instanceCount, cmd.firstIndex,
+                   cmd.vertexOffset, cmd.firstInstance);
+      break;
+    }
+    default:
+      UNIMPLEMENTED;
     }
   }
-} g_gpu_state;
+}
+GPU_State g_gpu_state;
 } // namespace cmd
 #define WRITE_CMD(cmdbuf, cmd, type)                                           \
   {                                                                            \

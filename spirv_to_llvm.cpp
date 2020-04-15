@@ -8,6 +8,8 @@
 #define UTILS_IMPL
 #include "utils.hpp"
 
+#include "vk.hpp"
+
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/Support/TargetSelect.h"
 #include <llvm/IR/DerivedTypes.h>
@@ -48,7 +50,6 @@
 void llvm_fatal(void *user_data, const std::string &reason,
                 bool gen_crash_diag) {
   fprintf(stderr, "[LLVM_FATAL] %s\n", reason.c_str());
-  (void)(*(int *)(void *)(0) = 0);
   abort();
 }
 
@@ -77,6 +78,64 @@ void *read_file(const char *filename, size_t *size,
 }
 
 struct Jitted_Shader {
+  struct Shader_Symbols {
+    void (*spv_main)(void *);
+    uint32_t (*get_private_size)();
+    uint32_t (*get_export_count)();
+    uint32_t (*get_input_count)();
+    uint32_t (*get_input_stride)();
+    uint32_t (*get_output_count)();
+    uint32_t (*get_output_stride)();
+    uint32_t (*get_subgroup_size)();
+    void (*get_export_items)(uint32_t *);
+    void (*get_input_offsets)(uint32_t *);
+    void (*get_output_offsets)(uint32_t *);
+    struct Input_Item {
+      uint32_t location;
+      uint32_t offset;
+    };
+    Input_Item input_offsets[0x10];
+    Input_Item output_offsets[0x10];
+    uint32_t input_item_count;
+    uint32_t input_stride;
+    uint32_t output_item_count;
+    uint32_t output_stride;
+    uint32_t private_storage_size;
+    uint32_t export_count;
+    uint32_t export_items[0x10];
+    uint32_t subgroup_size;
+    void init(llvm::orc::LLJIT *jit) {
+      llvm::ExitOnError ExitOnErr;
+      jit->getMainJITDylib().addGenerator(ExitOnErr(
+          llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+              jit->getDataLayout().getGlobalPrefix())));
+#define LOOKUP(name)                                                           \
+  name = (typeof(name))ExitOnErr(jit->lookup(#name)).getAddress();
+      LOOKUP(spv_main)
+      LOOKUP(get_private_size)
+      LOOKUP(get_input_count)
+      LOOKUP(get_input_stride)
+      LOOKUP(get_output_stride)
+      LOOKUP(get_export_count)
+      LOOKUP(get_output_count)
+      LOOKUP(get_export_items)
+      LOOKUP(get_input_offsets)
+      LOOKUP(get_output_offsets)
+      LOOKUP(get_subgroup_size)
+#undef LOOKUP
+      input_item_count = get_input_count();
+      get_input_offsets((uint32_t *)&input_offsets[0]);
+      output_item_count = get_output_count();
+      input_stride = get_input_stride();
+      output_stride = get_output_stride();
+      subgroup_size = get_subgroup_size();
+      get_output_offsets((uint32_t *)&output_offsets[0]);
+      private_storage_size = get_private_size();
+      export_count = get_export_count();
+      get_export_items(&export_items[0]);
+    }
+  };
+  Shader_Symbols symbols;
   std::unique_ptr<llvm::orc::LLJIT> lljit;
   void execute() {
     //    auto Add1Sym = ExitOnErr(J->lookup("add1"));
@@ -457,6 +516,9 @@ struct Spirv_Builder {
     // For vertex shaders et al holds a pointer to gl_Position
     LOOKUP_FN(get_builtin_output_ptr);
     LOOKUP_FN(kill);
+    LOOKUP_FN(dump_float4x4);
+    LOOKUP_FN(dump_float4);
+    LOOKUP_FN(dump_string);
     LOOKUP_FN(normalize_f2);
     LOOKUP_FN(normalize_f3);
     LOOKUP_FN(normalize_f4);
@@ -475,6 +537,18 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_atomic_add_i32);
     LOOKUP_FN(spv_atomic_sub_i32);
     LOOKUP_FN(spv_atomic_or_i32);
+    std::map<std::string, llvm::GlobalVariable *> global_strings;
+    auto lookup_string = [&](std::string str) {
+      if (contains(global_strings, str))
+        return global_strings[str];
+      llvm::Constant *msg =
+          llvm::ConstantDataArray::getString(c, str.c_str(), true);
+      llvm::GlobalVariable *msg_glob =
+          new llvm::GlobalVariable(*module, msg->getType(), true,
+                                   llvm::GlobalValue::InternalLinkage, msg);
+      global_strings[str] = msg_glob;
+      return msg_glob;
+    };
     auto lookup_image_op = [&](llvm::Type *res_type, llvm::Type *coord_type,
                                bool read) {
       static char tmp_buf[0x100];
@@ -537,6 +611,9 @@ struct Spirv_Builder {
     // SPIRV has ways of setting the member offset
     // So in LLVM IR we need to manually insert paddings
     std::map<llvm::Type *, std::vector<uint32_t>> member_reloc;
+    // Matrices could be row/column. here we just default to row major and do
+    // the trasnpose as needed
+    std::map<llvm::Type *, std::set<uint32_t>> member_transpose;
     // Global type table
     std::vector<llvm::Type *> llvm_types(ID_bound);
     // Global value table (constants and global values)
@@ -729,6 +806,7 @@ struct Spirv_Builder {
         // We manually insert padding bytes which offsets the structure members
         // for GEP instructions
         std::vector<uint32_t> member_indices;
+        std::set<uint32_t> this_member_transpose;
         uint32_t index_offset = 0;
         for (uint32_t member_id = 0; member_id < type.member_types.size();
              member_id++) {
@@ -743,6 +821,19 @@ struct Spirv_Builder {
                 llvm::ArrayType::get(llvm::Type::getInt8Ty(c), diff));
             index_offset += 1;
           }
+          if (has_member_decoration(spv::Decoration::DecorationColMajor,
+                                    type.id, member_id)) {
+            this_member_transpose.insert(member_id);
+            if (has_member_decoration(spv::Decoration::DecorationMatrixStride,
+                                      type.id, member_id)) {
+              // do we need to change anything if that's not true?
+              // TODO allow 12 and 8 for mat3 and mat2
+              ASSERT_ALWAYS(find_member_decoration(
+                                spv::Decoration::DecorationMatrixStride,
+                                type.id, member_id)
+                                .param1 == 16);
+            }
+          }
           size_t size = 0;
           uint32_t member_type_id = type.member_types[member_id];
           member_indices.push_back(index_offset);
@@ -756,6 +847,8 @@ struct Spirv_Builder {
         llvm::Type *struct_type =
             llvm::StructType::create(c, members, get_spv_name(type.id), true);
         member_reloc[struct_type] = member_indices;
+        if (this_member_transpose.size() != 0)
+          member_transpose[struct_type] = this_member_transpose;
         llvm_types[type.id] = struct_type;
         break;
       }
@@ -1200,6 +1293,11 @@ struct Spirv_Builder {
                     "Access chain index must be OpConstant for structures");
                 uint32_t cval = (uint32_t)integer->getLimitedValue();
                 uint32_t struct_member_id = cval;
+                bool transpose = false;
+                if (contains(member_transpose, struct_type) &&
+                    contains(member_transpose[struct_type], struct_member_id)) {
+                  transpose = true;
+                }
                 if (contains(member_reloc, pointee_type)) {
                   std::vector<uint32_t> const &reloc_table =
                       member_reloc[pointee_type];
@@ -1207,11 +1305,20 @@ struct Spirv_Builder {
                 }
                 llvm::Type *member_type =
                     struct_type->getElementType(struct_member_id);
+
                 val = llvm_builder->CreateGEP(
                     val, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
                                                  (uint32_t)0),
                           llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
                                                  (uint32_t)struct_member_id)});
+                if (transpose) {
+                  llvm::Value *alloca = llvm_builder->CreateAlloca(member_type);
+                  llvm_builder->CreateStore(
+                      llvm_matrix_transpose(llvm_builder->CreateLoad(val),
+                                            llvm_builder.get()),
+                      alloca);
+                  val = alloca;
+                }
                 // Make sure there is no reinterpretation at SPIRV level
                 ASSERT_ALWAYS(i != indices.size() - 1 ||
                               result_type == val->getType());
@@ -2299,6 +2406,7 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(vector_size == matrix->getType()
                                              ->getArrayElementType()
                                              ->getVectorNumElements());
+
             llvm::Type *result_type = llvm::VectorType::get(
                 vector->getType()->getVectorElementType(), matrix_col_size);
             llvm::Value *result = llvm::UndefValue::get(result_type);
@@ -2311,6 +2419,64 @@ struct Spirv_Builder {
                   llvm_dot(vector, rows[i], llvm_builder.get());
               result = llvm_builder->CreateInsertElement(result, dot_result, i);
             }
+            // debug dumps
+            //            {
+            //              {
+            //                llvm::Value *reinterpret =
+            //                llvm_builder->CreateBitCast(
+            //                    lookup_string("matrix times vector"),
+            //                    llvm::Type::getInt8PtrTy(c));
+            //                llvm_builder->CreateCall(dump_string, {state_ptr,
+            //                reinterpret});
+            //              }
+            //              {
+            //                llvm::Value *alloca =
+            //                    llvm_builder->CreateAlloca(matrix->getType());
+            //                llvm::Value *reinterpret =
+            //                llvm_builder->CreateBitCast(
+            //                    alloca, llvm::Type::getFloatPtrTy(c));
+            //                llvm_builder->CreateStore(matrix, alloca);
+            //                llvm_builder->CreateCall(dump_float4x4,
+            //                                         {state_ptr,
+            //                                         reinterpret});
+            //              }
+            //              {
+            //                llvm::Value *reinterpret =
+            //                llvm_builder->CreateBitCast(
+            //                    lookup_string("X"),
+            //                    llvm::Type::getInt8PtrTy(c));
+            //                llvm_builder->CreateCall(dump_string, {state_ptr,
+            //                reinterpret});
+            //              }
+            //              {
+            //                llvm::Value *alloca =
+            //                    llvm_builder->CreateAlloca(vector->getType());
+            //                llvm::Value *reinterpret =
+            //                llvm_builder->CreateBitCast(
+            //                    alloca, llvm::Type::getFloatPtrTy(c));
+            //                llvm_builder->CreateStore(vector, alloca);
+            //                llvm_builder->CreateCall(dump_float4, {state_ptr,
+            //                reinterpret});
+            //              }
+            //              {
+            //                llvm::Value *reinterpret =
+            //                llvm_builder->CreateBitCast(
+            //                    lookup_string("="),
+            //                    llvm::Type::getInt8PtrTy(c));
+            //                llvm_builder->CreateCall(dump_string, {state_ptr,
+            //                reinterpret});
+            //              }
+            //              {
+            //                llvm::Value *alloca =
+            //                    llvm_builder->CreateAlloca(vector->getType());
+            //                llvm::Value *reinterpret =
+            //                llvm_builder->CreateBitCast(
+            //                    alloca, llvm::Type::getFloatPtrTy(c));
+            //                llvm_builder->CreateStore(result, alloca);
+            //                llvm_builder->CreateCall(dump_float4, {state_ptr,
+            //                reinterpret});
+            //              }
+            //            }
             llvm_values_per_lane[k][result_id] = result;
           }
           break;
@@ -2835,7 +3001,8 @@ struct Spirv_Builder {
         case spv::Op::OpSubgroupAvcSicGetPackedSkcLumaCountThresholdINTEL:
         case spv::Op::OpSubgroupAvcSicGetPackedSkcLumaSumThresholdINTEL:
         case spv::Op::OpSubgroupAvcSicGetInterRawSadsINTEL:
-        case spv::Op::OpMax: {
+        case spv::Op::OpMax:
+        default: {
           module->dump();
           UNIMPLEMENTED_(get_cstr(opcode));
         }
@@ -2965,6 +3132,17 @@ struct Spirv_Builder {
           c, llvm::ConstantInt::get(c, llvm::APInt(32, input_count)), bb);
     }
     {
+      llvm::Function *get_input_stride = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_stride",
+          module.get());
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_input_stride);
+      llvm::ReturnInst::Create(
+          c, llvm::ConstantInt::get(c, llvm::APInt(32, input_storage_size)),
+          bb);
+    }
+    {
       llvm::Function *get_input_offsets = llvm::Function::Create(
           llvm::FunctionType::get(llvm::Type::getVoidTy(c),
                                   {llvm::Type::getInt32PtrTy(c)}, false),
@@ -3007,6 +3185,17 @@ struct Spirv_Builder {
           c, llvm::ConstantInt::get(c, llvm::APInt(32, output_count)), bb);
     }
     {
+      llvm::Function *get_output_stride = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_stride",
+          module.get());
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_output_stride);
+      llvm::ReturnInst::Create(
+          c, llvm::ConstantInt::get(c, llvm::APInt(32, output_storage_size)),
+          bb);
+    }
+    {
       llvm::Function *get_output_offsets = llvm::Function::Create(
           llvm::FunctionType::get(llvm::Type::getVoidTy(c),
                                   {llvm::Type::getInt32PtrTy(c)}, false),
@@ -3032,6 +3221,16 @@ struct Spirv_Builder {
         }
       }
       llvm::ReturnInst::Create(c, bb);
+    }
+    {
+      llvm::Function *get_subgroup_size = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_subgroup_size",
+          module.get());
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_subgroup_size);
+      llvm::ReturnInst::Create(
+          c, llvm::ConstantInt::get(c, llvm::APInt(32, opt_subgroup_size)), bb);
     }
     // TODO(aschrein): investigate why LLVM removes code after tail calls in
     // this module.
@@ -4170,11 +4369,20 @@ struct Spirv_Builder {
         private_storage_size += type_sizes[pointee_type_id];
       }
     }
+    //    for (auto &item : struct_types) {
+    //      for (auto &member_type_id : item.second.member_types) {
+    //        if (decl_types_table[member_type_id] == DeclTy::MatrixTy) {
+    //          MatrixTy mtype = matrix_types[member_type_id];
+    //          ASSERT_ALWAYS(mtype.stride == 0 && "Matrix type is shared across
+    //          structures?");
+    //        }
+    //      }
+    //    }
   }
 };
 
-extern "C" DLL_EXPORT void *compile_spirv(uint32_t const *pCode,
-                                          size_t code_size) {
+extern "C" {
+void *compile_spirv(uint32_t const *pCode, size_t code_size) {
   Spirv_Builder builder;
   builder.parse_meta(pCode, code_size / 4);
   llvm::orc::ThreadSafeModule bundle = builder.build_llvm_module_vectorized();
@@ -4189,14 +4397,139 @@ extern "C" DLL_EXPORT void *compile_spirv(uint32_t const *pCode,
   ExitOnErr(J->addIRModule(std::move(bundle)));
   Jitted_Shader *jitted_shader = new Jitted_Shader();
   jitted_shader->lljit = std::move(J);
+  jitted_shader->symbols.init(jitted_shader->lljit.get());
   return (void *)jitted_shader;
 }
 
-extern "C" DLL_EXPORT void release_spirv(void *ptr) {
+void release_spirv(void *ptr) {
   Jitted_Shader *jitted_shader = (Jitted_Shader *)ptr;
   delete jitted_shader;
 }
+#define SPV_STDLIB_JUST_TYPES
+#include "spv_stdlib/spv_stdlib.cpp"
+void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
+                  uint32_t instanceCount, uint32_t firstIndex,
+                  int32_t vertexOffset, uint32_t firstInstance) {
+  Jitted_Shader *vs_jit =
+      (Jitted_Shader *)state->graphics_pipeline->vs->jitted_code;
+  Jitted_Shader *ps_jit =
+      (Jitted_Shader *)state->graphics_pipeline->ps->jitted_code;
+  NOTNULL(vs_jit);
+  NOTNULL(ps_jit);
+  // Vertex shading
+  uint8_t *vs_output = NULL;
+  float4 *vs_vertex_positions = NULL;
+  defer(if (vs_output) free(vs_output));
+  defer(if (vs_vertex_positions) free(vs_vertex_positions));
+  {
+    struct Attribute_Desc {
+      uint8_t *src;
+      uint32_t src_stride;
+      uint32_t size;
+      bool per_vertex_rate;
+    };
+    VkVertexInputBindingDescription vertex_bindings[0x10] = {};
+    Attribute_Desc attribute_descs[0x10] = {};
+    vki::VkPipeline_Impl *pipeline = state->graphics_pipeline;
+    ASSERT_ALWAYS(pipeline->IA_bindings.vertexBindingDescriptionCount < 0x10);
+    ASSERT_ALWAYS(pipeline->IA_bindings.vertexAttributeDescriptionCount < 0x10);
+    ito(pipeline->IA_bindings.vertexBindingDescriptionCount) {
+      VkVertexInputBindingDescription desc =
+          pipeline->IA_bindings.pVertexBindingDescriptions[i];
+      vertex_bindings[desc.binding] = desc;
+    }
+    ito(pipeline->IA_bindings.vertexAttributeDescriptionCount) {
+      VkVertexInputAttributeDescription desc =
+          pipeline->IA_bindings.pVertexAttributeDescriptions[i];
+      Attribute_Desc attribute_desc;
+      VkVertexInputBindingDescription binding_desc =
+          vertex_bindings[desc.binding];
+      attribute_desc.src =
+          state->vertex_buffers[desc.binding]->get_ptr() + desc.offset;
+      attribute_desc.src_stride = binding_desc.stride;
+      attribute_desc.per_vertex_rate =
+          binding_desc.inputRate ==
+          VkVertexInputRate::VK_VERTEX_INPUT_RATE_VERTEX;
+      switch (desc.format) {
+      case VkFormat::VK_FORMAT_R32G32B32_SFLOAT:
+        attribute_desc.size = 12;
+        break;
+      default:
+        UNIMPLEMENTED;
+      };
+      attribute_descs[desc.location] = attribute_desc;
+    }
+    ASSERT_ALWAYS(pipeline->IA_topology ==
+                  VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    uint32_t subgroup_size = vs_jit->symbols.subgroup_size;
+    uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
+    uint32_t total_data_units_needed = num_invocations * subgroup_size;
+    uint8_t *attributes = (uint8_t *)malloc(total_data_units_needed *
+                                            vs_jit->symbols.input_stride);
+    vs_output = (uint8_t *)malloc(total_data_units_needed *
+                                  vs_jit->symbols.output_stride);
+    vs_vertex_positions = (float4 *)malloc(total_data_units_needed * 16);
+    uint32_t *index_src = (uint32_t *)(state->index_buffer->get_ptr() +
+                                       state->index_buffer_offset);
+    ASSERT_ALWAYS(state->index_type == VkIndexType::VK_INDEX_TYPE_UINT32);
+    kto(indexCount) {
+      uint32_t index = index_src[k + firstIndex] + vertexOffset;
+      ito(vs_jit->symbols.input_item_count) {
+        auto item = vs_jit->symbols.input_offsets[i];
+        Attribute_Desc attribute_desc = attribute_descs[item.location];
+        ASSERT_ALWAYS(attribute_desc.per_vertex_rate);
+        memcpy(attributes + index * vs_jit->symbols.input_stride + item.offset,
+               attribute_desc.src + attribute_desc.src_stride * index,
+               attribute_desc.size);
+      }
+    }
 
+    Invocation_Info info = {};
+    info.work_group_size = (uint3){subgroup_size, 1, 1};
+    info.invocation_count = (uint3){num_invocations, 1, 1};
+    info.subgroup_size = (uint3){subgroup_size, 1, 1};
+    info.subgroup_x_bits = 0xff;
+    info.subgroup_x_offset = 0x0;
+    info.subgroup_y_bits = 0x0;
+    info.subgroup_y_offset = 0x0;
+    info.subgroup_z_bits = 0x0;
+    info.subgroup_z_offset = 0x0;
+    info.input = NULL;
+    info.output = NULL;
+    info.builtin_output = NULL;
+    info.print_fn = (void *)printf;
+    void *descriptor_set_0[0x10] = {};
+    descriptor_set_0[0] = state->descriptor_sets[0]->slots[0].buffer->get_ptr();
+    //    float4 *mat = (float4 *)descriptor_set_0[0];
+    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
+    //                   mat[i].w);
+    //    fprintf(stdout, "__________________\n");
+    //    mat += 4;
+    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
+    //                   mat[i].w);
+    //    fprintf(stdout, "__________________\n");
+    //    mat += 4;
+    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
+    //                   mat[i].w);
+    //    fprintf(stdout, "#################\n");
+    info.descriptor_sets[0] = &descriptor_set_0[0];
+    ito(num_invocations) {
+      info.invocation_id = (uint3){i, 0, 0};
+      info.input =
+          attributes + i * subgroup_size * vs_jit->symbols.input_stride;
+      info.output =
+          vs_output + i * subgroup_size * vs_jit->symbols.output_stride;
+      // Assume there's only gl_Position
+      info.builtin_output = vs_vertex_positions + i * subgroup_size;
+      vs_jit->symbols.spv_main(&info);
+    }
+  }
+//  ito(4) fprintf(stdout, "%f %f %f %f\n", vs_vertex_positions[i].x,
+//                 vs_vertex_positions[i].y, vs_vertex_positions[i].z,
+//                 vs_vertex_positions[i].w);
+//  fprintf(stdout, "#################\n");
+}
+}
 #ifdef S2L_EXE
 int main(int argc, char **argv) {
   ASSERT_ALWAYS(argc == 3);

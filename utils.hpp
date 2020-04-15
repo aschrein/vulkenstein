@@ -35,7 +35,6 @@ bool contains(M const &in, K const &key) {
 #define UNIMPLEMENTED_(s)                                                      \
   {                                                                            \
     fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);        \
-    (void)(*(int *)(void *)(0) = 0);                                           \
     abort();                                                                   \
   }
 
@@ -425,6 +424,8 @@ template <typename K, typename V> struct HashArray {
 #endif
 
 #ifdef UTILS_IMPL
+#ifndef UTILS_IMPL_H
+#define UTILS_IMPL_H
 #include <string.h>
 
 Temporary_Storage Temporary_Storage_new(size_t capacity) {
@@ -528,4 +529,5 @@ void *tl_realloc(void *ptr, size_t oldsize, size_t newsize) {
 }
 
 void tl_free(void *ptr) { free(ptr); }
+#endif
 #endif

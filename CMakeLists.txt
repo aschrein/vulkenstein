@@ -112,7 +112,7 @@ target_include_directories(s2l
   ${CMAKE_BINARY_DIR}
   ${LLVM_INCLUDE_DIRS}
 )
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=skylake -Werror -fmax-errors=1 -fno-exceptions -fno-rtti -fvisibility=hidden")
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=skylake -Werror -ferror-limit=1 -fno-exceptions -fno-rtti -fvisibility=hidden")
 target_compile_definitions(vk PRIVATE ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(s2l PRIVATE "-DS2L_EXE " ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(raster PRIVATE "-DRASTER_EXE " ${LLVM_COMPILE_FLAGS})

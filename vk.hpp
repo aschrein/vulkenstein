@@ -1,9 +1,13 @@
 #ifndef VK_HPP
 #define VK_HPP
-#include <xcb/xcb.h>
-#define VK_USE_PLATFORM_XLIB_KHR
 #include "3rdparty/vulkan/vulkan.h"
 #include "utils.hpp"
+
+extern "C" void *compile_spirv(uint32_t const *pCode, size_t code_size);
+extern "C" void release_spirv(void *ptr);
+struct xcb_connection_t;
+typedef uint32_t xcb_window_t;
+
 // Data structures to keep track of the objects
 // TODO(aschrein): Nuke this from the orbit
 namespace vki {
@@ -132,8 +136,6 @@ struct VkImageView_Impl {
     }
   }
 };
-extern "C" void *compile_spirv(uint32_t const *pCode, size_t code_size);
-extern "C" void release_spirv(void *ptr);
 struct VkShaderModule_Impl {
   uint32_t refcnt;
   void *jitted_code;
@@ -387,7 +389,6 @@ struct VkCommandBuffer_Impl {
   bool has_items() { return read_cursor < data_cursor; }
 };
 
-
 struct VkFramebuffer_Impl {
   uint32_t refcnt;
   VkFramebufferCreateFlags flags;
@@ -405,5 +406,28 @@ struct VkFramebuffer_Impl {
     }
   }
 };
-}
+namespace cmd {
+struct GPU_State { // doesn't do any ref counting here
+  VkPipeline_Impl *graphics_pipeline = NULL;
+  VkPipeline_Impl *compute_pipeline = NULL;
+  VkRenderPass_Impl *render_pass = NULL;
+  VkFramebuffer_Impl *framebuffer = NULL;
+  VkDescriptorSet_Impl *descriptor_sets[0x10] = {};
+  VkBuffer_Impl *index_buffer = NULL;
+  VkDeviceSize index_buffer_offset = 0;
+  VkIndexType index_type = VkIndexType::VK_INDEX_TYPE_UINT32;
+  VkBuffer_Impl *vertex_buffers[0x10] = {};
+  VkDeviceSize vertex_buffer_offsets[0x10] = {};
+  VkRect2D render_area = {};
+  uint32_t viewport_count = 0;
+  VkViewport viewports[0x10] = {};
+  void reset_state() { memset(this, 0, sizeof(*this)); }
+  void execute_commands(VkCommandBuffer_Impl *cmd_buf);
+};
+} // namespace cmd
+} // namespace vki
+extern "C" void
+draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
+             uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset,
+             uint32_t firstInstance);
 #endif // VK_HPP
