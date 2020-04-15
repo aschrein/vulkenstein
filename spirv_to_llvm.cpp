@@ -1096,25 +1096,14 @@ struct Spirv_Builder {
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
           ASSERT_ALWAYS(location >= 0);
-
-          llvm::ArrayType *array_type = llvm::ArrayType::get(
-              llvm_type->getPointerElementType(), opt_subgroup_size);
-          llvm::Value *offset = llvm_builder->CreateGEP(
-              input_ptr, llvm_get_constant_i32(input_offsets[location] *
-                                               opt_subgroup_size));
-          llvm::Value *type_cast = llvm_builder->CreateBitCast(
-              offset, llvm::PointerType::get(array_type, 0),
-              get_spv_name(var.id));
-          llvm::Value *vector_load =
-              llvm_builder->CreateLoad(array_type, type_cast);
-          llvm::Value *alloca = llvm_builder->CreateAlloca(array_type);
-          llvm_builder->CreateStore(vector_load, alloca);
-
+          // For now just stupid array of structures
           ito(opt_subgroup_size) {
-            llvm_values_per_lane[i][var.id] = llvm_builder->CreateGEP(
-                alloca, {llvm_get_constant_i32(0), llvm_get_constant_i32(i)});
+            llvm::Value *gep = llvm_builder->CreateGEP(
+                input_ptr, llvm_get_constant_i32(input_storage_size * i +
+                                                 input_offsets[location]));
+            llvm::Value *bitcast = llvm_builder->CreateBitCast(gep, llvm_type);
+            llvm_values_per_lane[i][var.id] = bitcast;
           }
-
           break;
         }
         case spv::StorageClass::StorageClassPushConstant: {
@@ -1858,8 +1847,8 @@ struct Spirv_Builder {
                                      vtype2->getVectorNumElements();
               llvm::VectorType *new_vtype = llvm::VectorType::get(
                   vtype1->getVectorElementType(), total_width);
-              // Create a dummy super vector and appedn op1 and op2 elements to
-              // it
+              // Create a dummy super vector and appedn op1 and op2 elements
+              // to it
               llvm::Value *prev = llvm::UndefValue::get(new_vtype);
               ito(vtype1->getVectorNumElements()) {
                 llvm::Value *extr = llvm_builder->CreateExtractElement(op1, i);
@@ -2960,6 +2949,90 @@ struct Spirv_Builder {
       }
       llvm::ReturnInst::Create(c, bb);
     }
+    {
+      llvm::Function *get_input_count = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_count",
+          module.get());
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_input_count);
+      uint32_t input_count = 0;
+      ito(input_sizes.size()) {
+        if (input_sizes[i] != 0)
+          input_count++;
+      }
+      llvm::ReturnInst::Create(
+          c, llvm::ConstantInt::get(c, llvm::APInt(32, input_count)), bb);
+    }
+    {
+      llvm::Function *get_input_offsets = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::Type::getVoidTy(c),
+                                  {llvm::Type::getInt32PtrTy(c)}, false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_offsets",
+          module.get());
+      llvm::Value *ptr_arg = get_input_offsets->getArg(0);
+      NOTNULL(ptr_arg);
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_input_offsets);
+      std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
+      llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
+      uint32_t k = 0;
+      ito(input_sizes.size()) {
+        if (input_sizes[i] != 0) {
+          llvm::Value *gep_0 =
+              llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 2));
+          llvm::Value *gep_1 = llvm_builder->CreateGEP(
+              ptr_arg, llvm_get_constant_i32(k * 2 + 1));
+          llvm_builder->CreateStore(llvm_get_constant_i32(i), gep_0);
+          llvm_builder->CreateStore(llvm_get_constant_i32(input_offsets[i]),
+                                    gep_1);
+          k++;
+        }
+      }
+      llvm::ReturnInst::Create(c, bb);
+    }
+    {
+      llvm::Function *get_output_count = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_count",
+          module.get());
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_output_count);
+      uint32_t output_count = 0;
+      ito(output_sizes.size()) {
+        if (output_sizes[i] != 0)
+          output_count++;
+      }
+      llvm::ReturnInst::Create(
+          c, llvm::ConstantInt::get(c, llvm::APInt(32, output_count)), bb);
+    }
+    {
+      llvm::Function *get_output_offsets = llvm::Function::Create(
+          llvm::FunctionType::get(llvm::Type::getVoidTy(c),
+                                  {llvm::Type::getInt32PtrTy(c)}, false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_offsets",
+          module.get());
+      llvm::Value *ptr_arg = get_output_offsets->getArg(0);
+      NOTNULL(ptr_arg);
+      llvm::BasicBlock *bb =
+          llvm::BasicBlock::Create(c, "entry", get_output_offsets);
+      std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
+      llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
+      uint32_t k = 0;
+      ito(output_sizes.size()) {
+        if (output_sizes[i] != 0) {
+          llvm::Value *gep_0 =
+              llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 2));
+          llvm::Value *gep_1 = llvm_builder->CreateGEP(
+              ptr_arg, llvm_get_constant_i32(k * 2 + 1));
+          llvm_builder->CreateStore(llvm_get_constant_i32(i), gep_0);
+          llvm_builder->CreateStore(llvm_get_constant_i32(output_offsets[i]),
+                                    gep_1);
+          k++;
+        }
+      }
+      llvm::ReturnInst::Create(c, bb);
+    }
     // TODO(aschrein): investigate why LLVM removes code after tail calls in
     // this module.
     // Disable tail call crap
@@ -3980,8 +4053,8 @@ struct Spirv_Builder {
         type_sizes[type_id] = get_size(type_id);
       }
     }
-    // Calculate the layout of the input and ouput data needed for optimal work
-    // of the shader
+    // Calculate the layout of the input and ouput data needed for optimal
+    // work of the shader
     {
       std::vector<uint32_t> inputs;
       std::vector<uint32_t> outputs;
@@ -4038,6 +4111,10 @@ struct Spirv_Builder {
           uint32_t location =
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
+          // Align to 16 bytes
+          if ((input_offset & 0xf) != 0) {
+            input_offset = (input_offset + 0xf) & (~0xfu);
+          }
           input_offsets[location] = input_offset;
           uint32_t size = (uint32_t)get_pointee_size(var.type_id);
           input_sizes[location] = size;
@@ -4050,11 +4127,23 @@ struct Spirv_Builder {
           uint32_t location =
               find_decoration(spv::Decoration::DecorationLocation, var.id)
                   .param1;
+          // Align to 16 bytes
+          if ((output_offset & 0xf) != 0) {
+            output_offset = (output_offset + 0xf) & (~0xfu);
+          }
           output_offsets[location] = output_offset;
           uint32_t size = (uint32_t)get_pointee_size(var.type_id);
           output_sizes[location] = size;
           output_offset += size;
         }
+      }
+      // Align to 16 bytes
+      if ((input_offset & 0xf) != 0) {
+        input_offset = (input_offset + 0xf) & (~0xfu);
+      }
+      // Align to 16 bytes
+      if ((output_offset & 0xf) != 0) {
+        output_offset = (output_offset + 0xf) & (~0xfu);
       }
       output_storage_size = output_offset;
       input_storage_size = input_offset;

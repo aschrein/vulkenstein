@@ -16,7 +16,14 @@ struct UBO
 void spv_main(void *);
 
 void test_launch(void *_printf) {
-  float3 positions[NUM_INVOCATIONS * 2];
+  #pragma pack(push,1)
+  struct Attributes {
+    float3 pos;
+    float3 color;
+  };
+  #pragma pack(pop)
+  static_assert (sizeof(Attributes) == 32, "Invalid packing of Attributes");
+  Attributes attributes[NUM_INVOCATIONS];
   float3 colors[NUM_INVOCATIONS];
   float4 gl_PerVertex[NUM_INVOCATIONS];
   ubo.projectionMatrix[0] = (float4){1.0f, 0.0f, 0.0f, 0.0f};
@@ -35,7 +42,7 @@ void test_launch(void *_printf) {
   ubo.viewMatrix[3] = (float4){0.0f, 0.0f, 0.0f, 1.0f};
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
-    positions[i] = (float3){(float)i, 0.0f, 0.0f};
+    attributes[i].pos = (float3){(float)i, 0.0f, 0.0f};
     // ((printf_t)_printf)("[%i %i]\n", g_buf_0[i], g_buf_1[i]);
   }
   Invocation_Info info;
@@ -50,7 +57,7 @@ void test_launch(void *_printf) {
   info.subgroup_y_offset  = 0x0;
   info.subgroup_z_bits    = 0x0;
   info.subgroup_z_offset  = 0x0;
-  info.input = &positions;
+  info.input = &attributes;
   info.output = &colors;
   info.builtin_output = &gl_PerVertex;
   void *descriptor_set_0[] = {NULL};
@@ -60,7 +67,7 @@ void test_launch(void *_printf) {
   for (uint32_t i = 0; i < NUM_INVOCATIONS/WAVE_WIDTH; i++) {
     info.invocation_id = (uint3){i, 0, 0};
     info.invocation_id = (uint3){i, 0, 0};
-    info.input = &positions[i * WAVE_WIDTH];
+    info.input = &attributes[i * WAVE_WIDTH];
     info.output = &colors[i * WAVE_WIDTH];
     info.builtin_output = &gl_PerVertex[i * WAVE_WIDTH];
     spv_main(&info);
@@ -73,7 +80,7 @@ void test_launch(void *_printf) {
         &ubo.viewMatrix[0],
         spv_matrix_times_float_4x4(
           &ubo.modelMatrix[0],
-          (float4){positions[i].x, positions[i].y, positions[i].z, 1.0f}
+          (float4){attributes[i].pos.x, attributes[i].pos.y, attributes[i].pos.z, 1.0f}
         )
       )
     );
