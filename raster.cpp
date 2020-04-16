@@ -1,7 +1,9 @@
-#define UTILS_IMPL
-
 #include "utils.hpp"
+#include "vk.hpp"
 #include <x86intrin.h>
+
+#define SPV_STDLIB_JUST_TYPES
+#include "spv_stdlib/spv_stdlib.cpp"
 
 #ifdef RASTER_EXE
 
@@ -190,7 +192,7 @@ void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
   fclose(file);
 }
 
-#endif
+#endif // RASTER_EXE
 
 void clear_image_2d_i32(void *image, uint32_t pitch, uint32_t width,
                         uint32_t height, uint32_t value) {
@@ -242,9 +244,6 @@ void rasterize_triangle_naive_0(float x0, float y0, float x1, float y1,
                                 float x2, float y2, uint8_t *image,
                                 uint32_t width, uint32_t height,
                                 uint8_t value) {
-  uint32_t subpixel_precision = 4;                   // bits
-  ASSERT_ALWAYS((width & (~width + 1)) == width);    // power of two
-  ASSERT_ALWAYS((height & (~height + 1)) == height); // power of two
   float n0_x = -(y1 - y0);
   float n0_y = (x1 - x0);
   float n1_x = -(y2 - y1);
@@ -542,7 +541,324 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
   *tile_count = _tile_count;
 }
 
+float clamp(float x, float min, float max) {
+  return x > max ? max : x < min ? min : x;
+}
+
+uint32_t rgba32f_to_rgba8(float4 in) {
+  uint8_t r = (uint8_t)clamp(255.0f * in.x, 0.0f, 255.0f);
+  uint8_t g = (uint8_t)clamp(255.0f * in.y, 0.0f, 255.0f);
+  uint8_t b = (uint8_t)clamp(255.0f * in.z, 0.0f, 255.0f);
+  uint8_t a = (uint8_t)clamp(255.0f * in.w, 0.0f, 255.0f);
+  return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) |
+         ((uint32_t)a << 24);
+}
+
+void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
+                  uint32_t instanceCount, uint32_t firstIndex,
+                  int32_t vertexOffset, uint32_t firstInstance) {
+  Shader_Symbols *vs_symbols =
+      get_shader_symbols(state->graphics_pipeline->vs->jitted_code);
+  Shader_Symbols *ps_symbols =
+      get_shader_symbols(state->graphics_pipeline->ps->jitted_code);
+  NOTNULL(vs_symbols);
+  NOTNULL(ps_symbols);
+  // Vertex shading
+  uint8_t *vs_output = NULL;
+  float4 *vs_vertex_positions = NULL;
+  defer(if (vs_output) free(vs_output));
+  defer(if (vs_vertex_positions) free(vs_vertex_positions));
+  vki::VkPipeline_Impl *pipeline = state->graphics_pipeline;
+  {
+    struct Attribute_Desc {
+      uint8_t *src;
+      uint32_t src_stride;
+      uint32_t size;
+      bool per_vertex_rate;
+    };
+    VkVertexInputBindingDescription vertex_bindings[0x10] = {};
+    Attribute_Desc attribute_descs[0x10] = {};
+
+    ASSERT_ALWAYS(pipeline->IA_bindings.vertexBindingDescriptionCount < 0x10);
+    ASSERT_ALWAYS(pipeline->IA_bindings.vertexAttributeDescriptionCount < 0x10);
+    ito(pipeline->IA_bindings.vertexBindingDescriptionCount) {
+      VkVertexInputBindingDescription desc =
+          pipeline->IA_bindings.pVertexBindingDescriptions[i];
+      vertex_bindings[desc.binding] = desc;
+    }
+    ito(pipeline->IA_bindings.vertexAttributeDescriptionCount) {
+      VkVertexInputAttributeDescription desc =
+          pipeline->IA_bindings.pVertexAttributeDescriptions[i];
+      Attribute_Desc attribute_desc;
+      VkVertexInputBindingDescription binding_desc =
+          vertex_bindings[desc.binding];
+      attribute_desc.src =
+          state->vertex_buffers[desc.binding]->get_ptr() + desc.offset;
+      attribute_desc.src_stride = binding_desc.stride;
+      attribute_desc.per_vertex_rate =
+          binding_desc.inputRate ==
+          VkVertexInputRate::VK_VERTEX_INPUT_RATE_VERTEX;
+      switch (desc.format) {
+      case VkFormat::VK_FORMAT_R32G32B32_SFLOAT:
+        attribute_desc.size = 12;
+        break;
+      default:
+        UNIMPLEMENTED;
+      };
+      attribute_descs[desc.location] = attribute_desc;
+    }
+    ASSERT_ALWAYS(pipeline->IA_topology ==
+                  VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    uint32_t subgroup_size = vs_symbols->subgroup_size;
+    uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
+    uint32_t total_data_units_needed = num_invocations * subgroup_size;
+    uint8_t *attributes =
+        (uint8_t *)malloc(total_data_units_needed * vs_symbols->input_stride);
+    defer(free(attributes));
+    vs_output =
+        (uint8_t *)malloc(total_data_units_needed * vs_symbols->output_stride);
+    vs_vertex_positions = (float4 *)malloc(total_data_units_needed * 16);
+    uint32_t *index_src = (uint32_t *)(((size_t)state->index_buffer->get_ptr() +
+                                        state->index_buffer_offset) &
+                                       (~0b11ull));
+    ASSERT_ALWAYS(state->index_type == VkIndexType::VK_INDEX_TYPE_UINT32);
+    kto(indexCount) {
+      uint32_t index =
+          (uint32_t)((int32_t)index_src[k + firstIndex] + vertexOffset);
+      ito(vs_symbols->input_item_count) {
+        auto item = vs_symbols->input_offsets[i];
+        Attribute_Desc attribute_desc = attribute_descs[item.location];
+        ASSERT_ALWAYS(attribute_desc.per_vertex_rate);
+        memcpy(attributes + index * vs_symbols->input_stride + item.offset,
+               attribute_desc.src + attribute_desc.src_stride * index,
+               attribute_desc.size);
+      }
+    }
+
+    Invocation_Info info = {};
+    info.work_group_size = (uint3){subgroup_size, 1, 1};
+    info.invocation_count = (uint3){num_invocations, 1, 1};
+    info.subgroup_size = (uint3){subgroup_size, 1, 1};
+    info.subgroup_x_bits = 0xff;
+    info.subgroup_x_offset = 0x0;
+    info.subgroup_y_bits = 0x0;
+    info.subgroup_y_offset = 0x0;
+    info.subgroup_z_bits = 0x0;
+    info.subgroup_z_offset = 0x0;
+    info.input = NULL;
+    info.output = NULL;
+    info.builtin_output = NULL;
+    info.print_fn = (void *)printf;
+    void *descriptor_set_0[0x10] = {};
+    descriptor_set_0[0] = state->descriptor_sets[0]->slots[0].buffer->get_ptr();
+    //    float4 *mat = (float4 *)descriptor_set_0[0];
+    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
+    //                   mat[i].w);
+    //    fprintf(stdout, "__________________\n");
+    //    mat += 4;
+    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
+    //                   mat[i].w);
+    //    fprintf(stdout, "__________________\n");
+    //    mat += 4;
+    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
+    //                   mat[i].w);
+    //    fprintf(stdout, "#################\n");
+    info.descriptor_sets[0] = &descriptor_set_0[0];
+    ito(num_invocations) {
+      info.invocation_id = (uint3){i, 0, 0};
+      info.input = attributes + i * subgroup_size * vs_symbols->input_stride;
+      info.output = vs_output + i * subgroup_size * vs_symbols->output_stride;
+      // Assume there's only gl_Position
+      info.builtin_output = vs_vertex_positions + i * subgroup_size;
+      vs_symbols->spv_main(&info);
+    }
+  }
+  // Assemble that into triangles
+  ASSERT_ALWAYS(state->graphics_pipeline->IA_topology ==
+                VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+  ASSERT_ALWAYS(indexCount % 3 == 0);
+  // so the triangle could be split in up to 6 triangles after culling
+  float3 *screenspace_positions =
+      (float3 *)malloc(sizeof(float3) * indexCount * 6);
+  uint32_t rasterizer_triangles_count = 0;
+  defer(free(screenspace_positions));
+  ito(indexCount / 3) {
+    float4 v0 = vs_vertex_positions[i * 3 + 0];
+    float4 v1 = vs_vertex_positions[i * 3 + 1];
+    float4 v2 = vs_vertex_positions[i * 3 + 2];
+    // TODO: culling
+    v0 = v0 / v0.w;
+    v1 = v1 / v1.w;
+    v2 = v2 / v2.w;
+    screenspace_positions[i * 3 + 0] = (float3){v0.x, v0.y, v0.z};
+    screenspace_positions[i * 3 + 1] = (float3){v1.x, v1.y, v1.z};
+    screenspace_positions[i * 3 + 2] = (float3){v2.x, v2.y, v2.z};
+    rasterizer_triangles_count++;
+  }
+  // Rastrization
+  struct Pixel_Invocation_Info {
+    uint32_t triangle_id;
+    // Barycentric coordinates
+    float b_0, b_1, b_2;
+    uint32_t x, y;
+  };
+  Pixel_Invocation_Info *pinfos = (Pixel_Invocation_Info *)malloc(
+      sizeof(Pixel_Invocation_Info) * (1 << 23));
+  uint32_t num_pixel_invocations = 0;
+  kto(rasterizer_triangles_count) {
+    float3 v0 = screenspace_positions[k * 3 + 0];
+    float3 v1 = screenspace_positions[k * 3 + 1];
+    float3 v2 = screenspace_positions[k * 3 + 2];
+    // naive rasterization
+    float x0 = v0.x;
+    float y0 = v0.y;
+    float x1 = v1.x;
+    float y1 = v1.y;
+    float x2 = v2.x;
+    float y2 = v2.y;
+    float n0_x = -(y1 - y0);
+    float n0_y = (x1 - x0);
+    float n1_x = -(y2 - y1);
+    float n1_y = (x2 - x1);
+    float n2_x = -(y0 - y2);
+    float n2_y = (x0 - x2);
+    float area = (x1 - x0) * (y1 + y0) + //
+                 (x2 - x1) * (y2 + y1) + //
+                 (x0 - x2) * (y0 + y2);
+    area = -area / 2.0f;
+    bool cull =
+        pipeline->RS_state.cullMode != VkCullModeFlagBits::VK_CULL_MODE_NONE;
+    float cull_sign =
+        pipeline->RS_state.frontFace == VkFrontFace::VK_FRONT_FACE_CLOCKWISE
+            ? 1.0f
+            : -1.0f;
+    if (pipeline->RS_state.cullMode ==
+        VkCullModeFlagBits::VK_CULL_MODE_FRONT_BIT) {
+      cull_sign *= cull_sign;
+    }
+    if (cull && area < cull_sign) {
+      break;
+    }
+    float area_sign = area >= 0.0f ? 1.0 : -1.0f;
+    ito(state->render_area.extent.height) {
+      jto(state->render_area.extent.width) {
+        float x = 2.0f * (((float)j) + 0.5f) /
+                      (float)state->render_area.extent.width -
+                  1.0f;
+        float y = 2.0f * (((float)i) + 0.5f) /
+                      (float)state->render_area.extent.height -
+                  1.0f;
+        float e0 = n0_x * (x - x0) + n0_y * (y - y0);
+        float e1 = n1_x * (x - x1) + n1_y * (y - y1);
+        float e2 = n2_x * (x - x2) + n2_y * (y - y2);
+        if (e0 * area_sign >= 0.0f && e1 * area_sign >= 0.0f &&
+            e2 * area_sign >= 0.0f) {
+          pinfos[num_pixel_invocations] =
+              Pixel_Invocation_Info{.triangle_id = k,
+                                    .b_0 = 0.0f,
+                                    .b_1 = 0.0f,
+                                    .b_2 = 0.0f,
+                                    .x = j,
+                                    .y = i};
+          num_pixel_invocations++;
+
+        } else {
+          //          ((uint32_t *)rt->img->get_ptr())[i * rt->img->extent.width
+          //          + j] = 0x0;
+        }
+      }
+    }
+  }
+  // Pixel shading
+  ASSERT_ALWAYS(state->framebuffer->attachmentCount == 2);
+  vki::VkImageView_Impl *rt = NULL;    // state->framebuffer->pAttachments[0];
+  vki::VkImageView_Impl *depth = NULL; // state->framebuffer->pAttachments[0];
+  ASSERT_ALWAYS(state->render_pass->subpassCount == 1);
+  uint32_t num_color_attachments = 0;
+  ito(state->render_pass->pSubpasses[0].colorAttachmentCount) {
+    rt =
+        state->framebuffer->pAttachments
+            [state->render_pass->pSubpasses[0].pColorAttachments[i].attachment];
+    num_color_attachments++;
+  }
+  if (state->render_pass->pSubpasses[0].has_depth_stencil_attachment) {
+    depth = state->framebuffer
+                ->pAttachments[state->render_pass->pSubpasses[0]
+                                   .pDepthStencilAttachment.attachment];
+  }
+  NOTNULL(depth);
+  NOTNULL(rt);
+  float4 *pixel_output = NULL;
+  defer(if (pixel_output != NULL) free(pixel_output));
+  ASSERT_ALWAYS(rt->format == VkFormat::VK_FORMAT_R8G8B8A8_SRGB);
+  {
+    uint32_t subgroup_size = ps_symbols->subgroup_size;
+    uint32_t num_invocations =
+        (num_pixel_invocations + subgroup_size - 1) / subgroup_size;
+    pixel_output =
+        (float4 *)malloc(sizeof(float4) * num_invocations * subgroup_size);
+    // Perform relocation of data for vs->ps
+    uint8_t *pixel_input = NULL;
+    defer(if (pixel_input != NULL) free(pixel_input));
+    pixel_input = (uint8_t *)malloc(3 * ps_symbols->input_stride *
+                                    num_invocations * subgroup_size);
+    ito(num_pixel_invocations) {
+      // TODO: interpolate
+      Pixel_Invocation_Info info = pinfos[i];
+      jto(ps_symbols->input_item_count) {
+        //kto(3)
+            memcpy(pixel_input + ps_symbols->input_stride * (i) +
+                       ps_symbols->input_offsets[j].offset,
+                   vs_output + vs_symbols->output_offsets[j].offset +
+                       vs_symbols->output_stride * (info.triangle_id * 3),
+                   16);
+        //               vs_symbols->output_sizes[j]);
+      }
+    }
+    Invocation_Info info = {};
+    info.work_group_size = (uint3){subgroup_size, 1, 1};
+    info.invocation_count = (uint3){num_invocations, 1, 1};
+    info.subgroup_size = (uint3){subgroup_size, 1, 1};
+    info.subgroup_x_bits = 0xff;
+    info.subgroup_x_offset = 0x0;
+    info.subgroup_y_bits = 0x0;
+    info.subgroup_y_offset = 0x0;
+    info.subgroup_z_bits = 0x0;
+    info.subgroup_z_offset = 0x0;
+    info.input = NULL;
+    info.output = NULL;
+    info.builtin_output = NULL;
+    info.print_fn = (void *)printf;
+    void *descriptor_set_0[0x10] = {};
+    descriptor_set_0[0] = state->descriptor_sets[0]->slots[0].buffer->get_ptr();
+    info.descriptor_sets[0] = &descriptor_set_0[0];
+    ito(num_invocations) {
+      info.invocation_id = (uint3){i, 0, 0};
+      info.input =
+          pixel_input + i * subgroup_size * ps_symbols->input_stride;
+      info.output = pixel_output + i * subgroup_size;
+      // Assume there's only gl_Position
+      info.builtin_output = vs_vertex_positions + i * subgroup_size;
+      ps_symbols->spv_main(&info);
+    }
+  }
+  clear_image_2d_i32((uint32_t *)rt->img->get_ptr(), rt->img->extent.width * 4,
+                     rt->img->extent.width, rt->img->extent.height, 0x0);
+  ito(num_pixel_invocations) {
+    Pixel_Invocation_Info info = pinfos[i];
+    ((uint32_t *)rt->img->get_ptr())[info.y * rt->img->extent.width + info.x] =
+        rgba32f_to_rgba8(pixel_output[i]);
+  }
+  //    ito(4) fprintf(stdout, "%f %f %f %f\n", vs_vertex_positions[i].x,
+  //                   vs_vertex_positions[i].y, vs_vertex_positions[i].z,
+  //                   vs_vertex_positions[i].w);
+  //    fprintf(stdout, "#################\n");
+}
+
 #ifdef RASTER_EXE
+#define UTILS_IMPL
+#include "utils.hpp"
+Shader_Symbols *get_shader_symbols(void *ptr) { return NULL; }
 int main(int argc, char **argv) {
   call_pfc(pfcInit());
   call_pfc(pfcPinThread(3));
@@ -596,4 +912,4 @@ int main(int argc, char **argv) {
   write_image_2d_i8_ppm_tiled("image.ppm", image_i8, width_pow, 2);
   return 0;
 }
-#endif
+#endif // RASTER_EXE

@@ -615,7 +615,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
   struct {
     uint32_t minImageCount = 1;
     uint32_t maxImageCount = 2;
-    VkExtent2D currentExtent = {512, 512};
+    VkExtent2D currentExtent = {0xFFFFFFFF, 0xFFFFFFFF};
     VkExtent2D minImageExtent = {1, 1};
     VkExtent2D maxImageExtent = {1 << 16, 1 << 16};
     uint32_t maxImageArrayLayers = 1;
@@ -626,6 +626,17 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
     VkCompositeAlphaFlagsKHR supportedCompositeAlpha = 0;
     VkImageUsageFlags supportedUsageFlags = 0;
   } caps;
+
+  //  xcb_get_geometry_cookie_t cookie;
+  //  xcb_get_geometry_reply_t *reply;
+  //  vki::VkSurfaceKHR_Impl *surface_impl = ALLOC_VKOBJ_T(VkSurfaceKHR);
+  //  cookie = xcb_get_geometry(surface_impl->connection, surface_impl->window);
+  //  ASSERT_ALWAYS(reply =
+  //                    xcb_get_geometry_reply(surface_impl->connection, cookie,
+  //                    NULL));
+  //  caps.currentExtent.width = reply->width;
+  //  caps.currentExtent.height = reply->height;
+  //  free(reply);
   NOTNULL(pSurfaceCapabilities);
   ASSERT_ALWAYS(sizeof(caps) == sizeof(*pSurfaceCapabilities));
   memcpy(pSurfaceCapabilities, &caps, sizeof(caps));
@@ -1039,6 +1050,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkQueueSubmit(VkQueue queue,
       vki::VkCommandBuffer_Impl *impl =
           (vki::VkCommandBuffer_Impl *)pSubmits[i].pCommandBuffers[j];
       vki::cmd::g_gpu_state.execute_commands(impl);
+      impl->rewind();
     }
   }
   return VK_SUCCESS;
@@ -2272,12 +2284,13 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
   vki::VkSurfaceKHR_Impl *surface =
       (vki::VkSurfaceKHR_Impl *)pCreateInfo->surface;
   vki::VkSwapChain_Impl *impl = ALLOC_VKOBJ_T(VkSwapChain);
-  xcb_get_geometry_cookie_t cookie;
-  xcb_get_geometry_reply_t *reply;
+  //  xcb_get_geometry_cookie_t cookie;
+  //  xcb_get_geometry_reply_t *reply;
 
-  cookie = xcb_get_geometry(surface->connection, surface->window);
-  ASSERT_ALWAYS(reply =
-                    xcb_get_geometry_reply(surface->connection, cookie, NULL));
+  //  cookie = xcb_get_geometry(surface->connection, surface->window);
+  //  ASSERT_ALWAYS(reply =
+  //                    xcb_get_geometry_reply(surface->connection, cookie,
+  //                    NULL));
   ASSERT_ALWAYS(pCreateInfo->minImageCount == 2);
   impl->surface = surface;
   impl->surface->refcnt++;
@@ -2285,7 +2298,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
   impl->height = pCreateInfo->imageExtent.height;
   impl->format = pCreateInfo->imageFormat;
   impl->image_count = pCreateInfo->minImageCount;
-  free(reply);
+  //  free(reply);
   *pSwapchain = (VkSwapchainKHR)impl;
   uint32_t bpp = 0;
   switch (impl->format) {
@@ -2305,6 +2318,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkCreateSwapchainKHR(
     impl->images[i].format = impl->format;
     impl->images[i].mem = mem;
     impl->images[i].size = mem->size;
+    impl->images[i].extent = {impl->width, impl->height, 1};
     impl->images[i].offset = (size_t)0;
   }
   return VK_SUCCESS;
@@ -2337,13 +2351,120 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageKHR(
   *pImageIndex = impl->cur_image;
   return VK_SUCCESS;
 }
-
+//#include <X11/Xutil.h>
+#include <xcb/xcb_image.h>
+#include <xcb/xcb_aux.h>
 VKAPI_ATTR VkResult VKAPI_CALL
 vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
-  ito(pPresentInfo->swapchainCount) {
+  kto(pPresentInfo->swapchainCount) {
     vki::VkSwapChain_Impl *impl =
-        (vki::VkSwapChain_Impl *)pPresentInfo->pSwapchains[i];
-    impl->present();
+        (vki::VkSwapChain_Impl *)pPresentInfo->pSwapchains[k];
+    vki::VkSurfaceKHR_Impl *surface = impl->surface;
+    vki::VkImage_Impl *cur_bb = &impl->images[impl->cur_image];
+    ASSERT_ALWAYS(get_format_bpp(cur_bb->format) == 4);
+    uint8_t *cur_bb_data = (uint8_t *)cur_bb->get_ptr();
+
+    xcb_connection_t *c = surface->connection;
+    xcb_screen_t *screen = xcb_setup_roots_iterator(xcb_get_setup(c)).data;
+    xcb_drawable_t win = surface->window;
+
+//    xcb_gcontext_t foreground;
+//    uint32_t mask = 0;
+//    static uint32_t frame_id = 0;
+//    xcb_rectangle_t rectangles[] = {
+//        {(int16_t)((frame_id % 100) + 0), 0, 10, 10},
+//    };
+//    frame_id++;
+//    foreground = xcb_generate_id(c);
+//    mask = XCB_GC_FUNCTION | XCB_GC_FOREGROUND | XCB_GC_BACKGROUND |
+//           XCB_GC_LINE_WIDTH | XCB_GC_LINE_STYLE | XCB_GC_GRAPHICS_EXPOSURES;
+//    uint32_t values[] = {
+//        XCB_GX_XOR, screen->white_pixel,        screen->black_pixel,
+//        1,          XCB_LINE_STYLE_ON_OFF_DASH, 0};
+
+//    xcb_create_gc(c, foreground, win, mask, values);
+
+//    xcb_poly_rectangle(c, win, foreground, 1, rectangles);
+//    xcb_flush(c);
+//    xcb_free_gc(c, foreground);
+
+    int w = impl->width, h = impl->height, depth = 24;
+    xcb_gcontext_t gc = xcb_generate_id(c);
+    xcb_pixmap_t pixmap = xcb_generate_id(c);
+    xcb_image_t *image;
+    uint8_t *data = (uint8_t *)malloc(w * h * 4);
+    //    defer(free(data));
+    //    static int frame_id = 0;
+    //    fprintf(stdout, "refresh %i\n", frame_id++);
+    ito(w * h * 4) data[i] = cur_bb_data[i];
+    xcb_create_pixmap(c, depth, pixmap, win, w, h);
+    xcb_create_gc(c, gc, win, 0, NULL);
+    image = xcb_image_create_native(c, w, h, XCB_IMAGE_FORMAT_Z_PIXMAP, depth,
+                                    data, w * h * 4, data);
+    xcb_image_put(c, pixmap, gc, image, 0, 0, 0);
+    xcb_copy_area(c, pixmap, win, gc, 0, 0, 0, 0, impl->width, impl->height);
+//    xcb_aux_sync(c);
+    xcb_flush(c);
+//    usleep(1000);
+    xcb_image_destroy(image);
+    xcb_free_pixmap(c, pixmap);
+    xcb_free_gc(c, gc);
+
+#if 0
+Display *display = XOpenDisplay(NULL);
+    //    Pixmap pixmap =
+    //        XCreatePixmap(display, surface->window, impl->width, impl->height,
+    //        24);
+    //    XImage *image = XGetImage(display, pixmap, 0, 0, impl->width,
+    //    impl->height,
+    //                              AllPlanes, ZPixmap);
+    Visual *visual = DefaultVisual(display, 0);
+
+    char *data = (char *)malloc(impl->width * impl->height * 4);
+
+    XImage *image =
+        XCreateImage(display, visual, DefaultDepth(display, 0), ZPixmap, 0,
+                     data, impl->width, impl->height, 32, 0);
+    NOTNULL(image);
+    //    GC gc = XCreateGC(display, surface->window, 0, NULL);
+    vki::VkImage_Impl *cur_bb = &impl->images[impl->cur_image];
+    ASSERT_ALWAYS(get_format_bpp(cur_bb->format) == 4);
+    uint32_t *cur_bb_data = (uint32_t *)cur_bb->get_ptr();
+
+    ito(impl->height) {
+      jto(impl->width) {
+        XPutPixel(image, i, j, cur_bb_data[i * impl->width + j]);
+      }
+    }
+    xcb_gcontext_t gc = xcb_generate_id(surface->connection);
+    //    XPutImage(display, pixmap, gc, image, 0, 0, 0, 0, impl->width,
+    //              impl->height);
+    //    XSetWindowBackgroundPixmap(display, surface->window, pixmap);
+    //    XPutPixel(image, 100, 100, 0xffffffff);
+    xcb_put_image(surface->connection, XCB_IMAGE_FORMAT_Z_PIXMAP,
+                  surface->window, gc, impl->width, impl->height, 0, 0, 0, 32,
+                  impl->width * impl->height * 4, (uint8_t *)image->data);
+    xcb_flush(surface->connection);
+    xcb_free_gc(surface->connection, gc);
+    //    XPutImage(display, surface->window, DefaultGC(display,0), image, 0, 0,
+    //    0, 0, impl->width,
+    //              impl->height);
+    // XFree(image);
+    //    XFillRectangle(display, surface->window, gc, 0, 100, 50, 50);
+    //    XFlush(display);
+    //    XFreePixmap(display, pixmap);
+    XDestroyImage(image);
+    //    XSync(display, 0);
+    //    XMapWindow(display, surface->window);
+    //    XFreeGC(display, gc);
+    XCloseDisplay(display);
+    //     Pixmap pixmap = XCreatePixmap(display, surface->window, impl->width,
+    //     impl->height, 24); XDrawPoint(display, pixmap, gc, 15, 20);
+    //     XCopyArea(display, pixmap, surface->window, gc,
+    //          0, 0,
+    //          impl->width, impl->height,
+    //          0, 0);
+#endif
   }
   return VK_SUCCESS;
 }

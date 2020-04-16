@@ -1,5 +1,11 @@
 ## Toy SPIRV to LLVM IR translator
 
+## Run tests
+```console
+cd vulkenstein
+python3 tests/run_all_tests.py
+```
+
 ## Build
 ### LibPFC
 ```console

@@ -12,6 +12,8 @@ typedef uint32_t xcb_window_t;
 // TODO(aschrein): Nuke this from the orbit
 namespace vki {
 struct VkDevice_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   void release() {
     if (--refcnt == 0)
@@ -19,6 +21,8 @@ struct VkDevice_Impl {
   }
 };
 struct VkSurfaceKHR_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   xcb_connection_t *connection;
   xcb_window_t window;
@@ -28,6 +32,8 @@ struct VkSurfaceKHR_Impl {
   }
 };
 struct VkPhysicalDevice_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   void release() {
     if (--refcnt == 0)
@@ -36,6 +42,8 @@ struct VkPhysicalDevice_Impl {
 };
 
 struct VkInstance_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   void release() {
     if (--refcnt == 0)
@@ -43,6 +51,8 @@ struct VkInstance_Impl {
   }
 };
 struct VkDeviceMemory_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   uint8_t *ptr;
   size_t size;
@@ -55,6 +65,8 @@ struct VkDeviceMemory_Impl {
   }
 };
 struct VkBuffer_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   VkDeviceMemory_Impl *mem;
   size_t offset;
@@ -68,6 +80,8 @@ struct VkBuffer_Impl {
   uint8_t *get_ptr() { return mem->ptr + this->offset; }
 };
 struct VkBufferView_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   VkBuffer_Impl *buf;
   VkFormat format;
@@ -80,6 +94,8 @@ struct VkBufferView_Impl {
   }
 };
 struct VkImage_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   VkDeviceMemory_Impl *mem;
   size_t offset;
@@ -90,6 +106,7 @@ struct VkImage_Impl {
   uint32_t arrayLayers;
   VkSampleCountFlagBits samples;
   VkImageLayout initialLayout;
+  uint8_t *get_ptr() { return mem->ptr + this->offset; }
   void release() {
     if (--refcnt == 0) {
       mem->release();
@@ -98,6 +115,8 @@ struct VkImage_Impl {
   }
 };
 struct VkDescriptorSetLayout_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   uint32_t bindingCount;
   VkDescriptorSetLayoutBinding *pBindings;
@@ -110,6 +129,8 @@ struct VkDescriptorSetLayout_Impl {
   }
 };
 struct VkPipelineLayout_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   uint32_t setLayoutCount;
   VkDescriptorSetLayout_Impl *pSetLayouts[0x10];
@@ -123,6 +144,8 @@ struct VkPipelineLayout_Impl {
   }
 };
 struct VkImageView_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   VkImage_Impl *img;
   VkImageViewType type;
@@ -137,6 +160,8 @@ struct VkImageView_Impl {
   }
 };
 struct VkShaderModule_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   void *jitted_code;
   void init(uint32_t const *pCode, size_t code_size) {
@@ -154,6 +179,8 @@ struct VkShaderModule_Impl {
 #define MEMZERO(obj) memset(&obj, 0, sizeof(obj))
 
 struct VkSwapChain_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   uint32_t cur_image = 0;
   VkImage_Impl images[3];
@@ -162,7 +189,6 @@ struct VkSwapChain_Impl {
   uint32_t width, height;
   VkFormat format;
   VkSurfaceKHR_Impl *surface;
-  void present() {}
   void release() {
     if (--refcnt == 0) {
       surface->release();
@@ -177,6 +203,8 @@ struct VkSwapChain_Impl {
 };
 
 struct VkRenderPass_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   uint32_t attachmentCount;
   VkAttachmentDescription pAttachments[10];
@@ -203,6 +231,8 @@ struct VkRenderPass_Impl {
   }
 };
 struct VkPipeline_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   bool is_graphics;
   // Compute state
@@ -279,6 +309,8 @@ struct VkPipeline_Impl {
   }
 };
 struct VkDescriptorPool_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   uint32_t maxSets;
   uint32_t poolSizeCount;
@@ -293,6 +325,8 @@ struct VkDescriptorPool_Impl {
   }
 };
 struct VkSampler_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   void release() {
     if (--refcnt == 0)
@@ -300,6 +334,8 @@ struct VkSampler_Impl {
   }
 };
 struct VkDescriptorSet_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   VkDescriptorPool_Impl *pool;
   VkDescriptorSetLayout_Impl *layout;
@@ -334,6 +370,8 @@ struct VkDescriptorSet_Impl {
   }
 };
 struct VkCommandBuffer_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   uint8_t *data;
   size_t data_size;
@@ -361,6 +399,7 @@ struct VkCommandBuffer_Impl {
     data_cursor = 0;
     read_cursor = 0;
   }
+  void rewind() { read_cursor = 0; }
   void reset() {
     read_cursor = 0;
     data_cursor = 0;
@@ -390,6 +429,8 @@ struct VkCommandBuffer_Impl {
 };
 
 struct VkFramebuffer_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
   uint32_t refcnt;
   VkFramebufferCreateFlags flags;
   VkRenderPass_Impl *renderPass;
@@ -426,8 +467,35 @@ struct GPU_State { // doesn't do any ref counting here
 };
 } // namespace cmd
 } // namespace vki
-extern "C" void
-draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
-             uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset,
-             uint32_t firstInstance);
+struct Shader_Symbols {
+  void (*spv_main)(void *);
+  uint32_t (*get_private_size)();
+  uint32_t (*get_export_count)();
+  uint32_t (*get_input_count)();
+  uint32_t (*get_input_stride)();
+  uint32_t (*get_output_count)();
+  uint32_t (*get_output_stride)();
+  uint32_t (*get_subgroup_size)();
+  void (*get_export_items)(uint32_t *);
+  void (*get_input_offsets)(uint32_t *);
+  void (*get_output_offsets)(uint32_t *);
+  struct Input_Item {
+    uint32_t location;
+    uint32_t offset;
+  };
+  Input_Item input_offsets[0x10];
+  Input_Item output_offsets[0x10];
+  uint32_t input_item_count;
+  uint32_t input_stride;
+  uint32_t output_item_count;
+  uint32_t output_stride;
+  uint32_t private_storage_size;
+  uint32_t export_count;
+  uint32_t export_items[0x10];
+  uint32_t subgroup_size;
+};
+extern "C" Shader_Symbols *get_shader_symbols(void *ptr);
+extern "C" void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
+                             uint32_t instanceCount, uint32_t firstIndex,
+                             int32_t vertexOffset, uint32_t firstInstance);
 #endif // VK_HPP

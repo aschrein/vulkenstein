@@ -83,6 +83,7 @@ target_include_directories(raster
 )
 add_library(vk SHARED
 vk.cpp
+raster.cpp
 spirv_to_llvm.cpp
 llvm_stdlib_1.h
 llvm_stdlib_4.h
@@ -117,4 +118,4 @@ target_compile_definitions(vk PRIVATE ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(s2l PRIVATE "-DS2L_EXE " ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(raster PRIVATE "-DRASTER_EXE " ${LLVM_COMPILE_FLAGS})
 target_link_libraries(s2l ${LLVM_LIBRARY_LIST} pthread ncurses z dl)
-target_link_libraries(vk ${LLVM_LIBRARY_LIST} pthread ncurses z dl)
+target_link_libraries(vk ${LLVM_LIBRARY_LIST} pthread ncurses z dl xcb-image X11)

@@ -78,72 +78,39 @@ void *read_file(const char *filename, size_t *size,
 }
 
 struct Jitted_Shader {
-  struct Shader_Symbols {
-    void (*spv_main)(void *);
-    uint32_t (*get_private_size)();
-    uint32_t (*get_export_count)();
-    uint32_t (*get_input_count)();
-    uint32_t (*get_input_stride)();
-    uint32_t (*get_output_count)();
-    uint32_t (*get_output_stride)();
-    uint32_t (*get_subgroup_size)();
-    void (*get_export_items)(uint32_t *);
-    void (*get_input_offsets)(uint32_t *);
-    void (*get_output_offsets)(uint32_t *);
-    struct Input_Item {
-      uint32_t location;
-      uint32_t offset;
-    };
-    Input_Item input_offsets[0x10];
-    Input_Item output_offsets[0x10];
-    uint32_t input_item_count;
-    uint32_t input_stride;
-    uint32_t output_item_count;
-    uint32_t output_stride;
-    uint32_t private_storage_size;
-    uint32_t export_count;
-    uint32_t export_items[0x10];
-    uint32_t subgroup_size;
-    void init(llvm::orc::LLJIT *jit) {
-      llvm::ExitOnError ExitOnErr;
-      jit->getMainJITDylib().addGenerator(ExitOnErr(
-          llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
-              jit->getDataLayout().getGlobalPrefix())));
+  void init() {
+    llvm::ExitOnError ExitOnErr;
+    jit->getMainJITDylib().addGenerator(ExitOnErr(
+        llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+            jit->getDataLayout().getGlobalPrefix())));
 #define LOOKUP(name)                                                           \
-  name = (typeof(name))ExitOnErr(jit->lookup(#name)).getAddress();
-      LOOKUP(spv_main)
-      LOOKUP(get_private_size)
-      LOOKUP(get_input_count)
-      LOOKUP(get_input_stride)
-      LOOKUP(get_output_stride)
-      LOOKUP(get_export_count)
-      LOOKUP(get_output_count)
-      LOOKUP(get_export_items)
-      LOOKUP(get_input_offsets)
-      LOOKUP(get_output_offsets)
-      LOOKUP(get_subgroup_size)
+  symbols.name =                                                               \
+      (typeof(symbols.name))ExitOnErr(jit->lookup(#name)).getAddress();
+    LOOKUP(spv_main)
+    LOOKUP(get_private_size)
+    LOOKUP(get_input_count)
+    LOOKUP(get_input_stride)
+    LOOKUP(get_output_stride)
+    LOOKUP(get_export_count)
+    LOOKUP(get_output_count)
+    LOOKUP(get_export_items)
+    LOOKUP(get_input_offsets)
+    LOOKUP(get_output_offsets)
+    LOOKUP(get_subgroup_size)
 #undef LOOKUP
-      input_item_count = get_input_count();
-      get_input_offsets((uint32_t *)&input_offsets[0]);
-      output_item_count = get_output_count();
-      input_stride = get_input_stride();
-      output_stride = get_output_stride();
-      subgroup_size = get_subgroup_size();
-      get_output_offsets((uint32_t *)&output_offsets[0]);
-      private_storage_size = get_private_size();
-      export_count = get_export_count();
-      get_export_items(&export_items[0]);
-    }
-  };
-  Shader_Symbols symbols;
-  std::unique_ptr<llvm::orc::LLJIT> lljit;
-  void execute() {
-    //    auto Add1Sym = ExitOnErr(J->lookup("add1"));
-    //  int (*Add1)(int) = (int (*)(int))Add1Sym.getAddress();
-
-    //  int Result = Add1(42);
-    //  outs() << "add1(42) = " << Result << "\n";
+    symbols.input_item_count = symbols.get_input_count();
+    symbols.get_input_offsets((uint32_t *)&symbols.input_offsets[0]);
+    symbols.output_item_count = symbols.get_output_count();
+    symbols.input_stride = symbols.get_input_stride();
+    symbols.output_stride = symbols.get_output_stride();
+    symbols.subgroup_size = symbols.get_subgroup_size();
+    symbols.get_output_offsets((uint32_t *)&symbols.output_offsets[0]);
+    symbols.private_storage_size = symbols.get_private_size();
+    symbols.export_count = symbols.get_export_count();
+    symbols.get_export_items(&symbols.export_items[0]);
   }
+  Shader_Symbols symbols;
+  std::unique_ptr<llvm::orc::LLJIT> jit;
 };
 
 //////////////////////////
@@ -4396,8 +4363,8 @@ void *compile_spirv(uint32_t const *pCode, size_t code_size) {
       ExitOnErr(llvm::orc::LLJITBuilder().create());
   ExitOnErr(J->addIRModule(std::move(bundle)));
   Jitted_Shader *jitted_shader = new Jitted_Shader();
-  jitted_shader->lljit = std::move(J);
-  jitted_shader->symbols.init(jitted_shader->lljit.get());
+  jitted_shader->jit = std::move(J);
+  jitted_shader->init();
   return (void *)jitted_shader;
 }
 
@@ -4405,129 +4372,10 @@ void release_spirv(void *ptr) {
   Jitted_Shader *jitted_shader = (Jitted_Shader *)ptr;
   delete jitted_shader;
 }
-#define SPV_STDLIB_JUST_TYPES
-#include "spv_stdlib/spv_stdlib.cpp"
-void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
-                  uint32_t instanceCount, uint32_t firstIndex,
-                  int32_t vertexOffset, uint32_t firstInstance) {
-  Jitted_Shader *vs_jit =
-      (Jitted_Shader *)state->graphics_pipeline->vs->jitted_code;
-  Jitted_Shader *ps_jit =
-      (Jitted_Shader *)state->graphics_pipeline->ps->jitted_code;
-  NOTNULL(vs_jit);
-  NOTNULL(ps_jit);
-  // Vertex shading
-  uint8_t *vs_output = NULL;
-  float4 *vs_vertex_positions = NULL;
-  defer(if (vs_output) free(vs_output));
-  defer(if (vs_vertex_positions) free(vs_vertex_positions));
-  {
-    struct Attribute_Desc {
-      uint8_t *src;
-      uint32_t src_stride;
-      uint32_t size;
-      bool per_vertex_rate;
-    };
-    VkVertexInputBindingDescription vertex_bindings[0x10] = {};
-    Attribute_Desc attribute_descs[0x10] = {};
-    vki::VkPipeline_Impl *pipeline = state->graphics_pipeline;
-    ASSERT_ALWAYS(pipeline->IA_bindings.vertexBindingDescriptionCount < 0x10);
-    ASSERT_ALWAYS(pipeline->IA_bindings.vertexAttributeDescriptionCount < 0x10);
-    ito(pipeline->IA_bindings.vertexBindingDescriptionCount) {
-      VkVertexInputBindingDescription desc =
-          pipeline->IA_bindings.pVertexBindingDescriptions[i];
-      vertex_bindings[desc.binding] = desc;
-    }
-    ito(pipeline->IA_bindings.vertexAttributeDescriptionCount) {
-      VkVertexInputAttributeDescription desc =
-          pipeline->IA_bindings.pVertexAttributeDescriptions[i];
-      Attribute_Desc attribute_desc;
-      VkVertexInputBindingDescription binding_desc =
-          vertex_bindings[desc.binding];
-      attribute_desc.src =
-          state->vertex_buffers[desc.binding]->get_ptr() + desc.offset;
-      attribute_desc.src_stride = binding_desc.stride;
-      attribute_desc.per_vertex_rate =
-          binding_desc.inputRate ==
-          VkVertexInputRate::VK_VERTEX_INPUT_RATE_VERTEX;
-      switch (desc.format) {
-      case VkFormat::VK_FORMAT_R32G32B32_SFLOAT:
-        attribute_desc.size = 12;
-        break;
-      default:
-        UNIMPLEMENTED;
-      };
-      attribute_descs[desc.location] = attribute_desc;
-    }
-    ASSERT_ALWAYS(pipeline->IA_topology ==
-                  VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    uint32_t subgroup_size = vs_jit->symbols.subgroup_size;
-    uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
-    uint32_t total_data_units_needed = num_invocations * subgroup_size;
-    uint8_t *attributes = (uint8_t *)malloc(total_data_units_needed *
-                                            vs_jit->symbols.input_stride);
-    vs_output = (uint8_t *)malloc(total_data_units_needed *
-                                  vs_jit->symbols.output_stride);
-    vs_vertex_positions = (float4 *)malloc(total_data_units_needed * 16);
-    uint32_t *index_src = (uint32_t *)(state->index_buffer->get_ptr() +
-                                       state->index_buffer_offset);
-    ASSERT_ALWAYS(state->index_type == VkIndexType::VK_INDEX_TYPE_UINT32);
-    kto(indexCount) {
-      uint32_t index = index_src[k + firstIndex] + vertexOffset;
-      ito(vs_jit->symbols.input_item_count) {
-        auto item = vs_jit->symbols.input_offsets[i];
-        Attribute_Desc attribute_desc = attribute_descs[item.location];
-        ASSERT_ALWAYS(attribute_desc.per_vertex_rate);
-        memcpy(attributes + index * vs_jit->symbols.input_stride + item.offset,
-               attribute_desc.src + attribute_desc.src_stride * index,
-               attribute_desc.size);
-      }
-    }
 
-    Invocation_Info info = {};
-    info.work_group_size = (uint3){subgroup_size, 1, 1};
-    info.invocation_count = (uint3){num_invocations, 1, 1};
-    info.subgroup_size = (uint3){subgroup_size, 1, 1};
-    info.subgroup_x_bits = 0xff;
-    info.subgroup_x_offset = 0x0;
-    info.subgroup_y_bits = 0x0;
-    info.subgroup_y_offset = 0x0;
-    info.subgroup_z_bits = 0x0;
-    info.subgroup_z_offset = 0x0;
-    info.input = NULL;
-    info.output = NULL;
-    info.builtin_output = NULL;
-    info.print_fn = (void *)printf;
-    void *descriptor_set_0[0x10] = {};
-    descriptor_set_0[0] = state->descriptor_sets[0]->slots[0].buffer->get_ptr();
-    //    float4 *mat = (float4 *)descriptor_set_0[0];
-    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
-    //                   mat[i].w);
-    //    fprintf(stdout, "__________________\n");
-    //    mat += 4;
-    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
-    //                   mat[i].w);
-    //    fprintf(stdout, "__________________\n");
-    //    mat += 4;
-    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
-    //                   mat[i].w);
-    //    fprintf(stdout, "#################\n");
-    info.descriptor_sets[0] = &descriptor_set_0[0];
-    ito(num_invocations) {
-      info.invocation_id = (uint3){i, 0, 0};
-      info.input =
-          attributes + i * subgroup_size * vs_jit->symbols.input_stride;
-      info.output =
-          vs_output + i * subgroup_size * vs_jit->symbols.output_stride;
-      // Assume there's only gl_Position
-      info.builtin_output = vs_vertex_positions + i * subgroup_size;
-      vs_jit->symbols.spv_main(&info);
-    }
-  }
-//  ito(4) fprintf(stdout, "%f %f %f %f\n", vs_vertex_positions[i].x,
-//                 vs_vertex_positions[i].y, vs_vertex_positions[i].z,
-//                 vs_vertex_positions[i].w);
-//  fprintf(stdout, "#################\n");
+Shader_Symbols *get_shader_symbols(void *ptr) {
+    Jitted_Shader *jitted_shader = (Jitted_Shader *)ptr;
+    return &jitted_shader->symbols;
 }
 }
 #ifdef S2L_EXE
