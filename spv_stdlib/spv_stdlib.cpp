@@ -42,6 +42,7 @@ struct Invocation_Info {
   void *output;
   uint8_t push_constants[0x100];
   void *print_fn;
+  float *barycentrics;
 };
 
 struct Image1D {
@@ -64,9 +65,15 @@ struct Image3D {
 #else
 #define FNATTR
 #endif
-
+FNATTR float3 get_barycentrics(Invocation_Info *state, uint32_t lane_id) {
+  return (float3){state->barycentrics[lane_id * 3],
+                  state->barycentrics[lane_id * 3 + 1],
+                  state->barycentrics[lane_id * 3 + 2]};
+}
 FNATTR void *get_input_ptr(Invocation_Info *state) { return state->input; }
-FNATTR void *get_private_ptr(Invocation_Info *state) { return state->private_data; }
+FNATTR void *get_private_ptr(Invocation_Info *state) {
+  return state->private_data;
+}
 FNATTR void *get_push_constant_ptr(Invocation_Info *state) {
   return (void *)&state->push_constants[0];
 }
@@ -87,7 +94,8 @@ FNATTR int32_t spv_atomic_or_i32(int32_t *ptr, int32_t val) {
   return __atomic_fetch_or(ptr, val, __ATOMIC_SEQ_CST);
 }
 
-FNATTR uint3 spv_get_global_invocation_id(Invocation_Info *state, uint32_t lane_id) {
+FNATTR uint3 spv_get_global_invocation_id(Invocation_Info *state,
+                                          uint32_t lane_id) {
 
   uint3 subgroup_offset = (uint3){
       state->invocation_id.x * state->subgroup_size.x,
@@ -109,7 +117,7 @@ FNATTR uint3 spv_get_work_group_size(Invocation_Info *state) {
 }
 
 FNATTR void *get_uniform_const_ptr(Invocation_Info *state, uint32_t set,
-                            uint32_t binding) {
+                                   uint32_t binding) {
   return state->descriptor_sets[set][binding];
 }
 
@@ -127,7 +135,8 @@ FNATTR uint32_t spv_image_read_1d_i32(uint64_t handle, uint32_t coord) {
   return *(uint32_t *)&ptr->data[coord * ptr->bpp];
 }
 
-FNATTR void spv_image_write_1d_i32(uint64_t handle, uint32_t coord, uint32_t val) {
+FNATTR void spv_image_write_1d_i32(uint64_t handle, uint32_t coord,
+                                   uint32_t val) {
   Image1D *ptr = (Image1D *)(void *)(size_t)handle;
   *(uint32_t *)(&ptr->data[coord * ptr->bpp]) = val;
 }
@@ -222,6 +231,5 @@ FNATTR void dump_string(Invocation_Info *state, char const *str) {
   ((printf_t)state->print_fn)("%s\n", str);
   ((printf_t)state->print_fn)("________________\n");
 }
-
 }
 #endif

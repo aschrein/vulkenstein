@@ -483,6 +483,7 @@ struct Spirv_Builder {
     // For vertex shaders et al holds a pointer to gl_Position
     LOOKUP_FN(get_builtin_output_ptr);
     LOOKUP_FN(kill);
+    LOOKUP_FN(get_barycentrics);
     LOOKUP_FN(dump_float4x4);
     LOOKUP_FN(dump_float4);
     LOOKUP_FN(dump_string);
@@ -902,6 +903,10 @@ struct Spirv_Builder {
       std::map<uint32_t, llvm::BasicBlock *> llvm_labels;
       ///////////////////////////////////////////////
       uint32_t func_id = item.first;
+      bool is_entry = contains(entries, func_id);
+      bool is_pixel_shader =
+          is_entry && entries[func_id].execution_model ==
+                          spv::ExecutionModel::ExecutionModelFragment;
       NOTNULL(llvm_global_values[func_id]);
       llvm::Function *cur_fun =
           llvm::dyn_cast<llvm::Function>(llvm_global_values[func_id]);
@@ -1145,6 +1150,11 @@ struct Spirv_Builder {
             }
             break;
           }
+          // Don't emit pipeline input variables for local functions because for
+          // pixel shaders we need to interpolate and we don't know if a
+          // function is called from a pixel shader of vertex shader
+          if (!is_entry)
+            break;
           // Pipeline input
           ASSERT_ALWAYS(
               (pointee_decl_ty == DeclTy::PrimitiveTy &&
@@ -1158,11 +1168,64 @@ struct Spirv_Builder {
           ASSERT_ALWAYS(location >= 0);
           // For now just stupid array of structures
           ito(opt_subgroup_size) {
-            llvm::Value *gep = llvm_builder->CreateGEP(
-                input_ptr, llvm_get_constant_i32(input_storage_size * i +
-                                                 input_offsets[location]));
-            llvm::Value *bitcast = llvm_builder->CreateBitCast(gep, llvm_type);
-            llvm_values_per_lane[i][var.id] = bitcast;
+            // For pixel shader we need to interpolate pipeline inputs
+            if (is_pixel_shader) {
+              llvm::Value *barycentrics = llvm_builder->CreateCall(
+                  get_barycentrics, {state_ptr, llvm_get_constant_i32(i)});
+              llvm::Value *b_0 =
+                  llvm_builder->CreateExtractElement(barycentrics, (uint64_t)0);
+              llvm::Value *b_1 =
+                  llvm_builder->CreateExtractElement(barycentrics, (uint64_t)1);
+              llvm::Value *b_2 =
+                  llvm_builder->CreateExtractElement(barycentrics, (uint64_t)2);
+              llvm::Value *gep_0 = llvm_builder->CreateGEP(
+                  input_ptr,
+                  llvm_get_constant_i32(input_storage_size * (i * 3 + 0) +
+                                        input_offsets[location]));
+              llvm::Value *gep_1 = llvm_builder->CreateGEP(
+                  input_ptr,
+                  llvm_get_constant_i32(input_storage_size * (i * 3 + 1) +
+                                        input_offsets[location]));
+              llvm::Value *gep_2 = llvm_builder->CreateGEP(
+                  input_ptr,
+                  llvm_get_constant_i32(input_storage_size * (i * 3 + 2) +
+                                        input_offsets[location]));
+              llvm::Value *bitcast_0 =
+                  llvm_builder->CreateBitCast(gep_0, llvm_type);
+              llvm::Value *bitcast_1 =
+                  llvm_builder->CreateBitCast(gep_1, llvm_type);
+              llvm::Value *bitcast_2 =
+                  llvm_builder->CreateBitCast(gep_2, llvm_type);
+              llvm::Value *val_0 = llvm_builder->CreateLoad(bitcast_0);
+              llvm::Value *val_1 = llvm_builder->CreateLoad(bitcast_1);
+              llvm::Value *val_2 = llvm_builder->CreateLoad(bitcast_2);
+              // TODO: handle more types/flat interpolation later
+              ASSERT_ALWAYS(val_0->getType()->isVectorTy() || val_0->getType()->isFloatTy());
+              if (val_0->getType()->isVectorTy()) {
+                b_0 = llvm_builder->CreateVectorSplat(
+                    val_0->getType()->getVectorNumElements(), b_0);
+                b_1 = llvm_builder->CreateVectorSplat(
+                    val_0->getType()->getVectorNumElements(), b_1);
+                b_2 = llvm_builder->CreateVectorSplat(
+                    val_0->getType()->getVectorNumElements(), b_2);
+              }
+              val_0 = llvm_builder->CreateFMul(val_0, b_0);
+              val_1 = llvm_builder->CreateFMul(val_1, b_1);
+              val_2 = llvm_builder->CreateFMul(val_2, b_2);
+              llvm::Value *final_val = llvm_builder->CreateFAdd(
+                  val_0, llvm_builder->CreateFAdd(val_1, val_2));
+              llvm::Value *alloca =
+                  llvm_builder->CreateAlloca(final_val->getType());
+              llvm_builder->CreateStore(final_val, alloca);
+              llvm_values_per_lane[i][var.id] = alloca;
+            } else { // Just load raw input
+              llvm::Value *gep = llvm_builder->CreateGEP(
+                  input_ptr, llvm_get_constant_i32(input_storage_size * i +
+                                                   input_offsets[location]));
+              llvm::Value *bitcast =
+                  llvm_builder->CreateBitCast(gep, llvm_type);
+              llvm_values_per_lane[i][var.id] = bitcast;
+            }
           }
           break;
         }
@@ -4374,8 +4437,8 @@ void release_spirv(void *ptr) {
 }
 
 Shader_Symbols *get_shader_symbols(void *ptr) {
-    Jitted_Shader *jitted_shader = (Jitted_Shader *)ptr;
-    return &jitted_shader->symbols;
+  Jitted_Shader *jitted_shader = (Jitted_Shader *)ptr;
+  return &jitted_shader->symbols;
 }
 }
 #ifdef S2L_EXE

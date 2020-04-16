@@ -753,11 +753,26 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
         float e2 = n2_x * (x - x2) + n2_y * (y - y2);
         if (e0 * area_sign >= 0.0f && e1 * area_sign >= 0.0f &&
             e2 * area_sign >= 0.0f) {
+          float b0 =                  //
+              (x1 - x) * (y1 + y) +   //
+              (x2 - x1) * (y2 + y1) + //
+              (x - x2) * (y + y2);
+          float b1 =                //
+              (x - x0) * (y + y0) + //
+              (x2 - x) * (y2 + y) + //
+              (x0 - x2) * (y0 + y2);
+          float b2 =                  //
+              (x1 - x0) * (y1 + y0) + //
+              (x - x1) * (y + y1) +   //
+              (x0 - x) * (y0 + y);
+          b0 /= 2 * area;
+          b1 /= 2 * area;
+          b2 /= 2 * area;
           pinfos[num_pixel_invocations] =
               Pixel_Invocation_Info{.triangle_id = k,
-                                    .b_0 = 0.0f,
-                                    .b_1 = 0.0f,
-                                    .b_2 = 0.0f,
+                                    .b_0 = fabsf(b0),
+                                    .b_1 = fabsf(b1),
+                                    .b_2 = fabsf(b2),
                                     .x = j,
                                     .y = i};
           num_pixel_invocations++;
@@ -806,15 +821,19 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       // TODO: interpolate
       Pixel_Invocation_Info info = pinfos[i];
       jto(ps_symbols->input_item_count) {
-        //kto(3)
-            memcpy(pixel_input + ps_symbols->input_stride * (i) +
-                       ps_symbols->input_offsets[j].offset,
-                   vs_output + vs_symbols->output_offsets[j].offset +
-                       vs_symbols->output_stride * (info.triangle_id * 3),
-                   16);
-        //               vs_symbols->output_sizes[j]);
+        kto(3) {
+          memcpy(                                                         //
+              pixel_input +                                               //
+                  ps_symbols->input_stride * (i * 3 + k) +                //
+                  ps_symbols->input_offsets[j].offset,                    //
+              vs_output +                                                 //
+                  vs_symbols->output_offsets[j].offset +                  //
+                  vs_symbols->output_stride * (info.triangle_id * 3 + k), //
+              16);
+        }
       }
     }
+
     Invocation_Info info = {};
     info.work_group_size = (uint3){subgroup_size, 1, 1};
     info.invocation_count = (uint3){num_invocations, 1, 1};
@@ -833,9 +852,17 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     descriptor_set_0[0] = state->descriptor_sets[0]->slots[0].buffer->get_ptr();
     info.descriptor_sets[0] = &descriptor_set_0[0];
     ito(num_invocations) {
+      float barycentrics[0x100] = {};
+      jto(subgroup_size) {
+        Pixel_Invocation_Info pinfo = pinfos[j + i * subgroup_size];
+        barycentrics[j * 3 + 0] = pinfo.b_0;
+        barycentrics[j * 3 + 1] = pinfo.b_1;
+        barycentrics[j * 3 + 2] = pinfo.b_2;
+      }
+      info.barycentrics = barycentrics;
       info.invocation_id = (uint3){i, 0, 0};
       info.input =
-          pixel_input + i * subgroup_size * ps_symbols->input_stride;
+          pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
       info.output = pixel_output + i * subgroup_size;
       // Assume there's only gl_Position
       info.builtin_output = vs_vertex_positions + i * subgroup_size;

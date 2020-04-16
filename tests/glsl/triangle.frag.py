@@ -15,10 +15,10 @@ void test_launch(void *_printf) {
   };
   #pragma pack(pop)
   static_assert (sizeof(Attributes) == 16, "Invalid packing of Attributes");
-  Attributes attributes[NUM_INVOCATIONS];
+  Attributes attributes[NUM_INVOCATIONS * 3];
   float4 pixel_out[NUM_INVOCATIONS];
 
-  for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
+  for (uint32_t i = 0; i < NUM_INVOCATIONS * 3; i++) {
     attributes[i].color = (float3){(float)i, 0.0f, 0.0f};
     // ((printf_t)_printf)("[%i %i]\n", g_buf_0[i], g_buf_1[i]);
   }
@@ -36,18 +36,25 @@ void test_launch(void *_printf) {
   info.subgroup_z_offset  = 0x0;
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS/WAVE_WIDTH; i++) {
+    float barycentrics[WAVE_WIDTH * 3] = {};
+    for (uint32_t j = 0; j < WAVE_WIDTH; j++) {
+      barycentrics[j * 3 + 0] = 0.0f;
+      barycentrics[j * 3 + 1] = 0.0f;
+      barycentrics[j * 3 + 2] = 1.0f;
+    }
     info.invocation_id = (uint3){i, 0, 0};
     info.invocation_id = (uint3){i, 0, 0};
-    info.input = &attributes[i * WAVE_WIDTH];
+    info.input = &attributes[3 * i * WAVE_WIDTH];
     info.output = &pixel_out[i * WAVE_WIDTH];
+    info.barycentrics = barycentrics;
     spv_main(&info);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
     // ubo.projectionMatrix * ubo.viewMatrix * ubo.modelMatrix * vec4(inPos.xyz, 1.0);
-    TEST_EQ(pixel_out[i].x, attributes[i].color.x);
-    TEST_EQ(pixel_out[i].y, attributes[i].color.y);
-    TEST_EQ(pixel_out[i].z, attributes[i].color.z);
+    TEST_EQ(pixel_out[i].x, attributes[3 * i + 2].color.x);
+    TEST_EQ(pixel_out[i].y, attributes[3 * i + 2].color.y);
+    TEST_EQ(pixel_out[i].z, attributes[3 * i + 2].color.z);
     TEST_EQ(pixel_out[i].w, 4.0f);
   }
   ((printf_t)_printf)("[SUCCESS]\n");
@@ -67,7 +74,7 @@ void main()
   outFragColor = vec4(inColor, 4.0);
 }
 """
-shader_filename = "shader.vert.glsl"
+shader_filename = "shader.frag.glsl"
 runner_c = open("runner.cpp", "w")
 runner_c.write(runner)
 runner_c.close()
