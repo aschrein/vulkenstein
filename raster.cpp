@@ -678,8 +678,8 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                 VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
   ASSERT_ALWAYS(indexCount % 3 == 0);
   // so the triangle could be split in up to 6 triangles after culling
-  float3 *screenspace_positions =
-      (float3 *)malloc(sizeof(float3) * indexCount * 6);
+  float4 *screenspace_positions =
+      (float4 *)malloc(sizeof(float4) * indexCount * 6);
   uint32_t rasterizer_triangles_count = 0;
   defer(free(screenspace_positions));
   ito(indexCount / 3) {
@@ -687,12 +687,12 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     float4 v1 = vs_vertex_positions[i * 3 + 1];
     float4 v2 = vs_vertex_positions[i * 3 + 2];
     // TODO: culling
-    v0 = v0 / v0.w;
-    v1 = v1 / v1.w;
-    v2 = v2 / v2.w;
-    screenspace_positions[i * 3 + 0] = (float3){v0.x, v0.y, v0.z};
-    screenspace_positions[i * 3 + 1] = (float3){v1.x, v1.y, v1.z};
-    screenspace_positions[i * 3 + 2] = (float3){v2.x, v2.y, v2.z};
+    v0.xyz = v0.xyz / v0.w;
+    v1.xyz = v1.xyz / v1.w;
+    v2.xyz = v2.xyz / v2.w;
+    screenspace_positions[i * 3 + 0] = v0;
+    screenspace_positions[i * 3 + 1] = v1;
+    screenspace_positions[i * 3 + 2] = v2;
     rasterizer_triangles_count++;
   }
   // Rastrization
@@ -704,11 +704,12 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
   };
   Pixel_Invocation_Info *pinfos = (Pixel_Invocation_Info *)malloc(
       sizeof(Pixel_Invocation_Info) * (1 << 23));
+  defer(free(pinfos));
   uint32_t num_pixel_invocations = 0;
   kto(rasterizer_triangles_count) {
-    float3 v0 = screenspace_positions[k * 3 + 0];
-    float3 v1 = screenspace_positions[k * 3 + 1];
-    float3 v2 = screenspace_positions[k * 3 + 2];
+    float4 v0 = screenspace_positions[k * 3 + 0];
+    float4 v1 = screenspace_positions[k * 3 + 1];
+    float4 v2 = screenspace_positions[k * 3 + 2];
     // naive rasterization
     float x0 = v0.x;
     float y0 = v0.y;
@@ -765,21 +766,23 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
               (x1 - x0) * (y1 + y0) + //
               (x - x1) * (y + y1) +   //
               (x0 - x) * (y0 + y);
-          b0 /= 2 * area;
-          b1 /= 2 * area;
-          b2 /= 2 * area;
+          b0 = fabsf(b0) / (2 * area);
+          b1 = fabsf(b1) / (2 * area);
+          b2 = fabsf(b2) / (2 * area);
+          float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
+          b0 = b0 / v0.w / bw;
+          b1 = b1 / v1.w / bw;
+          b2 = b2 / v2.w / bw;
           pinfos[num_pixel_invocations] =
               Pixel_Invocation_Info{.triangle_id = k,
-                                    .b_0 = fabsf(b0),
-                                    .b_1 = fabsf(b1),
-                                    .b_2 = fabsf(b2),
+                                    .b_0 = b0,
+                                    .b_1 = b1,
+                                    .b_2 = b2,
                                     .x = j,
                                     .y = i};
           num_pixel_invocations++;
 
         } else {
-          //          ((uint32_t *)rt->img->get_ptr())[i * rt->img->extent.width
-          //          + j] = 0x0;
         }
       }
     }
