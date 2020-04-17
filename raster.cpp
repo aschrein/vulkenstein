@@ -138,7 +138,7 @@ void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
     jto(size) {
       uint32_t x = j;
       uint32_t y = i;
-      uint32_t offset = tile_coord(x, y, size_pow, tile_pow);
+      uint32_t offset = tile_coord(x, size - y - 1, size_pow, tile_pow);
       //      untile_coord(offset, &x, &y, size_pow, tile_pow);
       //      ASSERT_ALWAYS(x == j && y == i);
       uint8_t r = *(uint8_t *)(void *)(((uint8_t *)data) + offset);
@@ -319,6 +319,8 @@ using i8x32 = __m256i;
 using i8x16 = __m128i;
 inline i32x8 add_si32x8(i32x8 a, i32x8 b) { return _mm256_add_epi32(a, b); }
 inline i8x32 add_si8x32(i8x32 a, i8x32 b) { return _mm256_add_epi8(a, b); }
+inline i8x16 add_si8x16(i8x16 a, i8x16 b) { return _mm_add_epi8(a, b); }
+inline i8x16 or_si8x16(i8x16 a, i8x16 b) { return _mm_or_ps(a, b); }
 inline i16x16 add_si16x16(i16x16 a, i16x16 b) { return _mm256_add_epi16(a, b); }
 inline i8x32 cmpeq_i8x32(i8x32 a, i8x32 b) { return _mm256_cmpeq_epi8(a, b); }
 #define init_i32x8 _mm256_setr_epi32
@@ -439,12 +441,12 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
   float k = (float)(1 << pixel_precision);
   int16_t upper_bound = (int16_t)((int16_t)1 << 8) - (int16_t)1;
   int16_t lower_bound = 0;
-  int16_t x0 = vki::clamp((int16_t)(_x0 * k), lower_bound, upper_bound);
-  int16_t y0 = vki::clamp((int16_t)(_y0 * k), lower_bound, upper_bound);
-  int16_t x1 = vki::clamp((int16_t)(_x1 * k), lower_bound, upper_bound);
-  int16_t y1 = vki::clamp((int16_t)(_y1 * k), lower_bound, upper_bound);
-  int16_t x2 = vki::clamp((int16_t)(_x2 * k), lower_bound, upper_bound);
-  int16_t y2 = vki::clamp((int16_t)(_y2 * k), lower_bound, upper_bound);
+  int16_t x0 = vki::clamp((int16_t)(_x0 * k + 0.5f), lower_bound, upper_bound);
+  int16_t y0 = vki::clamp((int16_t)(_y0 * k + 0.5f), lower_bound, upper_bound);
+  int16_t x1 = vki::clamp((int16_t)(_x1 * k + 0.5f), lower_bound, upper_bound);
+  int16_t y1 = vki::clamp((int16_t)(_y1 * k + 0.5f), lower_bound, upper_bound);
+  int16_t x2 = vki::clamp((int16_t)(_x2 * k + 0.5f), lower_bound, upper_bound);
+  int16_t y2 = vki::clamp((int16_t)(_y2 * k + 0.5f), lower_bound, upper_bound);
 
   int16_t n0_x = -(y1 - y0);
   int16_t n0_y = (x1 - x0);
@@ -578,6 +580,145 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
     v_e2_0 = add_si16x16(v_e2_0, v_e2_delta_y);
   };
   *tile_count = _tile_count;
+}
+
+void rasterize_triangle_tiled_4x4_256x256_defer_cull(
+    float x0, float y0, float x1, float y1, float x2, float y2,
+    Classified_Tile *tile_buffer, uint32_t *tile_count) {
+
+  // there could be up to 6 vertices after culling
+  uint32_t num_vertices = 0;
+  float2 vertices[6 * 3];
+  uint8_t vc[3] = {0, 0, 0};
+  vc[0] |= x0 > 1.0f ? 1 : x0 < 0.0f ? 2 : 0;
+  vc[0] |= y0 > 1.0f ? 4 : y0 < 0.0f ? 8 : 0;
+  vc[1] |= x1 > 1.0f ? 1 : x1 < 0.0f ? 2 : 0;
+  vc[1] |= y1 > 1.0f ? 4 : y1 < 0.0f ? 8 : 0;
+  vc[2] |= x2 > 1.0f ? 1 : x2 < 0.0f ? 2 : 0;
+  vc[2] |= y2 > 1.0f ? 4 : y2 < 0.0f ? 8 : 0;
+
+  float min_x = MIN(x0, MIN(x1, x2));
+  float min_y = MIN(y0, MIN(y1, y2));
+  float max_x = MAX(x0, MAX(x1, x2));
+  float max_y = MAX(y0, MAX(y1, y2));
+
+  if (                // bounding box doesn't intersect the tile
+      min_x > 1.0f || //
+      min_y > 1.0f || //
+      max_x < 0.0f || //
+      max_y < 0.0f    //
+  )
+    return;
+
+  // totally inside of the tile
+  if (vc[0] == 0 && 0 == vc[1] && 0 == vc[2]) {
+    num_vertices = 3;
+    vertices[0] = (float2){x0, y0};
+    vertices[1] = (float2){x1, y1};
+    vertices[2] = (float2){x2, y2};
+  } else {
+    // vertices sorted by x value
+    float2 u0, u1, u2;
+    bool x01 = x0 < x1;
+    bool x12 = x1 < x2;
+    bool x20 = x2 < x0;
+    if (x01) {
+      if (x20) {
+        u0 = (float2){x2, y2};
+        u1 = (float2){x0, y0};
+        u2 = (float2){x1, y1};
+      } else {
+        u0 = (float2){x0, y0};
+        if (x12) {
+          u1 = (float2){x1, y1};
+          u2 = (float2){x2, y2};
+        } else {
+          u1 = (float2){x2, y2};
+          u2 = (float2){x1, y1};
+        }
+      }
+    } else {
+      if (x12) {
+        u0 = (float2){x1, y1};
+        if (x20) {
+          u1 = (float2){x2, y2};
+          u2 = (float2){x0, y0};
+        } else {
+          u1 = (float2){x0, y0};
+          u2 = (float2){x2, y2};
+        }
+      } else {
+        u0 = (float2){x2, y2};
+        u1 = (float2){x1, y1};
+        u2 = (float2){x0, y0};
+      }
+    }
+
+    // clockwise sorted vertices
+    float2 cw0, cw1, cw2;
+    cw0 = u0;
+    if (u1.y > u2.y) {
+      cw1 = u1;
+      cw2 = u2;
+    } else {
+      cw2 = u1;
+      cw1 = u2;
+    }
+    float dx0 = cw1.x - cw0.x;
+    float dy0 = cw1.y - cw0.y;
+    float dx1 = cw2.x - cw1.x;
+    float dy1 = cw2.y - cw1.y;
+    float dx2 = cw0.x - cw2.x;
+    float dy2 = cw0.y - cw2.y;
+    vc[0] = 0;
+    vc[1] = 0;
+    vc[2] = 0;
+    vc[0] |= cw0.x > 1.0f ? 1 : cw0.x < 0.0f ? 2 : 0;
+    vc[0] |= cw0.y > 1.0f ? 4 : cw0.y < 0.0f ? 8 : 0;
+    vc[1] |= cw1.x > 1.0f ? 1 : cw1.x < 0.0f ? 2 : 0;
+    vc[1] |= cw1.y > 1.0f ? 4 : cw1.y < 0.0f ? 8 : 0;
+    vc[2] |= cw2.x > 1.0f ? 1 : cw2.x < 0.0f ? 2 : 0;
+    vc[2] |= cw2.y > 1.0f ? 4 : cw2.y < 0.0f ? 8 : 0;
+    //       |       |
+    //    6  |   4   |  5
+    //  _____|_______|_____
+    //       |       |
+    //    2  |   0   |  1
+    //  _____|_______|_____
+    //       |       |
+    //   10  |   8   |  9
+    //       |       |
+    if ((vc[0] == 6 || vc[0] == 4 || vc[0] == 5) &&
+        (vc[2] == 6 || vc[2] == 4 || vc[2] == 5))
+      return;
+    if ((vc[0] == 10 || vc[0] == 8 || vc[0] == 9) &&
+        (vc[1] == 10 || vc[1] == 8 || vc[1] == 9))
+      return;
+    if (vc[0] != 0) {
+      ASSERT_ALWAYS(vc[0] == 2 || vc[0] == 8 || vc[0] == 10);
+      if (vc[0] == 2) {
+        vertices[0].x = 0.0f;
+        float t0 = -cw2.x / dx2;
+        vertices[0].y = cw2.y + dy2 * t0;
+
+        vertices[1].x = 0.0f;
+        float t1 = -cw0.x / dx0;
+        vertices[1].y = cw0.y + dy0 * t1;
+        if (vc[1] == vc[2] && vc[1] == 0) {
+          vertices[2] = cw1;
+          vertices[3] = cw2;
+          num_vertices += 4;
+        }
+      }
+    }
+  }
+  if (num_vertices < 3)
+    return;
+  ito(num_vertices - 2) rasterize_triangle_tiled_4x4_256x256_defer( //
+      vertices[i + 2].x, vertices[i + 2].y,                         //
+      vertices[i + 1].x, vertices[i + 1].y,                         //
+      vertices[0].x, vertices[0].y,                                 //
+      tile_buffer, tile_count);
 }
 
 float clamp(float x, float min, float max) {
@@ -867,6 +1008,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
 
   Classified_Tile *tiles =
       (Classified_Tile *)malloc(sizeof(Classified_Tile) * (1 << 20));
+  defer(free(tiles));
   uint32_t tile_count = 0;
 #if 0
   kto(rasterizer_triangles_count) {
@@ -1039,6 +1181,16 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
   uint32_t y_num_tiles = (rt->img->extent.height + 255) / 256;
   yto(y_num_tiles) {
     xto(x_num_tiles) {
+      // So like we're covering the screen with 256x256 tiles and do
+      // rasterization on them and then apply that to the screen
+      //
+      // |-----|-----|-----|
+      //  _____________
+      // ||    |       |
+      // ||____|  ...  |
+      // |     .       |
+      // |_____._______|
+      //
       float tile_x = ((float)x * 256.0f) / (float)rt->img->extent.width;
       float tile_y = ((float)y * 256.0f) / (float)rt->img->extent.height;
       float tile_size_x = 256.0f / (float)rt->img->extent.width;
@@ -1054,8 +1206,11 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
         float y1 = (v1.y * 0.5f + 0.5f - tile_y) / tile_size_y;
         float x2 = (v2.x * 0.5f + 0.5f - tile_x) / tile_size_x;
         float y2 = (v2.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-        rasterize_triangle_tiled_4x4_256x256_defer(x0, y0, x1, y1, x2, y2,
-                                                   tiles, &tile_count);
+        rasterize_triangle_tiled_4x4_256x256_defer_cull( //
+            x0, y0,                                      //
+            x1, y1,                                      //
+            x2, y2,                                      //
+            tiles, &tile_count);
       }
       ito(tile_count) {
         uint32_t subtile_x = (uint32_t)tiles[i].x * 4 + x * 256;
@@ -1068,9 +1223,8 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
               break;
             if (texel_y >= rt->img->extent.height)
               break;
-            ((uint32_t *)
-                 rt->img->get_ptr())[texel_y * rt->img->extent.width +
-                                     texel_x] =
+            ((uint32_t *)rt->img
+                 ->get_ptr())[texel_y * rt->img->extent.width + texel_x] =
                 (tiles[i].mask & (1 << ((k << 2) | j))) == 0 ? 0x0 : 0xff0000ff;
           }
         }
@@ -1126,23 +1280,24 @@ int main(int argc, char **argv) {
   defer(free(_image_i8));
   float dp = 1.0f / (float)width;
   PRINT_CLOCKS({ (void)0; });
-  float test_x0 = 0.0f;
+  float test_x0 = -1.0f;
   float test_y0 = 0.0f;
-  float test_x1 = 0.25f;
-  float test_y1 = 0.0f;
-  float test_x2 = 0.25f;
-  float test_y2 = 0.25f;
+  float test_x1 = 0.65f;
+  float test_y1 = 0.3f;
+  float test_x2 = 0.85f;
+  float test_y2 = 0.85f;
   // ~5k cycles
   Classified_Tile tiles[0x1000];
   uint32_t tile_count = 0;
-  PRINT_CLOCKS(rasterize_triangle_tiled_4x4_256x256_defer(
+  PRINT_CLOCKS(rasterize_triangle_tiled_4x4_256x256_defer_cull(
       // clang-format off
           test_x0, test_y0, // p0
           test_x1, test_y1, // p1
-          test_x2 + 0.5f, test_y2 + 0.5f, // p2
+          test_x2, test_y2, // p2
           &tiles[0], &tile_count
       // clang-format on
       ));
+
   PRINT_CLOCKS({
     i8x16 *data = (i8x16 *)((size_t)image_i8 & (~0x1fULL));
     i8x16 v_value = broadcast_i8x16(0xff);
@@ -1150,7 +1305,8 @@ int main(int argc, char **argv) {
       uint8_t x = tiles[i].x;
       uint8_t y = tiles[i].y;
       uint32_t offset = tile_coord((uint32_t)x * 4, (uint32_t)y * 4, 8, 2);
-      data[offset / 16] = unpack_mask_i1x16(tiles[i].mask);
+      data[offset / 16] =
+          or_si8x16(data[offset / 16], unpack_mask_i1x16(tiles[i].mask));
     }
   });
   //  ito(1000) {
