@@ -94,17 +94,17 @@ struct Jitted_Shader {
     LOOKUP(get_export_count)
     LOOKUP(get_output_count)
     LOOKUP(get_export_items)
-    LOOKUP(get_input_offsets)
-    LOOKUP(get_output_offsets)
+    LOOKUP(get_input_slots)
+    LOOKUP(get_output_slots)
     LOOKUP(get_subgroup_size)
 #undef LOOKUP
     symbols.input_item_count = symbols.get_input_count();
-    symbols.get_input_offsets((uint32_t *)&symbols.input_offsets[0]);
+    symbols.get_input_slots((uint32_t *)&symbols.input_slots[0]);
     symbols.output_item_count = symbols.get_output_count();
     symbols.input_stride = symbols.get_input_stride();
     symbols.output_stride = symbols.get_output_stride();
     symbols.subgroup_size = symbols.get_subgroup_size();
-    symbols.get_output_offsets((uint32_t *)&symbols.output_offsets[0]);
+    symbols.get_output_slots((uint32_t *)&symbols.output_slots[0]);
     symbols.private_storage_size = symbols.get_private_size();
     symbols.export_count = symbols.get_export_count();
     symbols.get_export_items(&symbols.export_items[0]);
@@ -321,10 +321,12 @@ struct Spirv_Builder {
   // Offsets for input variables
   std::vector<uint32_t> input_sizes;
   std::vector<uint32_t> input_offsets;
+  std::vector<VkFormat> input_formats;
   uint32_t input_storage_size = 0;
   // Offsets for ouput variables
   std::vector<uint32_t> output_sizes;
   std::vector<uint32_t> output_offsets;
+  std::vector<VkFormat> output_formats;
   uint32_t output_storage_size = 0;
   // Lifetime must be long enough
   uint32_t const *code;
@@ -484,16 +486,23 @@ struct Spirv_Builder {
     LOOKUP_FN(get_builtin_output_ptr);
     LOOKUP_FN(kill);
     LOOKUP_FN(get_barycentrics);
+    LOOKUP_FN(get_derivatives);
     LOOKUP_FN(dump_float4x4);
     LOOKUP_FN(dump_float4);
     LOOKUP_FN(dump_string);
     LOOKUP_FN(normalize_f2);
     LOOKUP_FN(normalize_f3);
     LOOKUP_FN(normalize_f4);
+    LOOKUP_FN(get_combined_image);
+    LOOKUP_FN(get_combined_sampler);
+    LOOKUP_FN(spv_image_sample_2d_float4);
     LOOKUP_FN(spv_length_f2);
     LOOKUP_FN(spv_length_f3);
     LOOKUP_FN(spv_length_f4);
     LOOKUP_FN(spv_cross);
+    LOOKUP_FN(spv_reflect);
+    LOOKUP_FN(spv_pow);
+    LOOKUP_FN(spv_clamp_f32);
     LOOKUP_FN(dummy_sample);
     LOOKUP_FN(spv_sqrt);
     LOOKUP_FN(spv_dot_f2);
@@ -1200,7 +1209,8 @@ struct Spirv_Builder {
               llvm::Value *val_1 = llvm_builder->CreateLoad(bitcast_1);
               llvm::Value *val_2 = llvm_builder->CreateLoad(bitcast_2);
               // TODO: handle more types/flat interpolation later
-              ASSERT_ALWAYS(val_0->getType()->isVectorTy() || val_0->getType()->isFloatTy());
+              ASSERT_ALWAYS(val_0->getType()->isVectorTy() ||
+                            val_0->getType()->isFloatTy());
               if (val_0->getType()->isVectorTy()) {
                 b_0 = llvm_builder->CreateVectorSplat(
                     val_0->getType()->getVectorNumElements(), b_0);
@@ -1915,13 +1925,18 @@ struct Spirv_Builder {
           kto(opt_subgroup_size) {
             llvm::Value *src = llvm_values_per_lane[k][word3];
             llvm::Type *src_type = src->getType();
-            if (src_type->isArrayTy()) {
-              UNIMPLEMENTED;
-            } else if (src_type->isVectorTy()) {
-              llvm_values_per_lane[k][word2] =
-                  llvm_builder->CreateExtractElement(src, word4);
-            } else {
-              UNIMPLEMENTED;
+            ASSERT_ALWAYS(WordCount > 4);
+            uint32_t indices_count = WordCount - 4;
+            llvm::Value *val = src;
+            ito(indices_count) {
+              if (val->getType()->isArrayTy()) {
+                val = llvm_builder->CreateExtractValue(val, pCode[i + 4]);
+              } else if (val->getType()->isVectorTy()) {
+                val = llvm_builder->CreateExtractElement(val, pCode[i + 4]);
+              } else {
+                UNIMPLEMENTED;
+              }
+              llvm_values_per_lane[k][word2] = val;
             }
           }
           break;
@@ -2053,7 +2068,10 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpExtInst: {
-          spv::GLSLstd450 inst = (spv::GLSLstd450)pCode[4];
+          uint32_t result_type_id = word1;
+          uint32_t result_id = word2;
+          uint32_t set_id = word3;
+          spv::GLSLstd450 inst = (spv::GLSLstd450)word4;
           switch (inst) {
           case spv::GLSLstd450::GLSLstd450Normalize: {
             ASSERT_ALWAYS(WordCount == 6);
@@ -2066,15 +2084,15 @@ struct Spirv_Builder {
               uint32_t width = vtype->getVectorNumElements();
               switch (width) {
               case 2:
-                llvm_values_per_lane[k][word2] =
+                llvm_values_per_lane[k][result_id] =
                     llvm_builder->CreateCall(normalize_f2, {arg});
                 break;
               case 3:
-                llvm_values_per_lane[k][word2] =
+                llvm_values_per_lane[k][result_id] =
                     llvm_builder->CreateCall(normalize_f3, {arg});
                 break;
               case 4:
-                llvm_values_per_lane[k][word2] =
+                llvm_values_per_lane[k][result_id] =
                     llvm_builder->CreateCall(normalize_f4, {arg});
                 break;
               default:
@@ -2102,11 +2120,11 @@ struct Spirv_Builder {
                       llvm_builder->CreateCall(spv_sqrt, {elem});
                   prev = llvm_builder->CreateInsertElement(prev, sqrt, i);
                 }
-                llvm_values_per_lane[k][word2] = prev;
+                llvm_values_per_lane[k][result_id] = prev;
               } else {
                 llvm::Type *type = arg->getType();
                 ASSERT_ALWAYS(type->isFloatTy());
-                llvm_values_per_lane[k][word2] =
+                llvm_values_per_lane[k][result_id] =
                     llvm_builder->CreateCall(spv_sqrt, {arg});
               }
             }
@@ -2123,15 +2141,15 @@ struct Spirv_Builder {
               uint32_t width = vtype->getVectorNumElements();
               switch (width) {
               case 2:
-                llvm_values_per_lane[k][word2] =
+                llvm_values_per_lane[k][result_id] =
                     llvm_builder->CreateCall(spv_length_f2, {arg});
                 break;
               case 3:
-                llvm_values_per_lane[k][word2] =
+                llvm_values_per_lane[k][result_id] =
                     llvm_builder->CreateCall(spv_length_f3, {arg});
                 break;
               case 4:
-                llvm_values_per_lane[k][word2] =
+                llvm_values_per_lane[k][result_id] =
                     llvm_builder->CreateCall(spv_length_f4, {arg});
                 break;
               default:
@@ -2147,7 +2165,7 @@ struct Spirv_Builder {
               ASSERT_ALWAYS(op1 != NULL);
               llvm::Value *op2 = llvm_values_per_lane[k][pCode[6]];
               ASSERT_ALWAYS(op2 != NULL);
-              llvm_values_per_lane[k][word2] =
+              llvm_values_per_lane[k][result_id] =
                   llvm_builder->CreateCall(spv_cross, {op1, op2});
             }
             break;
@@ -2166,7 +2184,7 @@ struct Spirv_Builder {
               else
                 cmp = llvm_builder->CreateFCmpOLT(op1, op2);
               llvm::Value *select = llvm_builder->CreateSelect(cmp, op1, op2);
-              llvm_values_per_lane[k][word2] = select;
+              llvm_values_per_lane[k][result_id] = select;
             }
             break;
           }
@@ -2184,7 +2202,7 @@ struct Spirv_Builder {
               else
                 cmp = llvm_builder->CreateFCmpOGT(op1, op2);
               llvm::Value *select = llvm_builder->CreateSelect(cmp, op1, op2);
-              llvm_values_per_lane[k][word2] = select;
+              llvm_values_per_lane[k][result_id] = select;
             }
             break;
           }
@@ -2211,7 +2229,7 @@ struct Spirv_Builder {
                         llvm::ConstantFP::get(llvm::Type::getFloatTy(c), 1.0))
 
                 );
-                llvm_values_per_lane[k][word2] = select;
+                llvm_values_per_lane[k][result_id] = select;
               } else {
                 llvm::Value *cmp = llvm_builder->CreateFCmpOLT(
                     arg, llvm::ConstantFP::get(llvm::Type::getFloatTy(c), 0.0));
@@ -2220,11 +2238,52 @@ struct Spirv_Builder {
                     llvm::ConstantFP::get(llvm::Type::getFloatTy(c), -1.0)
 
                 );
-                llvm_values_per_lane[k][word2] = select;
+                llvm_values_per_lane[k][result_id] = select;
               }
             }
             break;
           }
+          case spv::GLSLstd450::GLSLstd450Reflect: {
+            // I - 2 * dot(N, I) * N
+            ASSERT_ALWAYS(WordCount == 7);
+            kto(opt_subgroup_size) {
+              llvm::Value *I = llvm_values_per_lane[k][word5];
+              llvm::Value *N = llvm_values_per_lane[k][word6];
+              NOTNULL(I);
+              NOTNULL(N);
+              llvm_values_per_lane[k][result_id] =
+                  llvm_builder->CreateCall(spv_reflect, {I, N});
+            }
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450Pow: {
+            // x^y
+            ASSERT_ALWAYS(WordCount == 7);
+            kto(opt_subgroup_size) {
+              llvm::Value *x = llvm_values_per_lane[k][word5];
+              llvm::Value *y = llvm_values_per_lane[k][word6];
+              NOTNULL(x);
+              NOTNULL(y);
+              llvm_values_per_lane[k][result_id] =
+                  llvm_builder->CreateCall(spv_pow, {x, y});
+            }
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450FClamp: {
+          ASSERT_ALWAYS(WordCount == 8);
+            kto(opt_subgroup_size) {
+              llvm::Value *x = llvm_values_per_lane[k][word5];
+              llvm::Value *min = llvm_values_per_lane[k][word6];
+              llvm::Value *max = llvm_values_per_lane[k][word7];
+              NOTNULL(x);
+              NOTNULL(min);
+              NOTNULL(max);
+              llvm_values_per_lane[k][result_id] =
+                  llvm_builder->CreateCall(spv_clamp_f32, {x, min, max});
+            }
+           break;
+          }
+
           default:
             UNIMPLEMENTED_(get_cstr(inst));
           }
@@ -2264,6 +2323,18 @@ struct Spirv_Builder {
           llvm_builder.release();
           cur_merge_id = -1;
           cur_continue_id = -1;
+          break;
+        }
+        case spv::Op::OpFNegate: {
+          ASSERT_ALWAYS(WordCount == 4);
+          uint32_t result_type_id = word1;
+          uint32_t result_id = word2;
+          uint32_t op_id = word3;
+          kto(opt_subgroup_size) {
+            llvm::Value *op = llvm_values_per_lane[k][op_id];
+            NOTNULL(op);
+            llvm_values_per_lane[k][result_id] = llvm_builder->CreateFNeg(op);
+          }
           break;
         }
         case spv::Op::OpBitcast: {
@@ -2570,8 +2641,133 @@ struct Spirv_Builder {
           }
           break;
         }
+        case spv::Op::OpImageSampleImplicitLod: {
+          ASSERT_ALWAYS(WordCount == 5);
+          uint32_t result_type_id = word1;
+          uint32_t result_id = word2;
+          uint32_t sampled_image_id = word3;
+          uint32_t coordinate_id = word4;
+          uint32_t dim = 0;
+          llvm::Type *coord_elem_type = NULL;
+          ito(opt_subgroup_size) {
+            llvm::Value *coord = llvm_values_per_lane[i][coordinate_id];
+            NOTNULL(coord);
+            if (dim == 0) {
+              if (coord->getType()->isVectorTy()) {
+                dim = coord->getType()->getVectorNumElements();
+                coord_elem_type = coord->getType()->getVectorElementType();
+              } else {
+                dim = 1;
+                coord_elem_type = coord->getType();
+              }
+            } else {
+              ASSERT_ALWAYS(dim == 1 ||
+                            coord->getType()->isVectorTy() &&
+                                coord->getType()->getVectorNumElements() ==
+                                    dim);
+              ASSERT_ALWAYS(dim == 1 && coord->getType() == coord_elem_type ||
+                            coord->getType()->getVectorElementType() ==
+                                coord_elem_type);
+            }
+          }
+          llvm::SmallVector<llvm::Value *, 3> coordinates;
+          //          llvm::Type *coordinate_array_type = llvm::ArrayType::get(
+          //              llvm::ArrayType::get(coord_elem_type,
+          //              opt_subgroup_size), dim);
+          //          llvm::Type *deriv_array_type = llvm::ArrayType::get(
+          //              llvm::ArrayType::get(llvm::VectorType::get(coord_elem_type,
+          //              2),
+          //                                   opt_subgroup_size),
+          //              dim);
+          //          llvm::Value *coordinate_array =
+          //              llvm::UndefValue::get(coordinate_array_type);
+          ito(dim) {
+            llvm::Type *dim_array_type =
+                llvm::ArrayType::get(coord_elem_type, opt_subgroup_size);
+            llvm::Value *dim_array = llvm_builder->CreateAlloca(dim_array_type);
+            llvm::Value *dim_ptr = llvm_builder->CreateBitCast(
+                dim_array, llvm::PointerType::get(coord_elem_type, 0));
+            jto(opt_subgroup_size) {
+              llvm::Value *coord = llvm_values_per_lane[j][coordinate_id];
+              llvm::Value *coordinate_elem =
+                  llvm_builder->CreateExtractElement(coord, i);
+              llvm::Value *gep =
+                  llvm_builder->CreateGEP(dim_ptr, llvm_get_constant_i32(j));
+              llvm_builder->CreateStore(coordinate_elem, gep);
+            }
+            coordinates.push_back(dim_array);
+            //            llvm_builder->CreateInsertValue(
+            //                coordinate_array,
+            //                llvm_builder->CreateLoad(dim_array), i);
+          }
+          //          llvm::Value *coordinate_array_alloca =
+          //              llvm_builder->CreateAlloca(coordinate_array_type);
+          //          llvm_builder->CreateStore(coordinate_array,
+          //          coordinate_array_alloca);
+          llvm::SmallVector<llvm::Value *, 3> derivatives;
+          ito(dim) {
+            //            llvm::Value *row_ptr =
+            //                llvm_builder->CreateGEP(coordinate_array_alloca,
+            //                {0, i});
+            llvm::Value *dim_deriv_alloca = llvm_builder->CreateAlloca(
+                llvm::ArrayType::get(llvm::VectorType::get(coord_elem_type, 2),
+                                     opt_subgroup_size));
+            llvm::Value *float2_arr_to_ptr = llvm_builder->CreateBitCast(
+                dim_deriv_alloca,
+                llvm::PointerType::get(
+                    llvm::VectorType::get(coord_elem_type, 2), 0));
+            llvm_builder->CreateCall(
+                get_derivatives, {state_ptr,
+                                  llvm_builder->CreateBitCast(
+                                      coordinates[i], llvm::PointerType::get(
+                                                          coord_elem_type, 0)),
+                                  float2_arr_to_ptr});
+            //	    llvm::Value *dim_deriv = llvm_builder->CreateAlloca();
+            //            derivatives.push_back();
+            derivatives.push_back(dim_deriv_alloca);
+          }
+          if (dim == 1) {
+            UNIMPLEMENTED;
+          } else if (dim == 2) {
+            llvm::Value *derivatives_x =
+                llvm_builder->CreateLoad(derivatives[0]);
+            llvm::Value *derivatives_y =
+                llvm_builder->CreateLoad(derivatives[1]);
+            ito(opt_subgroup_size) {
+              llvm::Value *dudxdy =
+                  llvm_builder->CreateExtractValue(derivatives_x, {i});
+              llvm::Value *dvdxdy =
+                  llvm_builder->CreateExtractValue(derivatives_y, {i});
+              llvm::Value *dudx =
+                  llvm_builder->CreateExtractElement(dudxdy, (uint64_t)0);
+              llvm::Value *dvdx =
+                  llvm_builder->CreateExtractElement(dvdxdy, (uint64_t)0);
+              llvm::Value *dudy =
+                  llvm_builder->CreateExtractElement(dudxdy, (uint64_t)1);
+              llvm::Value *dvdy =
+                  llvm_builder->CreateExtractElement(dvdxdy, (uint64_t)1);
+              llvm::Value *combined_image =
+                  llvm_values_per_lane[i][sampled_image_id];
+              NOTNULL(combined_image);
+              ASSERT_ALWAYS(combined_image->getType() == combined_image_t);
+              llvm::Value *image_handle =
+                  llvm_builder->CreateCall(get_combined_image, combined_image);
+              llvm::Value *sampler_handle = llvm_builder->CreateCall(
+                  get_combined_sampler, combined_image);
+              llvm::Value *coord = llvm_values_per_lane[i][coordinate_id];
+              llvm_values_per_lane[i][result_id] = llvm_builder->CreateCall(
+                  spv_image_sample_2d_float4,
+                  {image_handle, sampler_handle,
+                   llvm_builder->CreateExtractElement(coord, (uint64_t)0),
+                   llvm_builder->CreateExtractElement(coord, (uint64_t)1), dudx,
+                   dudy, dvdx, dvdy});
+            }
+          } else {
+            UNIMPLEMENTED;
+          }
+          break;
+        }
         case spv::Op::OpSampledImage:
-        case spv::Op::OpImageSampleImplicitLod:
         case spv::Op::OpImageSampleExplicitLod:
         case spv::Op::OpImageSampleDrefImplicitLod:
         case spv::Op::OpImageSampleDrefExplicitLod:
@@ -2680,7 +2876,6 @@ struct Spirv_Builder {
         case spv::Op::OpGenericCastToPtr:
         case spv::Op::OpGenericCastToPtrExplicit:
         case spv::Op::OpSNegate:
-        case spv::Op::OpFNegate:
         case spv::Op::OpOuterProduct:
         case spv::Op::OpIAddCarry:
         case spv::Op::OpISubBorrow:
@@ -3173,27 +3368,31 @@ struct Spirv_Builder {
           bb);
     }
     {
-      llvm::Function *get_input_offsets = llvm::Function::Create(
+      llvm::Function *get_input_slots = llvm::Function::Create(
           llvm::FunctionType::get(llvm::Type::getVoidTy(c),
                                   {llvm::Type::getInt32PtrTy(c)}, false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_offsets",
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_slots",
           module.get());
-      llvm::Value *ptr_arg = get_input_offsets->getArg(0);
+      llvm::Value *ptr_arg = get_input_slots->getArg(0);
       NOTNULL(ptr_arg);
       llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_input_offsets);
+          llvm::BasicBlock::Create(c, "entry", get_input_slots);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
       uint32_t k = 0;
       ito(input_sizes.size()) {
         if (input_sizes[i] != 0) {
           llvm::Value *gep_0 =
-              llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 2));
+              llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3));
           llvm::Value *gep_1 = llvm_builder->CreateGEP(
-              ptr_arg, llvm_get_constant_i32(k * 2 + 1));
+              ptr_arg, llvm_get_constant_i32(k * 3 + 1));
+          llvm::Value *gep_2 = llvm_builder->CreateGEP(
+              ptr_arg, llvm_get_constant_i32(k * 3 + 2));
           llvm_builder->CreateStore(llvm_get_constant_i32(i), gep_0);
           llvm_builder->CreateStore(llvm_get_constant_i32(input_offsets[i]),
                                     gep_1);
+          llvm_builder->CreateStore(llvm_get_constant_i32(input_formats[i]),
+                                    gep_2);
           k++;
         }
       }
@@ -3226,27 +3425,31 @@ struct Spirv_Builder {
           bb);
     }
     {
-      llvm::Function *get_output_offsets = llvm::Function::Create(
+      llvm::Function *get_output_slots = llvm::Function::Create(
           llvm::FunctionType::get(llvm::Type::getVoidTy(c),
                                   {llvm::Type::getInt32PtrTy(c)}, false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_offsets",
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_slots",
           module.get());
-      llvm::Value *ptr_arg = get_output_offsets->getArg(0);
+      llvm::Value *ptr_arg = get_output_slots->getArg(0);
       NOTNULL(ptr_arg);
       llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_output_offsets);
+          llvm::BasicBlock::Create(c, "entry", get_output_slots);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
       uint32_t k = 0;
       ito(output_sizes.size()) {
         if (output_sizes[i] != 0) {
           llvm::Value *gep_0 =
-              llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 2));
+              llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3));
           llvm::Value *gep_1 = llvm_builder->CreateGEP(
-              ptr_arg, llvm_get_constant_i32(k * 2 + 1));
+              ptr_arg, llvm_get_constant_i32(k * 3 + 1));
+          llvm::Value *gep_2 = llvm_builder->CreateGEP(
+              ptr_arg, llvm_get_constant_i32(k * 3 + 2));
           llvm_builder->CreateStore(llvm_get_constant_i32(i), gep_0);
           llvm_builder->CreateStore(llvm_get_constant_i32(output_offsets[i]),
                                     gep_1);
+          llvm_builder->CreateStore(llvm_get_constant_i32(output_formats[i]),
+                                    gep_2);
           k++;
         }
       }
@@ -4239,6 +4442,53 @@ struct Spirv_Builder {
       ASSERT_ALWAYS(size != 0);
       return size;
     };
+    std::function<VkFormat(uint32_t)> get_format =
+        [&](uint32_t member_type_id) -> VkFormat {
+      ASSERT_ALWAYS(decl_types_table.find(member_type_id) !=
+                    decl_types_table.end());
+      DeclTy decl_type = decl_types_table.find(member_type_id)->second;
+      // Limit to primitives and vectors and arrays
+      ASSERT_ALWAYS(decl_type == DeclTy::PrimitiveTy ||
+                    decl_type == DeclTy::VectorTy);
+      switch (decl_type) {
+      case DeclTy::PrimitiveTy: {
+        ASSERT_ALWAYS(contains(primitive_types, member_type_id));
+        Primitive_t ptype = primitive_types[member_type_id].type;
+        switch (ptype) {
+        case Primitive_t::F32:
+          return VkFormat::VK_FORMAT_R32_SFLOAT;
+        default:
+          UNIMPLEMENTED;
+        }
+        UNIMPLEMENTED;
+      }
+      case DeclTy::VectorTy: {
+        ASSERT_ALWAYS(contains(vector_types, member_type_id));
+        VectorTy vtype = vector_types[member_type_id];
+        uint32_t vmember_type_id = vtype.member_id;
+        VkFormat member_format = get_format(vmember_type_id);
+        switch (member_format) {
+        case VkFormat::VK_FORMAT_R32_SFLOAT:
+          switch (vtype.width) {
+          case 2:
+            return VkFormat::VK_FORMAT_R32G32_SFLOAT;
+          case 3:
+            return VkFormat::VK_FORMAT_R32G32B32_SFLOAT;
+          case 4:
+            return VkFormat::VK_FORMAT_R32G32B32A32_SFLOAT;
+          default:
+            UNIMPLEMENTED;
+          }
+        default:
+          UNIMPLEMENTED;
+        }
+        UNIMPLEMENTED;
+      }
+      default:
+        UNIMPLEMENTED_(get_cstr(decl_type));
+      }
+      UNIMPLEMENTED;
+    };
     for (auto &item : decl_types) {
       decl_types_table[item.first] = item.second;
     }
@@ -4246,6 +4496,11 @@ struct Spirv_Builder {
       ASSERT_ALWAYS(decl_types_table[ptr_type_id] == DeclTy::PtrTy);
       PtrTy ptr_type = ptr_types[ptr_type_id];
       return get_size(ptr_type.target_id);
+    };
+    auto get_pointee_format = [&](uint32_t ptr_type_id) {
+      ASSERT_ALWAYS(decl_types_table[ptr_type_id] == DeclTy::PtrTy);
+      PtrTy ptr_type = ptr_types[ptr_type_id];
+      return get_format(ptr_type.target_id);
     };
     for (auto &item : decl_types) {
       uint32_t type_id = item.first;
@@ -4332,8 +4587,10 @@ struct Spirv_Builder {
       uint32_t output_offset = 0;
       input_offsets.resize(max_input_location + 1);
       input_sizes.resize(max_input_location + 1);
+      input_formats.resize(max_input_location + 1);
       output_offsets.resize(max_output_location + 1);
       output_sizes.resize(max_output_location + 1);
+      output_formats.resize(max_output_location + 1);
       for (uint32_t id : inputs) {
         if (id > 0) {
           Variable var = variables[id];
@@ -4347,6 +4604,7 @@ struct Spirv_Builder {
           input_offsets[location] = input_offset;
           uint32_t size = (uint32_t)get_pointee_size(var.type_id);
           input_sizes[location] = size;
+          input_formats[location] = get_pointee_format(var.type_id);
           input_offset += size;
         }
       }
@@ -4363,6 +4621,7 @@ struct Spirv_Builder {
           output_offsets[location] = output_offset;
           uint32_t size = (uint32_t)get_pointee_size(var.type_id);
           output_sizes[location] = size;
+          output_formats[location] = get_pointee_format(var.type_id);
           output_offset += size;
         }
       }

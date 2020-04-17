@@ -109,6 +109,12 @@
   CASE(vkDestroyImage);                                                        \
   CASE(vkAcquireNextImageKHR);                                                 \
   CASE(vkQueuePresentKHR);                                                     \
+  CASE(vkCmdPipelineBarrier);                                                  \
+  CASE(vkCmdCopyBufferToImage);                                                \
+  CASE(vkCreateSampler);                                                       \
+  CASE(vkDestroySampler);                                                      \
+  CASE(vkFlushMappedMemoryRanges);                                             \
+  CASE(vkCmdPushConstants);                                                    \
   (void)0
 
 // Data structures to keep track of the objects
@@ -405,6 +411,8 @@ struct PushConstants {
 };
 void GPU_State::execute_commands(VkCommandBuffer_Impl *cmd_buf) {
   reset_state();
+  static uint32_t dc_id = 0;
+  dc_id = 0;
   while (cmd_buf->has_items()) {
     cmd::Cmd_t op = cmd_buf->consume<Cmd_t>();
     switch (op) {
@@ -448,8 +456,8 @@ void GPU_State::execute_commands(VkCommandBuffer_Impl *cmd_buf) {
       render_area = cmd.renderArea;
       framebuffer = cmd.framebuffer;
       ito(cmd.clearValueCount) {
-        // TODO
-        (void)cmd.pClearValues[i];
+        vki::VkImageView_Impl *attachment = framebuffer->pAttachments[i];
+        clear_attachment(attachment, cmd.pClearValues[i]);
       }
       break;
     }
@@ -457,6 +465,12 @@ void GPU_State::execute_commands(VkCommandBuffer_Impl *cmd_buf) {
       render_pass = NULL;
       render_area = {};
       framebuffer = NULL;
+      break;
+    }
+    case Cmd_t::PushConstants: {
+      cmd::PushConstants cmd = cmd_buf->consume<cmd::PushConstants>();
+      uint8_t *data = (uint8_t *)cmd_buf->read(cmd.size);
+      memcpy(push_constants + cmd.offset, data, cmd.size);
       break;
     }
     case Cmd_t::SetViewport: {
@@ -481,10 +495,40 @@ void GPU_State::execute_commands(VkCommandBuffer_Impl *cmd_buf) {
       break;
     }
     case Cmd_t::DrawIndexed: {
+
       cmd::DrawIndexed cmd = cmd_buf->consume<cmd::DrawIndexed>();
+//      if (dc_id > 2)
+//        break;
+//      dc_id++;
       NOTNULL(graphics_pipeline);
       draw_indexed(this, cmd.indexCount, cmd.instanceCount, cmd.firstIndex,
                    cmd.vertexOffset, cmd.firstInstance);
+      break;
+    }
+    case Cmd_t::CopyBufferToImage: {
+      cmd::CopyBufferToImage cmd = cmd_buf->consume<cmd::CopyBufferToImage>();
+      ito(cmd.regionCount) {
+        size_t buffer_pitch = cmd.pRegions[i].bufferRowLength;
+        // tightly packed
+        if (buffer_pitch == 0)
+          buffer_pitch = cmd.pRegions[i].imageExtent.width *
+                         get_format_bpp(cmd.dstImage->format);
+        size_t buffer_height = cmd.pRegions[i].bufferImageHeight;
+        if (buffer_height == 0)
+          buffer_height = cmd.pRegions[i].imageExtent.height;
+        size_t bytes_per_layer = buffer_pitch * buffer_height;
+        uto(cmd.pRegions[i].imageSubresource.layerCount) {
+          kto(buffer_height) {
+            memcpy(cmd.dstImage->get_ptr(
+                       cmd.pRegions[i].imageSubresource.mipLevel,
+                       cmd.pRegions[i].imageSubresource.baseArrayLayer + u),
+                   cmd.srcBuffer->get_ptr() + cmd.pRegions[i].bufferOffset +
+                       bytes_per_layer * u,
+                   buffer_pitch * cmd.pRegions[i].imageExtent.height *
+                       cmd.pRegions[i].imageExtent.depth);
+          }
+        }
+      }
       break;
     }
     default:
@@ -565,28 +609,6 @@ void *allocate_trap(char const *fun_name) {
   ASSERT_ALWAYS(executable_memory_cursor < allocated_memory_size);
   //  fprintf(stderr, "trap: %s\n", fun_name);
   return trap_start;
-}
-
-uint32_t get_format_bpp(VkFormat format) {
-  switch (format) {
-  case VkFormat::VK_FORMAT_R8G8B8A8_SINT:
-  case VkFormat::VK_FORMAT_R8G8B8A8_SRGB:
-  case VkFormat::VK_FORMAT_R8G8B8A8_UINT:
-  case VkFormat::VK_FORMAT_R8G8B8A8_SNORM:
-  case VkFormat::VK_FORMAT_R8G8B8A8_UNORM:
-  //
-  case VkFormat::VK_FORMAT_B8G8R8A8_SRGB:
-  case VkFormat::VK_FORMAT_B8G8R8A8_SINT:
-  case VkFormat::VK_FORMAT_B8G8R8A8_UINT:
-  case VkFormat::VK_FORMAT_B8G8R8A8_SNORM:
-  case VkFormat::VK_FORMAT_B8G8R8A8_UNORM:
-    return 4;
-  case VkFormat::VK_FORMAT_D32_SFLOAT_S8_UINT:
-    return 4;
-  default:
-    ASSERT_ALWAYS(false);
-  }
-  ASSERT_ALWAYS(false);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceSupportKHR(
@@ -1315,8 +1337,18 @@ vkCreateImage(VkDevice device, const VkImageCreateInfo *pCreateInfo,
   img->arrayLayers = pCreateInfo->arrayLayers;
   img->samples = pCreateInfo->samples;
   img->initialLayout = pCreateInfo->initialLayout;
-  img->size = img->extent.width * img->extent.height * img->extent.depth *
-              get_format_bpp(img->format);
+  size_t total_mem_size = 0;
+  ito(img->mipLevels) {
+    // alignup up to 256 bytes
+    total_mem_size = vki::alignup(total_mem_size, 8);
+    img->mip_offsets[i] = total_mem_size;
+    total_mem_size += vki::get_mip_size(img->extent.width, i) *
+                      vki::get_mip_size(img->extent.height, i) *
+                      vki::get_mip_size(img->extent.depth, i) *
+                      vki::get_format_bpp(img->format);
+  }
+  ito(img->arrayLayers) img->array_offsets[i] = total_mem_size * i;
+  img->size = total_mem_size * img->arrayLayers;
   *pImage = (VkImage)(void *)img;
   return VK_SUCCESS;
 }
@@ -1540,12 +1572,30 @@ vkDestroyPipelineLayout(VkDevice device, VkPipelineLayout pipelineLayout,
 VKAPI_ATTR VkResult VKAPI_CALL
 vkCreateSampler(VkDevice device, const VkSamplerCreateInfo *pCreateInfo,
                 const VkAllocationCallbacks *pAllocator, VkSampler *pSampler) {
+  vki::VkSampler_Impl *impl = ALLOC_VKOBJ_T(VkSampler);
+  impl->magFilter = pCreateInfo->magFilter;
+  impl->minFilter = pCreateInfo->minFilter;
+  impl->mipmapMode = pCreateInfo->mipmapMode;
+  impl->addressModeU = pCreateInfo->addressModeU;
+  impl->addressModeV = pCreateInfo->addressModeV;
+  impl->addressModeW = pCreateInfo->addressModeW;
+  impl->mipLodBias = pCreateInfo->mipLodBias;
+  impl->anisotropyEnable = pCreateInfo->anisotropyEnable;
+  impl->maxAnisotropy = pCreateInfo->maxAnisotropy;
+  impl->compareEnable = pCreateInfo->compareEnable;
+  impl->compareOp = pCreateInfo->compareOp;
+  impl->minLod = pCreateInfo->minLod;
+  impl->maxLod = pCreateInfo->maxLod;
+  impl->borderColor = pCreateInfo->borderColor;
+  impl->unnormalizedCoordinates = pCreateInfo->unnormalizedCoordinates;
+  *pSampler = (VkSampler)impl;
   return VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL
 vkDestroySampler(VkDevice device, VkSampler sampler,
                  const VkAllocationCallbacks *pAllocator) {
+  RELEASE_VKOBJ(sampler, VkSampler);
   return;
 }
 
@@ -1605,6 +1655,7 @@ VKAPI_ATTR VkResult VKAPI_CALL vkAllocateDescriptorSets(
     impl->layout =
         (vki::VkDescriptorSetLayout_Impl *)pAllocateInfo->pSetLayouts[i];
     impl->layout->refcnt++;
+    impl->slot_count = impl->layout->bindingCount;
     impl->slots = (vki::VkDescriptorSet_Impl::Slot *)malloc(
         sizeof(vki::VkDescriptorSet_Impl::Slot) * impl->layout->bindingCount);
     memset(impl->slots, 0,
@@ -2361,32 +2412,33 @@ vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
         (vki::VkSwapChain_Impl *)pPresentInfo->pSwapchains[k];
     vki::VkSurfaceKHR_Impl *surface = impl->surface;
     vki::VkImage_Impl *cur_bb = &impl->images[impl->cur_image];
-    ASSERT_ALWAYS(get_format_bpp(cur_bb->format) == 4);
+    ASSERT_ALWAYS(vki::get_format_bpp(cur_bb->format) == 4);
     uint8_t *cur_bb_data = (uint8_t *)cur_bb->get_ptr();
 
     xcb_connection_t *c = surface->connection;
     xcb_screen_t *screen = xcb_setup_roots_iterator(xcb_get_setup(c)).data;
     xcb_drawable_t win = surface->window;
 
-//    xcb_gcontext_t foreground;
-//    uint32_t mask = 0;
-//    static uint32_t frame_id = 0;
-//    xcb_rectangle_t rectangles[] = {
-//        {(int16_t)((frame_id % 100) + 0), 0, 10, 10},
-//    };
-//    frame_id++;
-//    foreground = xcb_generate_id(c);
-//    mask = XCB_GC_FUNCTION | XCB_GC_FOREGROUND | XCB_GC_BACKGROUND |
-//           XCB_GC_LINE_WIDTH | XCB_GC_LINE_STYLE | XCB_GC_GRAPHICS_EXPOSURES;
-//    uint32_t values[] = {
-//        XCB_GX_XOR, screen->white_pixel,        screen->black_pixel,
-//        1,          XCB_LINE_STYLE_ON_OFF_DASH, 0};
+    //    xcb_gcontext_t foreground;
+    //    uint32_t mask = 0;
+    //    static uint32_t frame_id = 0;
+    //    xcb_rectangle_t rectangles[] = {
+    //        {(int16_t)((frame_id % 100) + 0), 0, 10, 10},
+    //    };
+    //    frame_id++;
+    //    foreground = xcb_generate_id(c);
+    //    mask = XCB_GC_FUNCTION | XCB_GC_FOREGROUND | XCB_GC_BACKGROUND |
+    //           XCB_GC_LINE_WIDTH | XCB_GC_LINE_STYLE |
+    //           XCB_GC_GRAPHICS_EXPOSURES;
+    //    uint32_t values[] = {
+    //        XCB_GX_XOR, screen->white_pixel,        screen->black_pixel,
+    //        1,          XCB_LINE_STYLE_ON_OFF_DASH, 0};
 
-//    xcb_create_gc(c, foreground, win, mask, values);
+    //    xcb_create_gc(c, foreground, win, mask, values);
 
-//    xcb_poly_rectangle(c, win, foreground, 1, rectangles);
-//    xcb_flush(c);
-//    xcb_free_gc(c, foreground);
+    //    xcb_poly_rectangle(c, win, foreground, 1, rectangles);
+    //    xcb_flush(c);
+    //    xcb_free_gc(c, foreground);
 
     int w = impl->width, h = impl->height, depth = 24;
     xcb_gcontext_t gc = xcb_generate_id(c);
@@ -2396,16 +2448,21 @@ vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
     //    defer(free(data));
     //    static int frame_id = 0;
     //    fprintf(stdout, "refresh %i\n", frame_id++);
-    ito(w * h * 4) data[i] = cur_bb_data[i];
+    ito(w * h) {
+    data[i * 4 + 0] = cur_bb_data[i * 4 + 2];
+    data[i * 4 + 1] = cur_bb_data[i * 4 + 1];
+    data[i * 4 + 2] = cur_bb_data[i * 4 + 0];
+    data[i * 4 + 3] = 0xff;
+    }
     xcb_create_pixmap(c, depth, pixmap, win, w, h);
     xcb_create_gc(c, gc, win, 0, NULL);
     image = xcb_image_create_native(c, w, h, XCB_IMAGE_FORMAT_Z_PIXMAP, depth,
                                     data, w * h * 4, data);
     xcb_image_put(c, pixmap, gc, image, 0, 0, 0);
     xcb_copy_area(c, pixmap, win, gc, 0, 0, 0, 0, impl->width, impl->height);
-//    xcb_aux_sync(c);
+    //    xcb_aux_sync(c);
     xcb_flush(c);
-//    usleep(1000);
+    //    usleep(1000);
     xcb_image_destroy(image);
     xcb_free_pixmap(c, pixmap);
     xcb_free_gc(c, gc);

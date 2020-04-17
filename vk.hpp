@@ -11,6 +11,45 @@ typedef uint32_t xcb_window_t;
 // Data structures to keep track of the objects
 // TODO(aschrein): Nuke this from the orbit
 namespace vki {
+template <typename T> inline T clamp(T v, T min, T max) {
+  return v < min ? min : v > max ? max : v;
+}
+
+template <typename T> inline T alignup(T elem, uint32_t pow2) {
+  return (elem + (1 << pow2) - 1) & (~((1 << pow2) - 1));
+}
+static uint32_t get_format_bpp(VkFormat format) {
+  switch (format) {
+  case VkFormat::VK_FORMAT_R8G8B8A8_SINT:
+  case VkFormat::VK_FORMAT_R8G8B8A8_SRGB:
+  case VkFormat::VK_FORMAT_R8G8B8A8_UINT:
+  case VkFormat::VK_FORMAT_R8G8B8A8_SNORM:
+  case VkFormat::VK_FORMAT_R8G8B8A8_UNORM:
+  //
+  case VkFormat::VK_FORMAT_B8G8R8A8_SRGB:
+  case VkFormat::VK_FORMAT_B8G8R8A8_SINT:
+  case VkFormat::VK_FORMAT_B8G8R8A8_UINT:
+  case VkFormat::VK_FORMAT_B8G8R8A8_SNORM:
+  case VkFormat::VK_FORMAT_B8G8R8A8_UNORM:
+    return 4;
+  case VkFormat::VK_FORMAT_D32_SFLOAT_S8_UINT:
+    return 8;
+  case VkFormat::VK_FORMAT_R32G32B32_SFLOAT:
+    return 12;
+  case VkFormat::VK_FORMAT_R32G32_SFLOAT:
+    return 8;
+  case VkFormat::VK_FORMAT_R32_SFLOAT:
+    return 4;
+  case VkFormat::VK_FORMAT_R32G32B32A32_SFLOAT:
+    return 16;
+  default:
+    ASSERT_ALWAYS(false);
+  }
+  ASSERT_ALWAYS(false);
+}
+static uint32_t get_mip_size(uint32_t size, uint32_t mip_level) {
+  return clamp<uint32_t>(size >> mip_level, 1, 1 << 16);
+}
 struct VkDevice_Impl {
   uint64_t magic_0;
   uint64_t magic_1;
@@ -93,6 +132,31 @@ struct VkBufferView_Impl {
     }
   }
 };
+struct VkSampler_Impl {
+  uint64_t magic_0;
+  uint64_t magic_1;
+  uint32_t refcnt;
+  VkFilter magFilter;
+  VkFilter minFilter;
+  VkSamplerMipmapMode mipmapMode;
+  VkSamplerAddressMode addressModeU;
+  VkSamplerAddressMode addressModeV;
+  VkSamplerAddressMode addressModeW;
+  float mipLodBias;
+  VkBool32 anisotropyEnable;
+  float maxAnisotropy;
+  VkBool32 compareEnable;
+  VkCompareOp compareOp;
+  float minLod;
+  float maxLod;
+  VkBorderColor borderColor;
+  VkBool32 unnormalizedCoordinates;
+  void release() {
+    if (--refcnt == 0) {
+      memset(this, 0, sizeof(*this));
+    }
+  }
+};
 struct VkImage_Impl {
   uint64_t magic_0;
   uint64_t magic_1;
@@ -104,9 +168,14 @@ struct VkImage_Impl {
   VkExtent3D extent;
   uint32_t mipLevels;
   uint32_t arrayLayers;
+  size_t mip_offsets[0x10];
+  size_t array_offsets[0x10];
   VkSampleCountFlagBits samples;
   VkImageLayout initialLayout;
-  uint8_t *get_ptr() { return mem->ptr + this->offset; }
+  uint8_t *get_ptr(uint32_t mip_level = 0, uint32_t array_elem = 0) {
+    return mem->ptr + this->offset + array_offsets[array_elem] +
+           mip_offsets[mip_level];
+  }
   void release() {
     if (--refcnt == 0) {
       mem->release();
@@ -324,15 +393,6 @@ struct VkDescriptorPool_Impl {
     }
   }
 };
-struct VkSampler_Impl {
-  uint64_t magic_0;
-  uint64_t magic_1;
-  uint32_t refcnt;
-  void release() {
-    if (--refcnt == 0)
-      memset(this, 0, sizeof(*this));
-  }
-};
 struct VkDescriptorSet_Impl {
   uint64_t magic_0;
   uint64_t magic_1;
@@ -348,6 +408,7 @@ struct VkDescriptorSet_Impl {
     VkDeviceSize offset;
     VkDeviceSize range;
   };
+  uint32_t slot_count;
   Slot *slots;
   void release() {
     if (--refcnt == 0) {
@@ -462,6 +523,7 @@ struct GPU_State { // doesn't do any ref counting here
   VkRect2D render_area = {};
   uint32_t viewport_count = 0;
   VkViewport viewports[0x10] = {};
+  uint8_t push_constants[0x100];
   void reset_state() { memset(this, 0, sizeof(*this)); }
   void execute_commands(VkCommandBuffer_Impl *cmd_buf);
 };
@@ -477,14 +539,15 @@ struct Shader_Symbols {
   uint32_t (*get_output_stride)();
   uint32_t (*get_subgroup_size)();
   void (*get_export_items)(uint32_t *);
-  void (*get_input_offsets)(uint32_t *);
-  void (*get_output_offsets)(uint32_t *);
-  struct Input_Item {
+  void (*get_input_slots)(uint32_t *);
+  void (*get_output_slots)(uint32_t *);
+  struct Varying_Slot {
     uint32_t location;
     uint32_t offset;
+    uint32_t format;
   };
-  Input_Item input_offsets[0x10];
-  Input_Item output_offsets[0x10];
+  Varying_Slot input_slots[0x10];
+  Varying_Slot output_slots[0x10];
   uint32_t input_item_count;
   uint32_t input_stride;
   uint32_t output_item_count;
@@ -498,4 +561,5 @@ extern "C" Shader_Symbols *get_shader_symbols(void *ptr);
 extern "C" void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                              uint32_t instanceCount, uint32_t firstIndex,
                              int32_t vertexOffset, uint32_t firstInstance);
+extern "C" void clear_attachment(vki::VkImageView_Impl *attachment, VkClearValue val);
 #endif // VK_HPP

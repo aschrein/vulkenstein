@@ -57,6 +57,8 @@ template <typename F> __Defer__<F> defer_func(F f) { return __Defer__<F>(f); }
 #define jto(N) for (uint32_t j = 0; j < N; ++j)
 #define uto(N) for (uint32_t u = 0; u < N; ++u)
 #define kto(N) for (uint32_t k = 0; k < N; ++k)
+#define xto(N) for (uint32_t x = 0; x < N; ++x)
+#define yto(N) for (uint32_t y = 0; y < N; ++y)
 
 #define PERF_HIST_ADD(name, val)
 #define PERF_ENTER(name)

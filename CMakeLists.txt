@@ -27,7 +27,7 @@ message(STATUS "LLVM_LIBRARY_LIST:" ${LLVM_LIBRARY_LIST})
 add_custom_command(
 OUTPUT llvm_stdlib_1.h
 DEPENDS ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp
-COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -march=skylake ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
         python3 ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll 1 > llvm_stdlib_1.ll &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_1.ll -o llvm_stdlib_1.bc &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as spv_stdlib.ll -o spv_stdlib.bc &&
@@ -39,7 +39,7 @@ COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib
 add_custom_command(
 OUTPUT llvm_stdlib_4.h
 DEPENDS ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp
-COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -g -march=skylake ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
         python3 ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll 4 > llvm_stdlib_4.ll &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_4.ll -o llvm_stdlib_4.bc &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as spv_stdlib.ll -o spv_stdlib.bc &&
@@ -51,7 +51,7 @@ COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib
 add_custom_command(
 OUTPUT llvm_stdlib_64.h
 DEPENDS ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp
-COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -march=skylake ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
         python3 ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll 64 > llvm_stdlib_64.ll &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_64.ll -o llvm_stdlib_64.bc &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as spv_stdlib.ll -o spv_stdlib.bc &&
