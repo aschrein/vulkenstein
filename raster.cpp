@@ -153,6 +153,18 @@ void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
   fclose(file);
 }
 
+#include <mutex>
+
+static int16_t *g_debug_grid[2] = {NULL, NULL};
+static std::mutex g_debug_grid_mutexes[2];
+static uint64_t g_current_grid = 0;
+static uint32_t g_debug_grid_size = 0;
+static uint32_t selected_texel_x = 0;
+static uint32_t selected_texel_y = 0;
+static uint64_t selected_texel_break = 0;
+static float mouse_world_x = 0.0f;
+static float mouse_world_y = 0.0f;
+
 #endif // RASTER_EXE
 
 uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
@@ -317,11 +329,12 @@ using i64x4 = __m256i;
 using i16x16 = __m256i;
 using i8x32 = __m256i;
 using i8x16 = __m128i;
-inline i32x8 add_si32x8(i32x8 a, i32x8 b) { return _mm256_add_epi32(a, b); }
-inline i8x32 add_si8x32(i8x32 a, i8x32 b) { return _mm256_add_epi8(a, b); }
-inline i8x16 add_si8x16(i8x16 a, i8x16 b) { return _mm_add_epi8(a, b); }
+// Result is wrapped around! the carry is ignored
+inline i32x8 add_i32x8(i32x8 a, i32x8 b) { return _mm256_add_epi32(a, b); }
+inline i8x32 add_i8x32(i8x32 a, i8x32 b) { return _mm256_add_epi8(a, b); }
+inline i8x16 add_i8x16(i8x16 a, i8x16 b) { return _mm_add_epi8(a, b); }
 inline i8x16 or_si8x16(i8x16 a, i8x16 b) { return _mm_or_ps(a, b); }
-inline i16x16 add_si16x16(i16x16 a, i16x16 b) { return _mm256_add_epi16(a, b); }
+inline i16x16 add_i16x16(i16x16 a, i16x16 b) { return _mm256_add_epi16(a, b); }
 inline i8x32 cmpeq_i8x32(i8x32 a, i8x32 b) { return _mm256_cmpeq_epi8(a, b); }
 #define init_i32x8 _mm256_setr_epi32
 #define init_i8x32 _mm256_setr_epi8
@@ -414,11 +427,11 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
                           0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
                           0x70, 0x70, 0x70, 0x70, 0x70);
   // move within 128 bit lanes
-  __m256i local_mask = add_si8x32(shuffle, K0);
+  __m256i local_mask = add_i8x32(shuffle, K0);
   __m256i local_shuffle = shuffle_i8x32(value, local_mask);
   // swap low and high 128 bit lanes
   __m256i lowhigh = _mm256_permute4x64_epi64(value, 0x4E);
-  __m256i far_mask = add_si8x32(shuffle, K1);
+  __m256i far_mask = add_i8x32(shuffle, K1);
   __m256i far_pass = shuffle_i8x32(lowhigh, far_mask);
   return ymm_or(local_shuffle, far_pass);
 }
@@ -432,6 +445,118 @@ struct Classified_Tile {
 #pragma pack(pop)
 
 static_assert(sizeof(Classified_Tile) == 4, "incorrect padding");
+#define debug_break __asm__("int3")
+void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
+                                                float _y1, float _x2, float _y2,
+                                                Classified_Tile *tile_buffer,
+                                                uint32_t *tile_count) {
+  int16_t pixel_precision = 8;
+  float k = (float)(1 << pixel_precision);
+  int16_t upper_bound = (int16_t)((int16_t)1 << 8) - (int16_t)1;
+  int16_t lower_bound = 0;
+  int16_t x0 = vki::clamp((int16_t)(_x0 * k + 0.5f), lower_bound, upper_bound);
+  int16_t y0 = vki::clamp((int16_t)(_y0 * k + 0.5f), lower_bound, upper_bound);
+  int16_t x1 = vki::clamp((int16_t)(_x1 * k + 0.5f), lower_bound, upper_bound);
+  int16_t y1 = vki::clamp((int16_t)(_y1 * k + 0.5f), lower_bound, upper_bound);
+  int16_t x2 = vki::clamp((int16_t)(_x2 * k + 0.5f), lower_bound, upper_bound);
+  int16_t y2 = vki::clamp((int16_t)(_y2 * k + 0.5f), lower_bound, upper_bound);
+
+  int16_t n0_x = -(y1 - y0);
+  int16_t n0_y = (x1 - x0);
+  int16_t n1_x = -(y2 - y1);
+  int16_t n1_y = (x2 - x1);
+  int16_t n2_x = -(y0 - y2);
+  int16_t n2_y = (x0 - x2);
+
+  int16_t min_x = MIN(x0, MIN(x1, x2));
+  int16_t max_x = MAX(x0, MAX(x1, x2));
+  int16_t min_y = MIN(y0, MIN(y1, y2));
+  int16_t max_y = MAX(y0, MAX(y1, y2));
+
+  min_x &= (~0b11);
+  min_y &= (~0b11);
+  max_x = (max_x + 0b11) & (~0b11);
+  max_y = (max_y + 0b11) & (~0b11);
+
+  int16_t e0_0 = n0_x * (min_x - x0) + n0_y * (min_y - y0);
+  int16_t e1_0 = n1_x * (min_x - x1) + n1_y * (min_y - y1);
+  int16_t e2_0 = n2_x * (min_x - x2) + n2_y * (min_y - y2);
+
+  uint8_t min_y_tile = 0xff & (min_y >> 2);
+  uint8_t max_y_tile = 0xff & (max_y >> 2);
+  uint8_t min_x_tile = 0xff & (min_x >> 2);
+  uint8_t max_x_tile = 0xff & (max_x >> 2);
+  // clang-format on
+  uint32_t _tile_count = *tile_count;
+  // DEBUG
+  uint64_t next_grid = (g_current_grid + 1) & 1;
+  std::lock_guard<std::mutex> lock(g_debug_grid_mutexes[next_grid]);
+  if (g_debug_grid[next_grid] == NULL) {
+    g_debug_grid[next_grid] = (int16_t *)malloc(256 * 256 * 2 * 3);
+    g_debug_grid_size = 256;
+  }
+  memset(g_debug_grid[next_grid], 0, 256 * 256 * 2 * 3);
+  // DEBUG
+  // ~15 cycles per tile
+  for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
+    //    if (y == max_y_tile - 1)
+    //      debug_break;
+    int16_t e0_1 = e0_0;
+    int16_t e1_1 = e1_0;
+    int16_t e2_1 = e2_0;
+    for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
+      uint16_t mask = 0;
+      int16_t e0_2 = e0_1;
+      int16_t e1_2 = e1_1;
+      int16_t e2_2 = e2_1;
+      ito(4) {
+        int16_t e0_3 = e0_2;
+        int16_t e1_3 = e1_2;
+        int16_t e2_3 = e2_2;
+        jto(4) {
+          // DEBUG
+          uint32_t texel_x = x * 4 + j;
+          uint32_t texel_y = y * 4 + i;
+          if (selected_texel_break == 1 && texel_x == selected_texel_x &&
+              texel_y == selected_texel_y) {
+            debug_break;
+            selected_texel_break = 0;
+          }
+          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) * 3 + 0] =
+              e0_3;
+          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) * 3 + 1] =
+              e1_3;
+          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) * 3 + 2] =
+              e2_3;
+          // DEBUG
+          uint16_t e0_sign = (uint16_t)e0_3 >> 15;
+          uint16_t e1_sign = (uint16_t)e1_3 >> 15;
+          uint16_t e2_sign = (uint16_t)e2_3 >> 15;
+          uint16_t mask_1 = (e0_sign | e1_sign | e2_sign);
+          mask = mask | ((mask_1 & 1) << ((i << 2) | j));
+          e0_3 += n0_x;
+          e1_3 += n1_x;
+          e2_3 += n2_x;
+        }
+        e0_2 += n0_y;
+        e1_2 += n1_y;
+        e2_2 += n2_y;
+      }
+      if (mask != 0xffff) {
+        tile_buffer[_tile_count] = {x, y, (uint16_t)~mask};
+        _tile_count = _tile_count + 1;
+      }
+      e0_1 += n0_x * 4;
+      e1_1 += n1_x * 4;
+      e2_1 += n2_x * 4;
+    }
+    e0_0 += n0_y * 4;
+    e1_0 += n1_y * 4;
+    e2_0 += n2_y * 4;
+  };
+  *tile_count = _tile_count;
+  g_current_grid = next_grid;
+}
 
 void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
                                                 float _y1, float _x2, float _y2,
@@ -460,7 +585,10 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
   int16_t min_y = MIN(y0, MIN(y1, y2));
   int16_t max_y = MAX(y0, MAX(y1, y2));
 
-  min_x &= (~0x1f);
+  min_x &= (~0b11);
+  min_y &= (~0b11);
+  max_x = (max_x + 0b11) & (~0b11);
+  max_y = (max_y + 0b11) & (~0b11);
   // Work on 4 x 4 tiles
   //   x 00 01 10 11
   //  y _____________
@@ -548,9 +676,9 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
   i16x16 v_e0_0 = broadcast_i16x16(e0_0);
   i16x16 v_e1_0 = broadcast_i16x16(e1_0);
   i16x16 v_e2_0 = broadcast_i16x16(e2_0);
-  v_e0_0 = add_si16x16(v_e0_0, v_e0_init);
-  v_e1_0 = add_si16x16(v_e1_0, v_e1_init);
-  v_e2_0 = add_si16x16(v_e2_0, v_e2_init);
+  v_e0_0 = add_i16x16(v_e0_0, v_e0_init);
+  v_e1_0 = add_i16x16(v_e1_0, v_e1_init);
+  v_e2_0 = add_i16x16(v_e2_0, v_e2_init);
   uint8_t min_y_tile = 0xff & (min_y >> 2);
   uint8_t max_y_tile = 0xff & (max_y >> 2);
   uint8_t min_x_tile = 0xff & (min_x >> 2);
@@ -563,6 +691,11 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
     i16x16 v_e1_1 = v_e1_0;
     i16x16 v_e2_1 = v_e2_0;
     for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
+      // DEBUG
+      //      if (x != 0)
+      //        continue;
+      //
+
       uint16_t e0_sign_0 = extract_sign_i16x16(v_e0_1);
       uint16_t e1_sign_0 = extract_sign_i16x16(v_e1_1);
       uint16_t e2_sign_0 = extract_sign_i16x16(v_e2_1);
@@ -571,13 +704,13 @@ void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
         tile_buffer[_tile_count] = {x, y, (uint16_t)~mask_0};
         _tile_count = _tile_count + 1;
       }
-      v_e0_1 = add_si16x16(v_e0_1, v_e0_delta_x);
-      v_e1_1 = add_si16x16(v_e1_1, v_e1_delta_x);
-      v_e2_1 = add_si16x16(v_e2_1, v_e2_delta_x);
+      v_e0_1 = add_i16x16(v_e0_1, v_e0_delta_x);
+      v_e1_1 = add_i16x16(v_e1_1, v_e1_delta_x);
+      v_e2_1 = add_i16x16(v_e2_1, v_e2_delta_x);
     }
-    v_e0_0 = add_si16x16(v_e0_0, v_e0_delta_y);
-    v_e1_0 = add_si16x16(v_e1_0, v_e1_delta_y);
-    v_e2_0 = add_si16x16(v_e2_0, v_e2_delta_y);
+    v_e0_0 = add_i16x16(v_e0_0, v_e0_delta_y);
+    v_e1_0 = add_i16x16(v_e1_0, v_e1_delta_y);
+    v_e2_0 = add_i16x16(v_e2_0, v_e2_delta_y);
   };
   *tile_count = _tile_count;
 }
@@ -714,11 +847,17 @@ void rasterize_triangle_tiled_4x4_256x256_defer_cull(
   }
   if (num_vertices < 3)
     return;
-  ito(num_vertices - 2) rasterize_triangle_tiled_4x4_256x256_defer( //
-      vertices[i + 2].x, vertices[i + 2].y,                         //
-      vertices[i + 1].x, vertices[i + 1].y,                         //
-      vertices[0].x, vertices[0].y,                                 //
-      tile_buffer, tile_count);
+  ito(num_vertices - 2) {
+    // DEBUG
+    //    if (i == 0)
+    //      continue;
+    //
+    rasterize_triangle_tiled_1x1_256x256_defer( //
+        vertices[i + 2].x, vertices[i + 2].y,   //
+        vertices[i + 1].x, vertices[i + 1].y,   //
+        vertices[0].x, vertices[0].y,           //
+        tile_buffer, tile_count);
+  }
 }
 
 float clamp(float x, float min, float max) {
@@ -1267,7 +1406,688 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
 #define UTILS_IMPL
 #include "utils.hpp"
 Shader_Symbols *get_shader_symbols(void *ptr) { return NULL; }
+#include <chrono>
+#include <GLES3/gl32.h>
+#include <SDL2/SDL.h>
+#include <thread>
+void MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity,
+                     GLsizei length, const GLchar *message,
+                     const void *userParam) {
+  fprintf(stderr,
+          "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
+          (type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""), type, severity,
+          message);
+}
+
+double my_clock() {
+  std::chrono::time_point<std::chrono::system_clock> now =
+      std::chrono::system_clock::now();
+  auto duration = now.time_since_epoch();
+  return 1.0e-3 *
+         (double)std::chrono::duration_cast<std::chrono::milliseconds>(duration)
+             .count();
+}
+
+struct Oth_Camera {
+  float3 pos;
+  float proj[16];
+  void update(float viewport_width, float viewport_height) {
+    float3 look = (float3){0.0f, 0.0f, -1.0f};
+    float3 left = (float3){1.0f, 0.0f, 0.0f};
+    float3 up = (float3){0.0f, 1.0f, 0.0f};
+    float aspect = ((float)viewport_height / viewport_width);
+    float e = (float)2.4e-7f;
+    float fov = 2.0f;
+    // clang-format off
+  float proj[16] = {
+    fov * aspect,     0.0f,          0.0f,      -2.0f * pos.x,
+
+    0.0f,           fov,    0.0f,      -2.0f * pos.y,
+
+    0.0f,           0.0f,          0.0f,      0.0f,
+
+    0.0f,           0.0f,          0.0f,      pos.z
+  };
+    // clang-format on
+    memcpy(&this->proj[0], &proj[0], sizeof(proj));
+  }
+} g_camera;
+
+SDL_Window *window = NULL;
+SDL_GLContext glc;
+int SCREEN_WIDTH, SCREEN_HEIGHT;
+
+void compile_shader(GLuint shader) {
+  glCompileShader(shader);
+  GLint isCompiled = 0;
+  glGetShaderiv(shader, GL_COMPILE_STATUS, &isCompiled);
+  if (isCompiled == GL_FALSE) {
+    GLint maxLength = 0;
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &maxLength);
+    GLchar *errorLog = (GLchar *)malloc(maxLength);
+    defer(free(errorLog));
+    glGetShaderInfoLog(shader, maxLength, &maxLength, &errorLog[0]);
+
+    glDeleteShader(shader);
+    fprintf(stderr, "[ERROR]: %s\n", &errorLog[0]);
+    exit(1);
+  }
+}
+
+void link_program(GLuint program) {
+  glLinkProgram(program);
+  GLint isLinked = 0;
+  glGetProgramiv(program, GL_LINK_STATUS, &isLinked);
+  if (isLinked == GL_FALSE) {
+    GLint maxLength = 0;
+    glGetProgramiv(program, GL_INFO_LOG_LENGTH, &maxLength);
+    GLchar *infoLog = (GLchar *)malloc(maxLength);
+    defer(free(infoLog));
+    glGetProgramInfoLog(program, maxLength, &maxLength, &infoLog[0]);
+    glDeleteProgram(program);
+    fprintf(stderr, "[ERROR]: %s\n", &infoLog[0]);
+    exit(1);
+  }
+}
+
+GLuint create_program(GLchar const *vsrc, GLchar const *fsrc) {
+  GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vertexShader, 1, &vsrc, NULL);
+  compile_shader(vertexShader);
+  defer(glDeleteShader(vertexShader););
+  GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(fragmentShader, 1, &fsrc, NULL);
+  compile_shader(fragmentShader);
+  defer(glDeleteShader(fragmentShader););
+
+  GLuint program = glCreateProgram();
+  glAttachShader(program, vertexShader);
+  glAttachShader(program, fragmentShader);
+  link_program(program);
+  glDetachShader(program, vertexShader);
+  glDetachShader(program, fragmentShader);
+
+  return program;
+}
+#include "simplefont.h"
+static Temporary_Storage ts = Temporary_Storage::create(64 * (1 << 20));
+
+void draw_strings(char const **strings, float2 *positions, size_t num_strings) {
+  float aspect = ((float)SCREEN_HEIGHT / SCREEN_WIDTH);
+  uint32_t total_string_length = 0;
+  kto(num_strings) { total_string_length += (uint32_t)strlen(strings[k]); }
+  float *coords = (float *)ts.alloc(4 * 16 * total_string_length);
+  uint32_t *indices = (uint32_t *)ts.alloc(4 * 6 * total_string_length);
+  uint32_t cur_coord = 0;
+  uint32_t cur_index = 0;
+  uint32_t chars_to_render = 0;
+  kto(num_strings) {
+    float world_x = positions[k].x;
+    float world_y = positions[k].y;
+    char const *str = strings[k];
+    float x = (world_x * aspect - g_camera.pos.x) / (g_camera.pos.z) + 0.5f;
+    float y = (world_y - g_camera.pos.y) / (g_camera.pos.z) + 0.5f;
+    if (x < 0.0f || y < 0.0f || x > 1.0f || y > 1.0f)
+      continue;
+
+    size_t string_length = strlen(str);
+    chars_to_render += string_length;
+    uint32_t string_pos_x_i = (uint32_t)(clamp(x, 0.0f, 1.0f) * SCREEN_WIDTH);
+    uint32_t string_pos_y_i = (uint32_t)(clamp(y, 0.0f, 1.0f) * SCREEN_HEIGHT);
+    float string_pos_x = 2.0f * (float)string_pos_x_i / SCREEN_WIDTH - 1.0f;
+    float string_pos_y = 2.0f * (float)string_pos_y_i / SCREEN_HEIGHT - 1.0f;
+    float pixel_size_x = 2.0f / (float)SCREEN_WIDTH;
+    uint32_t index_offset = cur_coord / 4;
+    ito(string_length) {
+      uint32_t c = (uint32_t)str[i];
+
+      // Printable characters only
+      c = clamp(c, 0x20, 0x7e);
+      uint32_t row = (c - 0x20) / simplefont_bitmap_glyphs_per_row;
+      uint32_t col = (c - 0x20) % simplefont_bitmap_glyphs_per_row;
+      float v0 = ((float)row * (simplefont_bitmap_glyphs_height +
+                                simplefont_bitmap_glyphs_pad_y * 2) +
+                  simplefont_bitmap_glyphs_pad_y) /
+                 simplefont_bitmap_height;
+      float u0 = ((float)col * (simplefont_bitmap_glyphs_width +
+                                simplefont_bitmap_glyphs_pad_x * 2) +
+                  simplefont_bitmap_glyphs_pad_x) /
+                 simplefont_bitmap_width;
+      float u1 =
+          u0 + (float)simplefont_bitmap_glyphs_width / simplefont_bitmap_width;
+      float v1 = v0 + (float)simplefont_bitmap_glyphs_height /
+                          simplefont_bitmap_height;
+      float glyph_ss_width =
+          2.0f * (float)simplefont_bitmap_glyphs_width / SCREEN_WIDTH;
+      float glyph_ss_height =
+          2.0f * (float)simplefont_bitmap_glyphs_height / SCREEN_HEIGHT;
+      int xk[] = {0, 1, 1, 0};
+      int yk[] = {0, 0, 1, 1};
+      float2 uv[] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};
+      jto(4) {
+        coords[cur_coord++] = (float)i * pixel_size_x + string_pos_x +
+                              2.0f * glyph_ss_width * (float)(i + xk[j]);
+        coords[cur_coord++] = string_pos_y + 2.0f * glyph_ss_height * yk[j];
+        coords[cur_coord++] = uv[j].x;
+        coords[cur_coord++] = uv[j].y;
+      }
+      indices[cur_index++] = index_offset + i * 4 + 0;
+      indices[cur_index++] = index_offset + i * 4 + 1;
+      indices[cur_index++] = index_offset + i * 4 + 2;
+      indices[cur_index++] = index_offset + i * 4 + 0;
+      indices[cur_index++] = index_offset + i * 4 + 2;
+      indices[cur_index++] = index_offset + i * 4 + 3;
+    }
+  }
+  const GLchar *vsrc =
+      R"(#version 420
+  layout (location=0) in vec2 vertex_position;
+  layout (location=1) in vec2 vertex_uv;
+  layout (location=0) out vec2 uv;
+  uniform mat4 projection;
+  void main() {
+      /*mat2 rot = mat2(
+        cos(angle), sin(angle),
+        -sin(angle), cos(angle)
+      );
+      color = vec3(1.0, 0.0, 0.0);*/
+      uv = vertex_uv;
+      gl_Position =  vec4(vertex_position, 0.0, 1.0);// * projection;
+
+  })";
+  const GLchar *fsrc =
+      R"(#version 420
+  layout(location = 0) out vec4 SV_TARGET0;
+  layout(location = 0) in vec2 uv;
+  uniform vec3 ucolor;
+  uniform sampler2D image;
+  void main() {
+    /*float color = 1.0 / ((
+        //pow(abs(dFdx(gl_FragCoord.z)) + abs(dFdy(gl_FragCoord.z)), 1.0)
+        pow(abs(gl_FragCoord.z) * 0.5 + 0.5, 3.5)
+    ) * 1.0e7 + 1.0);*/
+    if (texture2D(image, uv).x > 0.0)
+      SV_TARGET0 = vec4(0.0, 0.0, 0.0, 1.0);
+    else
+      discard;
+  })";
+  static GLuint program = create_program(vsrc, fsrc);
+  struct Image_GL {
+    GLuint vao;
+    GLuint vbo;
+    GLuint ibo;
+  };
+  static GLuint font_texture = [&] {
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    uint8_t *r8_data =
+        (uint8_t *)malloc(simplefont_bitmap_height * simplefont_bitmap_width);
+    defer(free(r8_data));
+    ito(simplefont_bitmap_height) {
+      jto(simplefont_bitmap_width) {
+        char c = simplefont_bitmap[i][j];
+        r8_data[(i)*simplefont_bitmap_width + j] = c == ' ' ? 0 : 0xff;
+      }
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, simplefont_bitmap_width,
+                 simplefont_bitmap_height, 0, GL_RED, GL_UNSIGNED_BYTE,
+                 r8_data);
+    return tex;
+  }();
+  static Image_GL image_vao = [&] {
+    Image_GL out;
+    GLuint vao;
+    glGenVertexArrays(1, &vao);
+    glBindVertexArray(vao);
+    GLuint vbo;
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    GLuint ibo;
+    glGenBuffers(1, &ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    out.vbo = vbo;
+    out.ibo = ibo;
+    out.vao = vao;
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    return out;
+  }();
+  glBindVertexArray(image_vao.vao);
+  glBindBuffer(GL_ARRAY_BUFFER, image_vao.vbo);
+  glBufferData(GL_ARRAY_BUFFER, 4 * 16 * chars_to_render, coords,
+               GL_DYNAMIC_DRAW);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, image_vao.ibo);
+  glBufferData(GL_ELEMENT_ARRAY_BUFFER, 4 * 6 * chars_to_render, indices,
+               GL_DYNAMIC_DRAW);
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+  // Draw
+
+  glUseProgram(program);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, font_texture);
+  glUniform1i(glGetUniformLocation(program, "image"), 0);
+  glBindVertexArray(image_vao.vao);
+  glBindBuffer(GL_ARRAY_BUFFER, image_vao.vbo);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, image_vao.ibo);
+  glEnableVertexAttribArray(0);
+  glVertexAttribBinding(0, 0);
+  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, 0);
+  glEnableVertexAttribArray(1);
+  glVertexAttribBinding(1, 0);
+  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, (void *)8);
+  glDrawElements(GL_TRIANGLES, 6 * chars_to_render, GL_UNSIGNED_INT, NULL);
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+  glDisableVertexAttribArray(0);
+  glDisableVertexAttribArray(1);
+}
+
+void draw_grid_i16(int16_t *grid, uint32_t width, uint32_t height, float size_x,
+                   float size_y) {
+  const GLchar *line_vs =
+      R"(#version 420
+  layout (location=0) in vec2 vertex_position;
+  uniform mat4 projection;
+  void main() {
+      gl_Position =  vec4(vertex_position, 0.0, 1.0) * projection;
+  })";
+  const GLchar *line_ps =
+      R"(#version 420
+  layout(location = 0) out vec4 SV_TARGET0;
+  uniform vec3 ucolor;
+  void main() {
+    SV_TARGET0 = vec4(ucolor, 1.0);
+  })";
+  const GLchar *quad_vs =
+      R"(#version 420
+  layout (location=0) in vec2 vertex_position;
+  layout (location=1) in vec2 instance_offset;
+  layout(location = 2) in vec3 instance_color;
+  layout(location = 0) out vec3 color;
+  uniform mat4 projection;
+  void main() {
+      color = instance_color;
+      gl_Position =  vec4(vertex_position + instance_offset, 0.0, 1.0) * projection;
+  })";
+  const GLchar *quad_ps =
+      R"(#version 420
+  layout(location = 0) out vec4 SV_TARGET0;
+  layout(location = 0) in vec3 color;
+  void main() {
+    SV_TARGET0 = vec4(color, 1.0);
+  })";
+  static GLuint line_program = create_program(line_vs, line_ps);
+  static GLuint quad_program = create_program(quad_vs, quad_ps);
+  static GLuint line_vao;
+  static GLuint line_vbo;
+  static GLuint quad_vao;
+  static GLuint quad_vbo;
+  static GLuint quad_instance_vbo;
+  static int init_va0 = [&] {
+    glGenVertexArrays(1, &line_vao);
+    glBindVertexArray(line_vao);
+    glGenBuffers(1, &line_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, line_vbo);
+
+    glGenVertexArrays(1, &quad_vao);
+    glBindVertexArray(quad_vao);
+    float pos[] = {
+        0.0f, 0.0f, //
+        1.0f, 0.0f, //
+        1.0f, 1.0f, //
+        0.0f, 0.0f, //
+        1.0f, 1.0f, //
+        0.0f, 1.0f, //
+    };
+    glGenBuffers(1, &quad_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(pos), pos, GL_DYNAMIC_DRAW);
+
+    glGenBuffers(1, &quad_instance_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, quad_instance_vbo);
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    return 0;
+  }();
+  float dx = size_x / (float)width;
+  float dy = size_y / (float)height;
+  // Draw quads
+  {
+
+    glUseProgram(quad_program);
+    glUniformMatrix4fv(glGetUniformLocation(quad_program, "projection"), 1,
+                       GL_FALSE, g_camera.proj);
+    glBindVertexArray(quad_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+    glEnableVertexAttribArray(0);
+    glVertexAttribBinding(0, 0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+
+    glBindBuffer(GL_ARRAY_BUFFER, quad_instance_vbo);
+    uint32_t max_num_quads = width * height;
+    ts.enter_scope();
+    float *quad_data = (float *)ts.alloc(4 * 20 * max_num_quads);
+    uint32_t num_quads = 0;
+    uint32_t num_floats = 0;
+    bool has_selection = false;
+    ito(height) {
+      jto(width) {
+        int16_t e0 = grid[i * width * 3 + j * 3 + 0];
+        int16_t e1 = grid[i * width * 3 + j * 3 + 1];
+        int16_t e2 = grid[i * width * 3 + j * 3 + 2];
+        if (e0 == 0 && e1 == e0 && e2 == e0) {
+          continue;
+        }
+        quad_data[num_floats++] = dx * j;
+        quad_data[num_floats++] = dy * i;
+
+        float r = 1.0f;
+        float g = 1.0f;
+        float b = 1.0f;
+
+        if (e0 < 0 || e1 < 0 || e2 < 0) {
+          r = 1.0f;
+          g = 0.0f;
+          b = 0.0f;
+        }
+
+        if (mouse_world_x > dx * j && mouse_world_x < dx * (j + 1) &&
+            mouse_world_y > dy * i && mouse_world_y < dy * (i + 1)) {
+          r = 0.0f;
+          g = 1.0f;
+          b = 0.0f;
+          selected_texel_x = j;
+          selected_texel_y = i;
+        }
+
+        quad_data[num_floats++] = r;
+        quad_data[num_floats++] = g;
+        quad_data[num_floats++] = b;
+        num_quads++;
+      }
+    }
+    if (!has_selection) {
+      //      selected_texel_x = 0xffffffffu;
+      //      selected_texel_y = 0xffffffffu;
+    }
+    glBufferData(GL_ARRAY_BUFFER, 4 * num_floats, quad_data, GL_DYNAMIC_DRAW);
+    ts.exit_scope();
+    glEnableVertexAttribArray(1);
+    glVertexAttribBinding(1, 0);
+    glVertexAttribDivisor(1, 1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, 0);
+    glEnableVertexAttribArray(2);
+    glVertexAttribBinding(2, 0);
+    glVertexAttribDivisor(2, 1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 20, (void *)8);
+
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_quads);
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDisableVertexAttribArray(0);
+    glDisableVertexAttribArray(1);
+    glDisableVertexAttribArray(2);
+    glVertexAttribDivisor(1, 0);
+    glVertexAttribDivisor(2, 0);
+  } // Draw lines
+  {
+    uint32_t num_lines = (width + 1) + (height + 1);
+    float *coords = (float *)ts.alloc(4 * 4 * num_lines + 512);
+
+    ito(width + 1) {
+      // vertical lines
+      coords[i * 4 + 0] = dx * (float)(i);
+      coords[i * 4 + 1] = 0.0f;
+      coords[i * 4 + 2] = dx * (float)(i);
+      coords[i * 4 + 3] = size_y;
+    }
+    float *hcoords = coords + (width + 1) * 4;
+    ito(height + 1) {
+      // horisontal lines
+      hcoords[i * 4 + 0] = 0.0f;
+      hcoords[i * 4 + 1] = dy * (float)(i);
+      hcoords[i * 4 + 2] = size_x;
+      hcoords[i * 4 + 3] = dy * (float)(i);
+    }
+
+    glUseProgram(line_program);
+    glUniformMatrix4fv(glGetUniformLocation(line_program, "projection"), 1,
+                       GL_FALSE, g_camera.proj);
+    glUniform3f(glGetUniformLocation(line_program, "ucolor"), 0.0f, 0.01f,
+                0.1f);
+    glBindVertexArray(line_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, line_vbo);
+    glBufferData(GL_ARRAY_BUFFER, 4 * 4 * num_lines, coords, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribBinding(0, 0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glDrawArrays(GL_LINES, 0, 2 * num_lines);
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDisableVertexAttribArray(0);
+  }
+  // Draw strings if the camera is close enough
+  if (g_camera.pos.z > 10.0f)
+    return;
+  {
+    char **strings = (char **)ts.alloc(sizeof(char *) * width * 5);
+    float2 *string_positions = (float2 *)ts.alloc(sizeof(float2) * width * 5);
+    char tmp_buf[0x100];
+    uint32_t num_str = 0;
+    auto alloc_str = [&](char const *fmt, int16_t v, float x, float y) {
+      snprintf(tmp_buf, sizeof(tmp_buf), fmt, v);
+      size_t len = strnlen(tmp_buf, sizeof(tmp_buf));
+      char *dst = (char *)ts.alloc(len + 1);
+      memcpy(dst, tmp_buf, len);
+      dst[len] = '\0';
+      string_positions[num_str] = (float2){x, y};
+      strings[num_str] = dst;
+      num_str++;
+    };
+
+    ito(height) {
+      num_str = 0;
+      ts.enter_scope();
+      jto(width) {
+
+        alloc_str("x = %i", (int16_t)j, dx * j, dy * i);
+        alloc_str("y = %i", (int16_t)i, dx * j, dy * i + dy * 0.1f);
+
+        alloc_str("e0 = %i", grid[i * width * 3 + j * 3 + 0], dx * j + 0.1f,
+                  dy * i + dy * 0.25f);
+        alloc_str("e1 = %i", grid[i * width * 3 + j * 3 + 1], dx * j + 0.1f,
+                  dy * i + dy * 0.5f);
+        alloc_str("e2 = %i", grid[i * width * 3 + j * 3 + 2], dx * j + 0.1f,
+                  dy * i + dy * 0.75f);
+      }
+      draw_strings((char const **)strings, string_positions, num_str);
+      ts.exit_scope();
+    }
+  }
+}
+
+void render() {
+
+  static int init = [] {
+    g_camera.pos = (float3){0.0, 0.0, 2.0};
+    return 0;
+  }();
+
+  // Update delta time
+  double last_time = my_clock();
+  double cur_time = my_clock();
+  double dt = cur_time - last_time;
+  last_time = cur_time;
+  g_camera.update(SCREEN_WIDTH, SCREEN_HEIGHT);
+  // Scoped temporary allocator
+  ts.enter_scope();
+  glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+  glClearColor(0.0f, 0.3f, 0.4f, 1.0f);
+  glClearDepthf(1000.0f);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glDisable(GL_DEPTH_TEST);
+  glDepthMask(GL_FALSE);
+  glDepthFunc(GL_LEQUAL);
+  glDisable(GL_CULL_FACE);
+  //  char const *strings[] {
+  //    "test string 12454 :{}a[0]",
+  //    "&*(*&(()&()*&6",
+  //  };
+  //  float2 positions[] = {
+  //    {0.5f, 0.5f},
+  //    {1.5f, 0.5f},
+  //  };
+  //  draw_strings(strings, positions, 2);
+  if (g_debug_grid[g_current_grid]) {
+    std::lock_guard<std::mutex> lock(g_debug_grid_mutexes[g_current_grid]);
+    draw_grid_i16(g_debug_grid[g_current_grid], 256, 256, 256.0f, 256.0f);
+  }
+  defer(ts.exit_scope());
+
+  SDL_GL_SwapWindow(window);
+}
+
+static int quit_loop = 0;
+
+int main_tick() {
+  SDL_Event event;
+  SDL_GetWindowSize(window, &SCREEN_WIDTH, &SCREEN_HEIGHT);
+  float camera_speed = 1.0f;
+  static bool ldown = false;
+  while (SDL_PollEvent(&event)) {
+    switch (event.type) {
+    case SDL_QUIT: {
+      quit_loop = 1;
+      break;
+    }
+    case SDL_KEYDOWN: {
+      switch (event.key.keysym.sym) {
+
+      case SDLK_w: {
+
+        break;
+      }
+      case SDLK_ESCAPE: {
+        quit_loop = 1;
+        break;
+      }
+      case SDLK_s: {
+
+        break;
+      }
+      case SDLK_a: {
+
+        break;
+      }
+      case SDLK_d: {
+
+        break;
+      }
+      }
+      break;
+    }
+    case SDL_MOUSEBUTTONDOWN: {
+      SDL_MouseButtonEvent *m = (SDL_MouseButtonEvent *)&event;
+      if (m->button == 3) {
+        if (selected_texel_x != 0xffffffff && selected_texel_y != 0xffffffff) {
+          selected_texel_break = 1;
+        }
+      }
+      if (m->button == 1) {
+
+        ldown = true;
+      }
+      break;
+    }
+    case SDL_MOUSEBUTTONUP: {
+      SDL_MouseButtonEvent *m = (SDL_MouseButtonEvent *)&event;
+      if (m->button == 1)
+        ldown = false;
+      break;
+    }
+    case SDL_WINDOWEVENT_FOCUS_LOST: {
+      ldown = false;
+      break;
+    }
+    case SDL_MOUSEMOTION: {
+      SDL_MouseMotionEvent *m = (SDL_MouseMotionEvent *)&event;
+      static int old_mp_x = m->x;
+      static int old_mp_y = m->y;
+      int dx = m->x - old_mp_x;
+      int dy = m->y - old_mp_y;
+      if (ldown) {
+        g_camera.pos.x -=
+            g_camera.pos.z * camera_speed * (float)dx / SCREEN_WIDTH;
+        g_camera.pos.y +=
+            g_camera.pos.z * camera_speed * (float)dy / SCREEN_HEIGHT;
+      }
+
+      old_mp_x = m->x;
+      old_mp_y = m->y;
+      float aspect = ((float)SCREEN_WIDTH / SCREEN_HEIGHT);
+      mouse_world_x = (2.0f * (float)m->x / SCREEN_WIDTH - 1.0f) *
+                          g_camera.pos.z * aspect * 0.5f +
+                      g_camera.pos.x * aspect;
+      mouse_world_y =
+          (-2.0f * (float)m->y / SCREEN_HEIGHT + 1.0f) * g_camera.pos.z * 0.5f +
+          g_camera.pos.y;
+    } break;
+    case SDL_MOUSEWHEEL: {
+      g_camera.pos.z += g_camera.pos.z * (float)event.wheel.y * 1.0e-1;
+      g_camera.pos.z = clamp(g_camera.pos.z, 0.1f, 256.0f);
+    } break;
+    }
+  }
+
+  render();
+  SDL_UpdateWindowSurface(window);
+
+  return 0;
+}
+
+void main_loop() {
+  glEnable(GL_DEBUG_OUTPUT);
+  glDebugMessageCallback(MessageCallback, 0);
+  while (0 == quit_loop) {
+    main_tick();
+  }
+}
 int main(int argc, char **argv) {
+
+  std::thread window_loop = std::thread([] {
+    SDL_Init(SDL_INIT_VIDEO);
+
+    window = SDL_CreateWindow(
+        "RasterDBG", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 512, 512,
+        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+    // 3.2 is minimal requirement for renderdoc
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+    SDL_GL_SetSwapInterval(0);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 23);
+    glc = SDL_GL_CreateContext(window);
+    ASSERT_ALWAYS(glc);
+
+    main_loop();
+    SDL_GL_DeleteContext(glc);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+  });
+
   call_pfc(pfcInit());
   call_pfc(pfcPinThread(3));
   uint32_t width_pow = 8;
@@ -1280,24 +2100,29 @@ int main(int argc, char **argv) {
   defer(free(_image_i8));
   float dp = 1.0f / (float)width;
   PRINT_CLOCKS({ (void)0; });
-  float test_x0 = -1.0f;
+  float test_x0 = 0.0f;
   float test_y0 = 0.0f;
-  float test_x1 = 0.65f;
+  float test_x1 = 0.1f;
   float test_y1 = 0.3f;
-  float test_x2 = 0.85f;
-  float test_y2 = 0.85f;
+  float test_x2 = 0.5f;
+  float test_y2 = 0.5f;
   // ~5k cycles
   Classified_Tile tiles[0x1000];
   uint32_t tile_count = 0;
-  PRINT_CLOCKS(rasterize_triangle_tiled_4x4_256x256_defer_cull(
-      // clang-format off
+  uint32_t i = 0;
+  while (quit_loop == 0) {
+    tile_count = 0;
+    float dx = (float)((i >> 4) & 0xff) / 255.0f;
+    rasterize_triangle_tiled_4x4_256x256_defer_cull(
+        // clang-format off
           test_x0, test_y0, // p0
           test_x1, test_y1, // p1
           test_x2, test_y2, // p2
           &tiles[0], &tile_count
-      // clang-format on
-      ));
-
+        // clang-format on
+    );
+    i++;
+  }
   PRINT_CLOCKS({
     i8x16 *data = (i8x16 *)((size_t)image_i8 & (~0x1fULL));
     i8x16 v_value = broadcast_i8x16(0xff);
@@ -1320,6 +2145,7 @@ int main(int argc, char **argv) {
   //    );
   //  }
   write_image_2d_i8_ppm_tiled("image.ppm", image_i8, width_pow, 2);
+  window_loop.join();
   return 0;
 }
 #endif // RASTER_EXE
