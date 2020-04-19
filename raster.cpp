@@ -158,8 +158,6 @@ void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
 static Temporary_Storage<> ts = Temporary_Storage<>::create(64 * (1 << 20));
 
 struct Context2D {
-  uint32_t viewport_width;
-  uint32_t viewport_height;
   struct Oth_Camera {
     float3 pos;
     float4 proj[4];
@@ -176,7 +174,11 @@ struct Context2D {
     float mouse_screen_x;
     float mouse_screen_y;
     float glyphs_world_height;
+    float glyphs_screen_height;
     float glyphs_world_width;
+    float glyphs_screen_width;
+    float pixel_screen_width;
+    float pixel_screen_height;
     uint32_t glyph_scale = 2;
     void update(float viewport_width, float viewport_height) {
       this->viewport_width = viewport_width;
@@ -201,9 +203,20 @@ struct Context2D {
       world_min_y = screen_to_world((float2){-1.0f, -1.0f}).y;
       world_max_x = screen_to_world((float2){1.0f, 1.0f}).x;
       world_max_y = screen_to_world((float2){1.0f, 1.0f}).y;
-      glyphs_world_height = 2.0f * glyph_scale *
-                                 (float)(simplefont_bitmap_glyphs_width) /
-                                 viewport_width * pos.z;
+      glyphs_world_height = glyph_scale *
+                            (float)(simplefont_bitmap_glyphs_height) /
+                            viewport_height * pos.z;
+      glyphs_world_width = glyph_scale *
+                           (float)(simplefont_bitmap_glyphs_width) /
+                           viewport_width * pos.z;
+      pixel_screen_width = 2.0f / viewport_width;
+      pixel_screen_height = 2.0f / viewport_height;
+      glyphs_screen_width = 2.0f * glyph_scale *
+                            (float)(simplefont_bitmap_glyphs_width) /
+                            viewport_width;
+      glyphs_screen_height = 2.0f * glyph_scale *
+                             (float)(simplefont_bitmap_glyphs_height) /
+                             viewport_height;
     }
     float2 world_to_screen(float2 p) {
       float x0 = spv_dot_f4(proj[0], (float4){p.x, p.y, 0.0f, 1.0f});
@@ -262,26 +275,30 @@ struct Context2D {
   struct Color {
     float r, g, b;
   };
-  struct Quad2D {
-    float x, y, z, size;
+  struct Rect2D {
+    float x, y, z, width, height;
     Color color;
+    bool transform = true;
   };
   struct Line2D {
     float x0, y0, x1, y1, z;
     Color color;
+    bool transform = true;
   };
   struct String2D {
     char const *c_str;
     float x, y, z;
     Color color;
+    bool transform = true;
   };
   struct _String2D {
     char *c_str;
     uint32_t len;
     float x, y, z;
     Color color;
+    bool transform;
   };
-  void draw_quad(Quad2D p) { quad_storage.push(p); }
+  void draw_rect(Rect2D p) { quad_storage.push(p); }
   void draw_line(Line2D l) { line_storage.push(l); }
   void draw_string(String2D s) {
     size_t len = strlen(s.c_str);
@@ -295,6 +312,8 @@ struct Context2D {
     internal_string.x = s.x;
     internal_string.y = s.y;
     internal_string.z = s.z;
+    internal_string.transform = s.transform;
+
     string_storage.push(internal_string);
   }
   void frame_start(float viewport_width, float viewport_height) {
@@ -317,13 +336,78 @@ struct Context2D {
   // Fields
   Temporary_Storage<Line2D> line_storage =
       Temporary_Storage<Line2D>::create(1 << 17);
-  Temporary_Storage<Quad2D> quad_storage =
-      Temporary_Storage<Quad2D>::create(1 << 17);
+  Temporary_Storage<Rect2D> quad_storage =
+      Temporary_Storage<Rect2D>::create(1 << 17);
   Temporary_Storage<_String2D> string_storage =
       Temporary_Storage<_String2D>::create(1 << 18);
   Temporary_Storage<char> char_storage =
       Temporary_Storage<char>::create(1 * (1 << 20));
-
+  uint32_t viewport_width;
+  uint32_t viewport_height;
+  struct Console {
+    char buffer[0x100][0x100];
+    uint32_t column = 0;
+    uint32_t scroll_id = 0;
+    Console() { memset(this, 0, sizeof(*this)); }
+    void unscroll() {
+      if (scroll_id != 0) {
+        column = 0;
+        memcpy(&buffer[0][0], &buffer[scroll_id][0], 0x100);
+        scroll_id = 0;
+      }
+    }
+    void backspace() {
+      unscroll();
+      if (column > 0) {
+        column--;
+        buffer[0][column] = '\0';
+      }
+    }
+    void newline() {
+      unscroll();
+      ito(0x100 - 1) {
+        memcpy(&buffer[0x100 - 1 - i][0], &buffer[0x100 - 2 - i][0], 0x100);
+      }
+      memset(&buffer[0][0], 0, 0x100);
+      column = 0;
+    }
+    void cursor_right() {
+      unscroll();
+      if (buffer[0][column] != '\0')
+        column++;
+    }
+    void cursor_left() {
+      unscroll();
+      if (column > 0)
+        column--;
+    }
+    void put_line(char const *str) {
+      unscroll();
+      while (str[0] != '\0') {
+        put_char(str[0]);
+        str++;
+      }
+      newline();
+    }
+    void put_char(char c) {
+      unscroll();
+      if (c >= 0x20 && c <= 0x7e && column < 0x100 - 1) {
+        ito(0x100 - column - 1) {
+          buffer[0][0x100 - i - 1] = buffer[0][0x100 - i - 2];
+        }
+        buffer[0][column++] = c;
+      }
+    }
+    void scroll_up() {
+      if (scroll_id < 0x100)
+        scroll_id++;
+    }
+    void scroll_down() {
+      if (scroll_id > 0)
+        scroll_id--;
+    }
+  } console;
+  bool console_mode = false;
 } c2d;
 
 // struct RasterDBG {};
@@ -1685,6 +1769,12 @@ void render() {
   float dy = 1.0f;
   float size_x = 256.0f;
   float size_y = 256.0f;
+  float QUAD_LAYER = 1.0f / 256.0f;
+  float GRID_LAYER = 2.0f / 256.0f;
+  float TEXT_LAYER = 3.0f / 256.0f;
+  float CONSOLE_TEXT_LAYER = 102.0f / 256.0f;
+  float CONSOLE_CURSOR_LAYER = 101.0f / 256.0f;
+  float CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
   if (c2d.camera.pos.z < 80.0f) {
     ito(256 + 1) {
       c2d.draw_line({//
@@ -1692,14 +1782,14 @@ void render() {
                      .y0 = 0.0f,
                      .x1 = dx * (float)(i),
                      .y1 = size_y,
-                     .z = 0.9f,
+                     .z = GRID_LAYER,
                      .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
       c2d.draw_line({//
                      .x0 = 0.0f,
                      .y0 = dy * (float)(i),
                      .x1 = size_x,
                      .y1 = dy * (float)(i),
-                     .z = 0.9f,
+                     .z = GRID_LAYER,
                      .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
     }
   }
@@ -1732,14 +1822,56 @@ void render() {
         //              selected_texel_x = j;
         //              selected_texel_y = i;
       }
-      c2d.draw_quad({//
+      c2d.draw_rect({//
                      .x = dx * j,
                      .y = dy * i,
-                     .z = 0.0f,
-                     .size = 1.0f,
+                     .z = QUAD_LAYER,
+                     .width = 1.0f,
+                     .height = 1.0f,
                      .color = {.r = r, .g = g, .b = b}});
     }
   }
+
+  ito(3) {
+    c2d.draw_string({.c_str = c2d.console.buffer[3 - i],
+                     .x = -1.0f,
+                     .y = 1.0f - (c2d.camera.glyphs_screen_height +
+                                   c2d.camera.pixel_screen_height * 2.0f) *
+                                      (i + 1),
+                     .z = CONSOLE_TEXT_LAYER,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+                     .transform = false});
+  }
+  c2d.draw_string({.c_str = c2d.console.buffer[c2d.console.scroll_id],
+                   .x = -1.0f,
+                   .y = 1.0f - (c2d.camera.glyphs_screen_height +
+                                   c2d.camera.pixel_screen_height * 2.0f) * 4,
+                   .z = CONSOLE_TEXT_LAYER,
+                   .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+                   .transform = false});
+  c2d.draw_rect({//
+                 .x = -1.0f,
+                 .y = 1.0f- (c2d.camera.glyphs_screen_height +
+                                   c2d.camera.pixel_screen_height * 2.0f) * 4,
+                 .z = CONSOLE_BACKGROUND_LAYER,
+                 .width = 2.0f,
+                 .height = (c2d.camera.glyphs_screen_height +
+                            c2d.camera.pixel_screen_height * 2.0f) *
+                           4,
+                 .color = {.r = 0.8f, .g = 0.8f, .b = 0.8f},
+                 .transform = false});
+  c2d.draw_rect(
+      {//
+       .x = -1.0f + c2d.console.column * (c2d.camera.glyphs_screen_width +
+                                          c2d.camera.pixel_screen_width * 1.0f),
+       .y = 1.0f- (c2d.camera.glyphs_screen_height +
+                                   c2d.camera.pixel_screen_height * 2.0f) * 4,
+       .z = CONSOLE_CURSOR_LAYER,
+       .width = c2d.camera.glyphs_screen_width,
+       .height = c2d.camera.glyphs_screen_height,
+       .color = {.r = 1.0f, .g = 1.0f, .b = 1.0f},
+       .transform = false});
+
   if (c2d.camera.pos.z < 10.0f) {
     char tmp_buf[0x100];
     auto alloc_str = [&](char const *fmt, int16_t v, float x, float y) {
@@ -1747,7 +1879,7 @@ void render() {
       c2d.draw_string({.c_str = tmp_buf,
                        .x = x,
                        .y = y,
-                       .z = 1.0f,
+                       .z = TEXT_LAYER,
                        .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
     };
 
@@ -1756,7 +1888,8 @@ void render() {
         if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
           continue;
         alloc_str("x = %i", (int16_t)j, dx * j, dy * i);
-        alloc_str("y = %i", (int16_t)i, dx * j, dy * i + c2d.camera.glyphs_world_height);
+        alloc_str("y = %i", (int16_t)i, dx * j,
+                  dy * i + c2d.camera.glyphs_world_height);
         //        alloc_str("e0 = %i", grid[i * width * 3 + j * 3 + 0], dx * j +
         //        0.1f,
         //                  dy * i + dy * 0.25f);
@@ -1780,6 +1913,106 @@ void render() {
   SDL_GL_SwapWindow(window);
 }
 
+struct Dbg_Command {
+  enum class Command_t { GOTO, EXIT, UNKNOWN };
+  Command_t type;
+  int32_t iarg0;
+  int32_t iarg1;
+  int32_t iarg2;
+  int32_t iarg3;
+  bool parse_decimal_int(char const *str, size_t len, int32_t *result) {
+    int32_t final = 0;
+    int32_t pow = 1;
+    ito(len) {
+      switch (str[len - 1 - i]) {
+      case '0':
+        break;
+      case '1':
+        final += 1 * pow;
+        break;
+      case '2':
+        final += 2 * pow;
+        break;
+      case '3':
+        final += 3 * pow;
+        break;
+      case '4':
+        final += 4 * pow;
+        break;
+      case '5':
+        final += 5 * pow;
+        break;
+      case '6':
+        final += 6 * pow;
+        break;
+      case '7':
+        final += 7 * pow;
+        break;
+      case '8':
+        final += 8 * pow;
+        break;
+      case '9':
+        final += 9 * pow;
+        break;
+      default:
+        return false;
+      }
+      pow *= 10;
+    }
+    *result = final;
+    return true;
+  }
+  bool parse(char const *str) {
+    type = Command_t::UNKNOWN;
+    ts.enter_scope();
+    defer(ts.exit_scope());
+    char const *cur_tkn_start = str;
+    struct Token {
+      char const *start;
+      size_t len;
+    };
+    const uint32_t max_tokens = 0x100;
+    uint32_t num_tokens = 0;
+    Token *tkns = (Token *)ts.alloc(sizeof(Token) * max_tokens);
+    uint32_t loop_counter = 0;
+    do {
+      loop_counter++;
+      if (loop_counter > 10000) {
+        UNIMPLEMENTED;
+      }
+      if (str[0] == ' ' || str[0] < 0x20 || str[0] > 0x7e) {
+        if (cur_tkn_start != str) {
+          tkns[num_tokens++] = {
+              .start = cur_tkn_start,
+              .len = (size_t)((intptr_t)str - (intptr_t)cur_tkn_start)};
+        }
+        if (str[0] == '\0')
+          break;
+        cur_tkn_start = str + 1;
+        str++;
+        continue;
+      }
+      str++;
+    } while (1);
+    if (num_tokens != 0) {
+      if (strncmp(tkns[0].start, "goto", tkns[0].len) == 0) {
+        if (num_tokens != 3)
+          return false;
+        if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0))
+          return false;
+        if (!parse_decimal_int(tkns[2].start, tkns[2].len, &iarg1))
+          return false;
+        type = Command_t::GOTO;
+        return true;
+      } else if (strncmp(tkns[0].start, "exit", tkns[0].len) == 0) {
+        type = Command_t::EXIT;
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
 void main_loop() {
   glEnable(GL_DEBUG_OUTPUT);
   glDebugMessageCallback(MessageCallback, 0);
@@ -1798,6 +2031,49 @@ void main_loop() {
       break;
     }
     case SDL_KEYDOWN: {
+      uint32_t c = event.key.keysym.sym;
+      if (c >= 0x20 && c <= 0x7e) {
+        c2d.console.put_char((char)c);
+      }
+      if (event.key.keysym.sym == SDLK_BACKSPACE) {
+        c2d.console.backspace();
+      }
+      if (event.key.keysym.sym == SDLK_UP) {
+        c2d.console.scroll_up();
+      }
+      if (event.key.keysym.sym == SDLK_DOWN) {
+        c2d.console.scroll_down();
+      }
+      if (event.key.keysym.sym == SDLK_RIGHT) {
+        c2d.console.cursor_right();
+      }
+      if (event.key.keysym.sym == SDLK_LEFT) {
+        c2d.console.cursor_left();
+      }
+      if (event.key.keysym.sym == SDLK_RETURN) {
+        c2d.console.newline();
+        Dbg_Command cmd;
+        if (cmd.parse(c2d.console.buffer[1])) {
+          switch (cmd.type) {
+          case Dbg_Command::Command_t::GOTO: {
+            int32_t x = cmd.iarg0;
+            int32_t y = cmd.iarg1;
+            if (x >= 0 && x < 256 && y >= 0 && y < 256) {
+              c2d.camera.pos.x = (float)x;
+              c2d.camera.pos.y = (float)y;
+            }
+            break;
+          }
+          case Dbg_Command::Command_t::EXIT: {
+            exit(0);
+          }
+          default:
+            UNIMPLEMENTED;
+          }
+        } else {
+          c2d.console.put_line("[ERROR] Unknown command!");
+        }
+      }
       switch (event.key.keysym.sym) {
 
       case SDLK_w: {
@@ -1979,13 +2255,16 @@ void Context2D::render_stuff() {
   {
     const GLchar *line_vs =
         R"(#version 420
-  layout (location = 0) in vec3 vertex_position;
+  layout (location = 0) in vec4 vertex_position;
   layout (location = 1) in vec3 vertex_color;
   uniform mat4 projection;
   layout(location = 0) out vec3 color;
   void main() {
       color = vertex_color;
-      gl_Position =  vec4(vertex_position, 1.0) * projection;
+      if (vertex_position.w > 0.0)
+        gl_Position = vertex_position * projection;
+      else
+        gl_Position = vertex_position;
   })";
     const GLchar *line_ps =
         R"(#version 420
@@ -1996,14 +2275,19 @@ void Context2D::render_stuff() {
   })";
     const GLchar *quad_vs =
         R"(#version 420
-  layout (location=0) in vec2 vertex_position;
-  layout (location=1) in vec3 instance_offset;
-  layout(location = 2) in vec3 instance_color;
+  layout (location = 0) in vec2 vertex_position;
+  layout (location = 1) in vec4 instance_offset;
+  layout (location = 2) in vec3 instance_color;
+  layout (location = 3) in vec2 instance_size;
+
   layout(location = 0) out vec3 color;
   uniform mat4 projection;
   void main() {
       color = instance_color;
-      gl_Position =  vec4(vertex_position + instance_offset.xy, instance_offset.z, 1.0) * projection;
+      if (instance_offset.w > 0.0)
+        gl_Position =  vec4(vertex_position * instance_size + instance_offset.xy, instance_offset.z, 1.0) * projection;
+      else
+        gl_Position =  vec4(vertex_position * instance_size + instance_offset.xy, instance_offset.z, 1.0);
   })";
     const GLchar *quad_ps =
         R"(#version 420
@@ -2059,27 +2343,32 @@ void Context2D::render_stuff() {
       glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
 
       glBindBuffer(GL_ARRAY_BUFFER, quad_instance_vbo);
-      struct Quad_Instance_GL {
-        float x, y, z;
+      struct Rect_Instance_GL {
+        float x, y, z, w;
         float r, g, b;
+        float width, height;
       };
-      static_assert(sizeof(Quad_Instance_GL) == 24, "");
+      static_assert(sizeof(Rect_Instance_GL) == 36, "");
       //      uint32_t max_num_quads = width * height;
       uint32_t max_num_quads = quad_storage.cursor;
       uint32_t num_quads = 0;
       ts.enter_scope();
       defer(ts.exit_scope());
-      Quad_Instance_GL *qinstances = (Quad_Instance_GL *)ts.alloc(
-          sizeof(Quad_Instance_GL) * max_num_quads);
+      Rect_Instance_GL *qinstances = (Rect_Instance_GL *)ts.alloc(
+          sizeof(Rect_Instance_GL) * max_num_quads);
       ito(max_num_quads) {
-        Quad2D quad2d = *quad_storage.at(i);
-        if (!camera.intersects(quad2d.x, quad2d.y, quad2d.x + quad2d.size,
-                               quad2d.y + quad2d.size))
+        Rect2D quad2d = *quad_storage.at(i);
+        if (quad2d.transform &&
+            !camera.intersects(quad2d.x, quad2d.y, quad2d.x + quad2d.width,
+                               quad2d.y + quad2d.height))
           continue;
-        Quad_Instance_GL quadgl;
+        Rect_Instance_GL quadgl;
         quadgl.x = quad2d.x;
         quadgl.y = quad2d.y;
         quadgl.z = quad2d.z;
+        quadgl.w = quad2d.transform ? 1.0f : 0.0f;
+        quadgl.width = quad2d.width;
+        quadgl.height = quad2d.height;
         quadgl.r = quad2d.color.r;
         quadgl.g = quad2d.color.g;
         quadgl.b = quad2d.color.b;
@@ -2087,17 +2376,24 @@ void Context2D::render_stuff() {
       }
       if (num_quads == 0)
         goto skip_quads;
-      glBufferData(GL_ARRAY_BUFFER, sizeof(Quad_Instance_GL) * num_quads,
+      glBufferData(GL_ARRAY_BUFFER, sizeof(Rect_Instance_GL) * num_quads,
                    qinstances, GL_DYNAMIC_DRAW);
 
       glEnableVertexAttribArray(1);
       glVertexAttribBinding(1, 0);
       glVertexAttribDivisor(1, 1);
-      glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 24, 0);
+      glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL),
+                            0);
       glEnableVertexAttribArray(2);
       glVertexAttribBinding(2, 0);
       glVertexAttribDivisor(2, 1);
-      glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 24, (void *)12);
+      glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL),
+                            (void *)16);
+      glEnableVertexAttribArray(3);
+      glVertexAttribBinding(3, 0);
+      glVertexAttribDivisor(3, 1);
+      glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL),
+                            (void *)28);
 
       glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_quads);
 
@@ -2114,12 +2410,12 @@ void Context2D::render_stuff() {
     if (line_storage.cursor != 0) {
       uint32_t num_lines = line_storage.cursor;
       struct Line_GL {
-        float x0, y0, z0;
+        float x0, y0, z0, w0;
         float r0, g0, b0;
-        float x1, y1, z1;
+        float x1, y1, z1, w1;
         float r1, g1, b1;
       };
-      static_assert(sizeof(Line_GL) == 48, "");
+      static_assert(sizeof(Line_GL) == 56, "");
       ts.enter_scope();
       defer(ts.exit_scope());
       Line_GL *lines = (Line_GL *)ts.alloc(sizeof(Line_GL) * num_lines);
@@ -2129,12 +2425,14 @@ void Context2D::render_stuff() {
         lgl.x0 = l.x0;
         lgl.y0 = l.y0;
         lgl.z0 = l.z;
+        lgl.w0 = l.transform ? 1.0f : 0.0f;
         lgl.r0 = l.color.r;
         lgl.g0 = l.color.g;
         lgl.b0 = l.color.b;
         lgl.x1 = l.x1;
         lgl.y1 = l.y1;
         lgl.z1 = l.z;
+        lgl.w1 = l.transform ? 1.0f : 0.0f;
         lgl.r1 = l.color.r;
         lgl.g1 = l.color.g;
         lgl.b1 = l.color.b;
@@ -2150,10 +2448,10 @@ void Context2D::render_stuff() {
 
       glEnableVertexAttribArray(0);
       glVertexAttribBinding(0, 0);
-      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 24, 0);
+      glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 28, 0);
       glEnableVertexAttribArray(1);
       glVertexAttribBinding(1, 0);
-      glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 24, (void *)12);
+      glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 28, (void *)16);
       glDrawArrays(GL_LINES, 0, 2 * num_lines);
 
       glBindVertexArray(0);
@@ -2259,12 +2557,7 @@ void Context2D::render_stuff() {
           (float)simplefont_bitmap_glyphs_width / simplefont_bitmap_width;
       float glyph_uv_height =
           (float)simplefont_bitmap_glyphs_height / simplefont_bitmap_height;
-      float glyph_screen_width = 2.0f * glyph_scale *
-                                 (float)(simplefont_bitmap_glyphs_width) /
-                                 viewport_width;
-      float glyph_screen_height = 2.0f * glyph_scale *
-                                  (float)(simplefont_bitmap_glyphs_height) /
-                                  viewport_height;
+
       float glyph_pad_ss = 2.0f / viewport_width;
       uint32_t max_num_glyphs = 0;
       uint32_t num_strings = string_storage.cursor;
@@ -2278,12 +2571,16 @@ void Context2D::render_stuff() {
 
       kto(num_strings) {
         _String2D string = strings[k];
-        float2 ss = camera.world_to_screen((float2){string.x, string.y});
+        if (string.len == 0)
+          continue;
+        float2 ss = (float2){string.x, string.y};
+        if (string.transform)
+          ss = camera.world_to_screen(ss);
         float min_ss_x = ss.x;
         float min_ss_y = ss.y;
         float max_ss_x =
-            ss.x + (glyph_screen_width + glyph_pad_ss) * string.len;
-        float max_ss_y = ss.y + glyph_screen_height;
+            ss.x + (camera.glyphs_screen_width + glyph_pad_ss) * string.len;
+        float max_ss_y = ss.y + camera.glyphs_screen_height;
         if (min_ss_x > 1.0f || min_ss_y > 1.0f || max_ss_x < -1.0f ||
             max_ss_y < -1.0f)
           continue;
@@ -2306,7 +2603,7 @@ void Context2D::render_stuff() {
           Glyph_Instance_GL glyph;
           glyph.u = u0;
           glyph.v = v0;
-          glyph.x = ss.x + (glyph_screen_width + glyph_pad_ss) * i;
+          glyph.x = ss.x + (camera.glyphs_screen_width + glyph_pad_ss) * i;
           glyph.y = ss.y;
           glyph.z = string.z;
           glyph.r = string.color.r;
@@ -2349,7 +2646,7 @@ void Context2D::render_stuff() {
       glUniform2f(glGetUniformLocation(program, "viewport_size"),
                   (float)viewport_width, (float)viewport_height);
       glUniform2f(glGetUniformLocation(program, "glyph_size"),
-                  glyph_screen_width, glyph_screen_height);
+                  camera.glyphs_screen_width, camera.glyphs_screen_height);
       glUniform2f(glGetUniformLocation(program, "glyph_uv_size"),
                   glyph_uv_width, glyph_uv_height);
 
