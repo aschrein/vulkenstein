@@ -153,17 +153,190 @@ void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
   fclose(file);
 }
 
+#include "simplefont.h"
 #include <mutex>
+static Temporary_Storage<> ts = Temporary_Storage<>::create(64 * (1 << 20));
 
-static int16_t *g_debug_grid[2] = {NULL, NULL};
-static std::mutex g_debug_grid_mutexes[2];
-static uint64_t g_current_grid = 0;
-static uint32_t g_debug_grid_size = 0;
-static uint32_t selected_texel_x = 0;
-static uint32_t selected_texel_y = 0;
-static uint64_t selected_texel_break = 0;
-static float mouse_world_x = 0.0f;
-static float mouse_world_y = 0.0f;
+struct Context2D {
+  uint32_t viewport_width;
+  uint32_t viewport_height;
+  struct Oth_Camera {
+    float3 pos;
+    float4 proj[4];
+    float height_over_width;
+    float width_over_heigth;
+    uint32_t viewport_width;
+    uint32_t viewport_height;
+    float world_min_x;
+    float world_min_y;
+    float world_max_x;
+    float world_max_y;
+    float mouse_world_x;
+    float mouse_world_y;
+    float mouse_screen_x;
+    float mouse_screen_y;
+    float glyphs_world_height;
+    float glyphs_world_width;
+    uint32_t glyph_scale = 2;
+    void update(float viewport_width, float viewport_height) {
+      this->viewport_width = viewport_width;
+      this->viewport_height = viewport_height;
+      height_over_width = ((float)viewport_height / viewport_width);
+      width_over_heigth = ((float)viewport_width / viewport_height);
+      float e = (float)2.4e-7f;
+      float fov = 2.0f;
+      // clang-format off
+      float4 proj[4] = {
+        {fov * height_over_width/pos.z,   0.0f,          0.0f,      -2.0f * pos.x/pos.z},
+        {0.0f,                            fov/pos.z,     0.0f,      -2.0f * pos.y/pos.z},
+        {0.0f,                            0.0f,          1.0f,      0.0f},
+        {0.0f,                            0.0f,          0.0f,      1.0f}
+      };
+      // clang-format on
+      memcpy(&this->proj[0], &proj[0], sizeof(proj));
+      float2 mwp = screen_to_world((float2){mouse_screen_x, mouse_screen_y});
+      mouse_world_x = mwp.x;
+      mouse_world_y = mwp.y;
+      world_min_x = screen_to_world((float2){-1.0f, -1.0f}).x;
+      world_min_y = screen_to_world((float2){-1.0f, -1.0f}).y;
+      world_max_x = screen_to_world((float2){1.0f, 1.0f}).x;
+      world_max_y = screen_to_world((float2){1.0f, 1.0f}).y;
+      glyphs_world_height = 2.0f * glyph_scale *
+                                 (float)(simplefont_bitmap_glyphs_width) /
+                                 viewport_width * pos.z;
+    }
+    float2 world_to_screen(float2 p) {
+      float x0 = spv_dot_f4(proj[0], (float4){p.x, p.y, 0.0f, 1.0f});
+      float x1 = spv_dot_f4(proj[1], (float4){p.x, p.y, 0.0f, 1.0f});
+      float x2 = spv_dot_f4(proj[2], (float4){p.x, p.y, 0.0f, 1.0f});
+      float x3 = spv_dot_f4(proj[3], (float4){p.x, p.y, 0.0f, 1.0f});
+      float2 pos = (float2){x0, x1} / x3;
+      return pos;
+    }
+    float2 screen_to_world(float2 p) {
+      return (float2){
+          //
+          p.x * pos.z * width_over_heigth * 0.5f + pos.x * width_over_heigth,
+          p.y * pos.z * 0.5f + pos.y,
+      };
+    }
+    float2 window_to_world(int2 p) {
+      return screen_to_world((float2){
+          //
+          2.0f * (float)p.x / viewport_width - 1.0f,
+          -2.0f * (float)p.y / viewport_height + 1.0f,
+      });
+    }
+    float2 window_to_screen(int2 p) {
+      return (float2){
+          //
+          2.0f * (float)p.x / viewport_width - 1.0f,
+          -2.0f * (float)p.y / viewport_height + 1.0f,
+      };
+    }
+    float window_width_to_world(uint32_t size) {
+      float screen_size = 2.0f * (float)size / viewport_width;
+      return screen_to_world((float2){//
+                                      screen_size, 0.0f})
+                 .x -
+             pos.x;
+    }
+    float window_height_to_world(uint32_t size) {
+      float screen_size = 2.0f * (float)size / viewport_height;
+      return screen_to_world((float2){//
+                                      0.0f, screen_size})
+                 .y -
+             pos.y;
+    }
+    bool inbounds(float2 world_pos) {
+      return //
+          world_pos.x > world_min_x && world_pos.x < world_max_x &&
+          world_pos.y > world_min_y && world_pos.y < world_max_y;
+    }
+    bool intersects(float min_x, float min_y, float max_x, float max_y) {
+      return //
+          !(max_x < world_min_x || min_x > world_max_x || max_y < world_min_y ||
+            min_y > world_max_y);
+    }
+  } camera;
+  struct Color {
+    float r, g, b;
+  };
+  struct Quad2D {
+    float x, y, z, size;
+    Color color;
+  };
+  struct Line2D {
+    float x0, y0, x1, y1, z;
+    Color color;
+  };
+  struct String2D {
+    char const *c_str;
+    float x, y, z;
+    Color color;
+  };
+  struct _String2D {
+    char *c_str;
+    uint32_t len;
+    float x, y, z;
+    Color color;
+  };
+  void draw_quad(Quad2D p) { quad_storage.push(p); }
+  void draw_line(Line2D l) { line_storage.push(l); }
+  void draw_string(String2D s) {
+    size_t len = strlen(s.c_str);
+    char *dst = char_storage.alloc(len + 1);
+    memcpy(dst, s.c_str, len);
+    dst[len] = '\0';
+    _String2D internal_string;
+    internal_string.color = s.color;
+    internal_string.c_str = dst;
+    internal_string.len = (uint32_t)len;
+    internal_string.x = s.x;
+    internal_string.y = s.y;
+    internal_string.z = s.z;
+    string_storage.push(internal_string);
+  }
+  void frame_start(float viewport_width, float viewport_height) {
+    this->viewport_height = viewport_height;
+    this->viewport_width = viewport_width;
+    camera.update(viewport_width, viewport_height);
+    line_storage.enter_scope();
+    quad_storage.enter_scope();
+    string_storage.enter_scope();
+    char_storage.enter_scope();
+  }
+  void frame_end() {
+    render_stuff();
+    line_storage.exit_scope();
+    quad_storage.exit_scope();
+    string_storage.exit_scope();
+    char_storage.exit_scope();
+  }
+  void render_stuff();
+  // Fields
+  Temporary_Storage<Line2D> line_storage =
+      Temporary_Storage<Line2D>::create(1 << 17);
+  Temporary_Storage<Quad2D> quad_storage =
+      Temporary_Storage<Quad2D>::create(1 << 17);
+  Temporary_Storage<_String2D> string_storage =
+      Temporary_Storage<_String2D>::create(1 << 18);
+  Temporary_Storage<char> char_storage =
+      Temporary_Storage<char>::create(1 * (1 << 20));
+
+} c2d;
+
+// struct RasterDBG {};
+
+// static int16_t *g_debug_grid[2] = {NULL, NULL};
+// static std::mutex g_debug_grid_mutexes[2];
+// static uint64_t g_current_grid = 0;
+// static uint32_t g_debug_grid_size = 0;
+// static uint32_t selected_texel_x = 0;
+// static uint32_t selected_texel_y = 0;
+// static uint64_t selected_texel_break = 0;
+// static float mouse_world_x = 0.0f;
+// static float mouse_world_y = 0.0f;
 
 #endif // RASTER_EXE
 
@@ -488,15 +661,15 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
   uint8_t max_x_tile = 0xff & (max_x >> 2);
   // clang-format on
   uint32_t _tile_count = *tile_count;
-  // DEBUG
-  uint64_t next_grid = (g_current_grid + 1) & 1;
-  std::lock_guard<std::mutex> lock(g_debug_grid_mutexes[next_grid]);
-  if (g_debug_grid[next_grid] == NULL) {
-    g_debug_grid[next_grid] = (int16_t *)malloc(256 * 256 * 2 * 3);
-    g_debug_grid_size = 256;
-  }
-  memset(g_debug_grid[next_grid], 0, 256 * 256 * 2 * 3);
-  // DEBUG
+  //  // DEBUG
+  //  uint64_t next_grid = (g_current_grid + 1) & 1;
+  //  std::lock_guard<std::mutex> lock(g_debug_grid_mutexes[next_grid]);
+  //  if (g_debug_grid[next_grid] == NULL) {
+  //    g_debug_grid[next_grid] = (int16_t *)malloc(256 * 256 * 2 * 3);
+  //    g_debug_grid_size = 256;
+  //  }
+  //  memset(g_debug_grid[next_grid], 0, 256 * 256 * 2 * 3);
+  //  // DEBUG
   // ~15 cycles per tile
   for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
     //    if (y == max_y_tile - 1)
@@ -514,21 +687,25 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
         int16_t e1_3 = e1_2;
         int16_t e2_3 = e2_2;
         jto(4) {
-          // DEBUG
-          uint32_t texel_x = x * 4 + j;
-          uint32_t texel_y = y * 4 + i;
-          if (selected_texel_break == 1 && texel_x == selected_texel_x &&
-              texel_y == selected_texel_y) {
-            debug_break;
-            selected_texel_break = 0;
-          }
-          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) * 3 + 0] =
-              e0_3;
-          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) * 3 + 1] =
-              e1_3;
-          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) * 3 + 2] =
-              e2_3;
-          // DEBUG
+          //          // DEBUG
+          //          uint32_t texel_x = x * 4 + j;
+          //          uint32_t texel_y = y * 4 + i;
+          //          if (selected_texel_break == 1 && texel_x ==
+          //          selected_texel_x &&
+          //              texel_y == selected_texel_y) {
+          //            debug_break;
+          //            selected_texel_break = 0;
+          //          }
+          //          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) *
+          //          3 + 0] =
+          //              e0_3;
+          //          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) *
+          //          3 + 1] =
+          //              e1_3;
+          //          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) *
+          //          3 + 2] =
+          //              e2_3;
+          //          // DEBUG
           uint16_t e0_sign = (uint16_t)e0_3 >> 15;
           uint16_t e1_sign = (uint16_t)e1_3 >> 15;
           uint16_t e2_sign = (uint16_t)e2_3 >> 15;
@@ -555,7 +732,9 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
     e2_0 += n2_y * 4;
   };
   *tile_count = _tile_count;
-  g_current_grid = next_grid;
+  //          // DEBUG
+  //  g_current_grid = next_grid;
+  //          // DEBUG
 }
 
 void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
@@ -1428,31 +1607,6 @@ double my_clock() {
              .count();
 }
 
-struct Oth_Camera {
-  float3 pos;
-  float proj[16];
-  void update(float viewport_width, float viewport_height) {
-    float3 look = (float3){0.0f, 0.0f, -1.0f};
-    float3 left = (float3){1.0f, 0.0f, 0.0f};
-    float3 up = (float3){0.0f, 1.0f, 0.0f};
-    float aspect = ((float)viewport_height / viewport_width);
-    float e = (float)2.4e-7f;
-    float fov = 2.0f;
-    // clang-format off
-  float proj[16] = {
-    fov * aspect,     0.0f,          0.0f,      -2.0f * pos.x,
-
-    0.0f,           fov,    0.0f,      -2.0f * pos.y,
-
-    0.0f,           0.0f,          0.0f,      0.0f,
-
-    0.0f,           0.0f,          0.0f,      pos.z
-  };
-    // clang-format on
-    memcpy(&this->proj[0], &proj[0], sizeof(proj));
-  }
-} g_camera;
-
 SDL_Window *window = NULL;
 SDL_GLContext glc;
 int SCREEN_WIDTH, SCREEN_HEIGHT;
@@ -1509,420 +1663,11 @@ GLuint create_program(GLchar const *vsrc, GLchar const *fsrc) {
 
   return program;
 }
-#include "simplefont.h"
-static Temporary_Storage ts = Temporary_Storage::create(64 * (1 << 20));
-
-void draw_strings(char const **strings, float2 *positions, size_t num_strings) {
-  float aspect = ((float)SCREEN_HEIGHT / SCREEN_WIDTH);
-  uint32_t total_string_length = 0;
-  kto(num_strings) { total_string_length += (uint32_t)strlen(strings[k]); }
-  float *coords = (float *)ts.alloc(4 * 16 * total_string_length);
-  uint32_t *indices = (uint32_t *)ts.alloc(4 * 6 * total_string_length);
-  uint32_t cur_coord = 0;
-  uint32_t cur_index = 0;
-  uint32_t chars_to_render = 0;
-  kto(num_strings) {
-    float world_x = positions[k].x;
-    float world_y = positions[k].y;
-    char const *str = strings[k];
-    float x = (world_x * aspect - g_camera.pos.x) / (g_camera.pos.z) + 0.5f;
-    float y = (world_y - g_camera.pos.y) / (g_camera.pos.z) + 0.5f;
-    if (x < 0.0f || y < 0.0f || x > 1.0f || y > 1.0f)
-      continue;
-
-    size_t string_length = strlen(str);
-    chars_to_render += string_length;
-    uint32_t string_pos_x_i = (uint32_t)(clamp(x, 0.0f, 1.0f) * SCREEN_WIDTH);
-    uint32_t string_pos_y_i = (uint32_t)(clamp(y, 0.0f, 1.0f) * SCREEN_HEIGHT);
-    float string_pos_x = 2.0f * (float)string_pos_x_i / SCREEN_WIDTH - 1.0f;
-    float string_pos_y = 2.0f * (float)string_pos_y_i / SCREEN_HEIGHT - 1.0f;
-    float pixel_size_x = 2.0f / (float)SCREEN_WIDTH;
-    uint32_t index_offset = cur_coord / 4;
-    ito(string_length) {
-      uint32_t c = (uint32_t)str[i];
-
-      // Printable characters only
-      c = clamp(c, 0x20, 0x7e);
-      uint32_t row = (c - 0x20) / simplefont_bitmap_glyphs_per_row;
-      uint32_t col = (c - 0x20) % simplefont_bitmap_glyphs_per_row;
-      float v0 = ((float)row * (simplefont_bitmap_glyphs_height +
-                                simplefont_bitmap_glyphs_pad_y * 2) +
-                  simplefont_bitmap_glyphs_pad_y) /
-                 simplefont_bitmap_height;
-      float u0 = ((float)col * (simplefont_bitmap_glyphs_width +
-                                simplefont_bitmap_glyphs_pad_x * 2) +
-                  simplefont_bitmap_glyphs_pad_x) /
-                 simplefont_bitmap_width;
-      float u1 =
-          u0 + (float)simplefont_bitmap_glyphs_width / simplefont_bitmap_width;
-      float v1 = v0 + (float)simplefont_bitmap_glyphs_height /
-                          simplefont_bitmap_height;
-      float glyph_ss_width =
-          2.0f * (float)simplefont_bitmap_glyphs_width / SCREEN_WIDTH;
-      float glyph_ss_height =
-          2.0f * (float)simplefont_bitmap_glyphs_height / SCREEN_HEIGHT;
-      int xk[] = {0, 1, 1, 0};
-      int yk[] = {0, 0, 1, 1};
-      float2 uv[] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};
-      jto(4) {
-        coords[cur_coord++] = (float)i * pixel_size_x + string_pos_x +
-                              2.0f * glyph_ss_width * (float)(i + xk[j]);
-        coords[cur_coord++] = string_pos_y + 2.0f * glyph_ss_height * yk[j];
-        coords[cur_coord++] = uv[j].x;
-        coords[cur_coord++] = uv[j].y;
-      }
-      indices[cur_index++] = index_offset + i * 4 + 0;
-      indices[cur_index++] = index_offset + i * 4 + 1;
-      indices[cur_index++] = index_offset + i * 4 + 2;
-      indices[cur_index++] = index_offset + i * 4 + 0;
-      indices[cur_index++] = index_offset + i * 4 + 2;
-      indices[cur_index++] = index_offset + i * 4 + 3;
-    }
-  }
-  const GLchar *vsrc =
-      R"(#version 420
-  layout (location=0) in vec2 vertex_position;
-  layout (location=1) in vec2 vertex_uv;
-  layout (location=0) out vec2 uv;
-  uniform mat4 projection;
-  void main() {
-      /*mat2 rot = mat2(
-        cos(angle), sin(angle),
-        -sin(angle), cos(angle)
-      );
-      color = vec3(1.0, 0.0, 0.0);*/
-      uv = vertex_uv;
-      gl_Position =  vec4(vertex_position, 0.0, 1.0);// * projection;
-
-  })";
-  const GLchar *fsrc =
-      R"(#version 420
-  layout(location = 0) out vec4 SV_TARGET0;
-  layout(location = 0) in vec2 uv;
-  uniform vec3 ucolor;
-  uniform sampler2D image;
-  void main() {
-    /*float color = 1.0 / ((
-        //pow(abs(dFdx(gl_FragCoord.z)) + abs(dFdy(gl_FragCoord.z)), 1.0)
-        pow(abs(gl_FragCoord.z) * 0.5 + 0.5, 3.5)
-    ) * 1.0e7 + 1.0);*/
-    if (texture2D(image, uv).x > 0.0)
-      SV_TARGET0 = vec4(0.0, 0.0, 0.0, 1.0);
-    else
-      discard;
-  })";
-  static GLuint program = create_program(vsrc, fsrc);
-  struct Image_GL {
-    GLuint vao;
-    GLuint vbo;
-    GLuint ibo;
-  };
-  static GLuint font_texture = [&] {
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    uint8_t *r8_data =
-        (uint8_t *)malloc(simplefont_bitmap_height * simplefont_bitmap_width);
-    defer(free(r8_data));
-    ito(simplefont_bitmap_height) {
-      jto(simplefont_bitmap_width) {
-        char c = simplefont_bitmap[i][j];
-        r8_data[(i)*simplefont_bitmap_width + j] = c == ' ' ? 0 : 0xff;
-      }
-    }
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, simplefont_bitmap_width,
-                 simplefont_bitmap_height, 0, GL_RED, GL_UNSIGNED_BYTE,
-                 r8_data);
-    return tex;
-  }();
-  static Image_GL image_vao = [&] {
-    Image_GL out;
-    GLuint vao;
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
-    GLuint vbo;
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    GLuint ibo;
-    glGenBuffers(1, &ibo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-    out.vbo = vbo;
-    out.ibo = ibo;
-    out.vao = vao;
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-    return out;
-  }();
-  glBindVertexArray(image_vao.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, image_vao.vbo);
-  glBufferData(GL_ARRAY_BUFFER, 4 * 16 * chars_to_render, coords,
-               GL_DYNAMIC_DRAW);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, image_vao.ibo);
-  glBufferData(GL_ELEMENT_ARRAY_BUFFER, 4 * 6 * chars_to_render, indices,
-               GL_DYNAMIC_DRAW);
-  glBindVertexArray(0);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-  // Draw
-
-  glUseProgram(program);
-  glActiveTexture(GL_TEXTURE0);
-  glBindTexture(GL_TEXTURE_2D, font_texture);
-  glUniform1i(glGetUniformLocation(program, "image"), 0);
-  glBindVertexArray(image_vao.vao);
-  glBindBuffer(GL_ARRAY_BUFFER, image_vao.vbo);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, image_vao.ibo);
-  glEnableVertexAttribArray(0);
-  glVertexAttribBinding(0, 0);
-  glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, 0);
-  glEnableVertexAttribArray(1);
-  glVertexAttribBinding(1, 0);
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, (void *)8);
-  glDrawElements(GL_TRIANGLES, 6 * chars_to_render, GL_UNSIGNED_INT, NULL);
-  glBindVertexArray(0);
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-  glDisableVertexAttribArray(0);
-  glDisableVertexAttribArray(1);
-}
-
-void draw_grid_i16(int16_t *grid, uint32_t width, uint32_t height, float size_x,
-                   float size_y) {
-  const GLchar *line_vs =
-      R"(#version 420
-  layout (location=0) in vec2 vertex_position;
-  uniform mat4 projection;
-  void main() {
-      gl_Position =  vec4(vertex_position, 0.0, 1.0) * projection;
-  })";
-  const GLchar *line_ps =
-      R"(#version 420
-  layout(location = 0) out vec4 SV_TARGET0;
-  uniform vec3 ucolor;
-  void main() {
-    SV_TARGET0 = vec4(ucolor, 1.0);
-  })";
-  const GLchar *quad_vs =
-      R"(#version 420
-  layout (location=0) in vec2 vertex_position;
-  layout (location=1) in vec2 instance_offset;
-  layout(location = 2) in vec3 instance_color;
-  layout(location = 0) out vec3 color;
-  uniform mat4 projection;
-  void main() {
-      color = instance_color;
-      gl_Position =  vec4(vertex_position + instance_offset, 0.0, 1.0) * projection;
-  })";
-  const GLchar *quad_ps =
-      R"(#version 420
-  layout(location = 0) out vec4 SV_TARGET0;
-  layout(location = 0) in vec3 color;
-  void main() {
-    SV_TARGET0 = vec4(color, 1.0);
-  })";
-  static GLuint line_program = create_program(line_vs, line_ps);
-  static GLuint quad_program = create_program(quad_vs, quad_ps);
-  static GLuint line_vao;
-  static GLuint line_vbo;
-  static GLuint quad_vao;
-  static GLuint quad_vbo;
-  static GLuint quad_instance_vbo;
-  static int init_va0 = [&] {
-    glGenVertexArrays(1, &line_vao);
-    glBindVertexArray(line_vao);
-    glGenBuffers(1, &line_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, line_vbo);
-
-    glGenVertexArrays(1, &quad_vao);
-    glBindVertexArray(quad_vao);
-    float pos[] = {
-        0.0f, 0.0f, //
-        1.0f, 0.0f, //
-        1.0f, 1.0f, //
-        0.0f, 0.0f, //
-        1.0f, 1.0f, //
-        0.0f, 1.0f, //
-    };
-    glGenBuffers(1, &quad_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(pos), pos, GL_DYNAMIC_DRAW);
-
-    glGenBuffers(1, &quad_instance_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, quad_instance_vbo);
-
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-    return 0;
-  }();
-  float dx = size_x / (float)width;
-  float dy = size_y / (float)height;
-  // Draw quads
-  {
-
-    glUseProgram(quad_program);
-    glUniformMatrix4fv(glGetUniformLocation(quad_program, "projection"), 1,
-                       GL_FALSE, g_camera.proj);
-    glBindVertexArray(quad_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
-    glEnableVertexAttribArray(0);
-    glVertexAttribBinding(0, 0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-
-    glBindBuffer(GL_ARRAY_BUFFER, quad_instance_vbo);
-    uint32_t max_num_quads = width * height;
-    ts.enter_scope();
-    float *quad_data = (float *)ts.alloc(4 * 20 * max_num_quads);
-    uint32_t num_quads = 0;
-    uint32_t num_floats = 0;
-    bool has_selection = false;
-    ito(height) {
-      jto(width) {
-        int16_t e0 = grid[i * width * 3 + j * 3 + 0];
-        int16_t e1 = grid[i * width * 3 + j * 3 + 1];
-        int16_t e2 = grid[i * width * 3 + j * 3 + 2];
-        if (e0 == 0 && e1 == e0 && e2 == e0) {
-          continue;
-        }
-        quad_data[num_floats++] = dx * j;
-        quad_data[num_floats++] = dy * i;
-
-        float r = 1.0f;
-        float g = 1.0f;
-        float b = 1.0f;
-
-        if (e0 < 0 || e1 < 0 || e2 < 0) {
-          r = 1.0f;
-          g = 0.0f;
-          b = 0.0f;
-        }
-
-        if (mouse_world_x > dx * j && mouse_world_x < dx * (j + 1) &&
-            mouse_world_y > dy * i && mouse_world_y < dy * (i + 1)) {
-          r = 0.0f;
-          g = 1.0f;
-          b = 0.0f;
-          selected_texel_x = j;
-          selected_texel_y = i;
-        }
-
-        quad_data[num_floats++] = r;
-        quad_data[num_floats++] = g;
-        quad_data[num_floats++] = b;
-        num_quads++;
-      }
-    }
-    if (!has_selection) {
-      //      selected_texel_x = 0xffffffffu;
-      //      selected_texel_y = 0xffffffffu;
-    }
-    glBufferData(GL_ARRAY_BUFFER, 4 * num_floats, quad_data, GL_DYNAMIC_DRAW);
-    ts.exit_scope();
-    glEnableVertexAttribArray(1);
-    glVertexAttribBinding(1, 0);
-    glVertexAttribDivisor(1, 1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 20, 0);
-    glEnableVertexAttribArray(2);
-    glVertexAttribBinding(2, 0);
-    glVertexAttribDivisor(2, 1);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 20, (void *)8);
-
-    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_quads);
-
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glDisableVertexAttribArray(0);
-    glDisableVertexAttribArray(1);
-    glDisableVertexAttribArray(2);
-    glVertexAttribDivisor(1, 0);
-    glVertexAttribDivisor(2, 0);
-  } // Draw lines
-  {
-    uint32_t num_lines = (width + 1) + (height + 1);
-    float *coords = (float *)ts.alloc(4 * 4 * num_lines + 512);
-
-    ito(width + 1) {
-      // vertical lines
-      coords[i * 4 + 0] = dx * (float)(i);
-      coords[i * 4 + 1] = 0.0f;
-      coords[i * 4 + 2] = dx * (float)(i);
-      coords[i * 4 + 3] = size_y;
-    }
-    float *hcoords = coords + (width + 1) * 4;
-    ito(height + 1) {
-      // horisontal lines
-      hcoords[i * 4 + 0] = 0.0f;
-      hcoords[i * 4 + 1] = dy * (float)(i);
-      hcoords[i * 4 + 2] = size_x;
-      hcoords[i * 4 + 3] = dy * (float)(i);
-    }
-
-    glUseProgram(line_program);
-    glUniformMatrix4fv(glGetUniformLocation(line_program, "projection"), 1,
-                       GL_FALSE, g_camera.proj);
-    glUniform3f(glGetUniformLocation(line_program, "ucolor"), 0.0f, 0.01f,
-                0.1f);
-    glBindVertexArray(line_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, line_vbo);
-    glBufferData(GL_ARRAY_BUFFER, 4 * 4 * num_lines, coords, GL_DYNAMIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribBinding(0, 0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-    glDrawArrays(GL_LINES, 0, 2 * num_lines);
-
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glDisableVertexAttribArray(0);
-  }
-  // Draw strings if the camera is close enough
-  if (g_camera.pos.z > 10.0f)
-    return;
-  {
-    char **strings = (char **)ts.alloc(sizeof(char *) * width * 5);
-    float2 *string_positions = (float2 *)ts.alloc(sizeof(float2) * width * 5);
-    char tmp_buf[0x100];
-    uint32_t num_str = 0;
-    auto alloc_str = [&](char const *fmt, int16_t v, float x, float y) {
-      snprintf(tmp_buf, sizeof(tmp_buf), fmt, v);
-      size_t len = strnlen(tmp_buf, sizeof(tmp_buf));
-      char *dst = (char *)ts.alloc(len + 1);
-      memcpy(dst, tmp_buf, len);
-      dst[len] = '\0';
-      string_positions[num_str] = (float2){x, y};
-      strings[num_str] = dst;
-      num_str++;
-    };
-
-    ito(height) {
-      num_str = 0;
-      ts.enter_scope();
-      jto(width) {
-
-        alloc_str("x = %i", (int16_t)j, dx * j, dy * i);
-        alloc_str("y = %i", (int16_t)i, dx * j, dy * i + dy * 0.1f);
-
-        alloc_str("e0 = %i", grid[i * width * 3 + j * 3 + 0], dx * j + 0.1f,
-                  dy * i + dy * 0.25f);
-        alloc_str("e1 = %i", grid[i * width * 3 + j * 3 + 1], dx * j + 0.1f,
-                  dy * i + dy * 0.5f);
-        alloc_str("e2 = %i", grid[i * width * 3 + j * 3 + 2], dx * j + 0.1f,
-                  dy * i + dy * 0.75f);
-      }
-      draw_strings((char const **)strings, string_positions, num_str);
-      ts.exit_scope();
-    }
-  }
-}
 
 void render() {
 
   static int init = [] {
-    g_camera.pos = (float3){0.0, 0.0, 2.0};
+    c2d.camera.pos = (float3){0.0, 0.0, 2.0};
     return 0;
   }();
 
@@ -1931,43 +1676,122 @@ void render() {
   double cur_time = my_clock();
   double dt = cur_time - last_time;
   last_time = cur_time;
-  g_camera.update(SCREEN_WIDTH, SCREEN_HEIGHT);
+
   // Scoped temporary allocator
   ts.enter_scope();
-  glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
-  glClearColor(0.0f, 0.3f, 0.4f, 1.0f);
-  glClearDepthf(1000.0f);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-  glDisable(GL_DEPTH_TEST);
-  glDepthMask(GL_FALSE);
-  glDepthFunc(GL_LEQUAL);
-  glDisable(GL_CULL_FACE);
-  //  char const *strings[] {
-  //    "test string 12454 :{}a[0]",
-  //    "&*(*&(()&()*&6",
-  //  };
-  //  float2 positions[] = {
-  //    {0.5f, 0.5f},
-  //    {1.5f, 0.5f},
-  //  };
-  //  draw_strings(strings, positions, 2);
-  if (g_debug_grid[g_current_grid]) {
-    std::lock_guard<std::mutex> lock(g_debug_grid_mutexes[g_current_grid]);
-    draw_grid_i16(g_debug_grid[g_current_grid], 256, 256, 256.0f, 256.0f);
+  c2d.frame_start(SCREEN_WIDTH, SCREEN_HEIGHT);
+  // submit the commands
+  float dx = 1.0f;
+  float dy = 1.0f;
+  float size_x = 256.0f;
+  float size_y = 256.0f;
+  if (c2d.camera.pos.z < 80.0f) {
+    ito(256 + 1) {
+      c2d.draw_line({//
+                     .x0 = dx * (float)(i),
+                     .y0 = 0.0f,
+                     .x1 = dx * (float)(i),
+                     .y1 = size_y,
+                     .z = 0.9f,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_line({//
+                     .x0 = 0.0f,
+                     .y0 = dy * (float)(i),
+                     .x1 = size_x,
+                     .y1 = dy * (float)(i),
+                     .z = 0.9f,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+    }
   }
-  defer(ts.exit_scope());
 
+  ito(256) {
+    jto(256) {
+      if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
+        continue;
+      //      int16_t e0 = grid[i * width * 3 + j * 3 + 0];
+      //      int16_t e1 = grid[i * width * 3 + j * 3 + 1];
+      //      int16_t e2 = grid[i * width * 3 + j * 3 + 2];
+      //      if (e0 == 0 && e1 == e0 && e2 == e0) {
+      //        continue;
+      //      }
+      //          if (e0 < 0 || e1 < 0 || e2 < 0) {
+      //        r = 1.0f;
+      //        g = 0.0f;
+      //        b = 0.0f;
+      //      }
+      float r = 1.0f;
+      float g = 0.0f;
+      float b = 0.0f;
+      if (c2d.camera.mouse_world_x > dx * j &&
+          c2d.camera.mouse_world_x < dx * (j + 1) &&
+          c2d.camera.mouse_world_y > dy * i &&
+          c2d.camera.mouse_world_y < dy * (i + 1)) {
+        //              r = 0.0f;
+        //              g = 1.0f;
+        g = 1.0f;
+        //              selected_texel_x = j;
+        //              selected_texel_y = i;
+      }
+      c2d.draw_quad({//
+                     .x = dx * j,
+                     .y = dy * i,
+                     .z = 0.0f,
+                     .size = 1.0f,
+                     .color = {.r = r, .g = g, .b = b}});
+    }
+  }
+  if (c2d.camera.pos.z < 10.0f) {
+    char tmp_buf[0x100];
+    auto alloc_str = [&](char const *fmt, int16_t v, float x, float y) {
+      snprintf(tmp_buf, sizeof(tmp_buf), fmt, v);
+      c2d.draw_string({.c_str = tmp_buf,
+                       .x = x,
+                       .y = y,
+                       .z = 1.0f,
+                       .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+    };
+
+    ito(256) {
+      jto(256) {
+        if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
+          continue;
+        alloc_str("x = %i", (int16_t)j, dx * j, dy * i);
+        alloc_str("y = %i", (int16_t)i, dx * j, dy * i + c2d.camera.glyphs_world_height);
+        //        alloc_str("e0 = %i", grid[i * width * 3 + j * 3 + 0], dx * j +
+        //        0.1f,
+        //                  dy * i + dy * 0.25f);
+        //        alloc_str("e1 = %i", grid[i * width * 3 + j * 3 + 1], dx * j +
+        //        0.1f,
+        //                  dy * i + dy * 0.5f);
+        //        alloc_str("e2 = %i", grid[i * width * 3 + j * 3 + 2], dx * j +
+        //        0.1f,
+        //                  dy * i + dy * 0.75f);
+      }
+    }
+  }
+
+  //  if (g_debug_grid[g_current_grid]) {
+  //    std::lock_guard<std::mutex> lock(g_debug_grid_mutexes[g_current_grid]);
+  //    draw_grid_i16(g_debug_grid[g_current_grid], 256, 256, 256.0f, 256.0f);
+  //  }
+  c2d.frame_end();
+  ts.exit_scope();
+  glFinish();
   SDL_GL_SwapWindow(window);
 }
 
-static int quit_loop = 0;
-
-int main_tick() {
+void main_loop() {
+  glEnable(GL_DEBUG_OUTPUT);
+  glDebugMessageCallback(MessageCallback, 0);
   SDL_Event event;
-  SDL_GetWindowSize(window, &SCREEN_WIDTH, &SCREEN_HEIGHT);
+
   float camera_speed = 1.0f;
   static bool ldown = false;
-  while (SDL_PollEvent(&event)) {
+  static bool quit_loop = 0;
+  static int old_mp_x = 0;
+  static int old_mp_y = 0;
+  while (SDL_WaitEvent(&event)) {
+    SDL_GetWindowSize(window, &SCREEN_WIDTH, &SCREEN_HEIGHT);
     switch (event.type) {
     case SDL_QUIT: {
       quit_loop = 1;
@@ -2002,9 +1826,10 @@ int main_tick() {
     case SDL_MOUSEBUTTONDOWN: {
       SDL_MouseButtonEvent *m = (SDL_MouseButtonEvent *)&event;
       if (m->button == 3) {
-        if (selected_texel_x != 0xffffffff && selected_texel_y != 0xffffffff) {
-          selected_texel_break = 1;
-        }
+        //        if (selected_texel_x != 0xffffffff && selected_texel_y !=
+        //        0xffffffff) {
+        //          selected_texel_break = 1;
+        //        }
       }
       if (m->button == 1) {
 
@@ -2024,50 +1849,42 @@ int main_tick() {
     }
     case SDL_MOUSEMOTION: {
       SDL_MouseMotionEvent *m = (SDL_MouseMotionEvent *)&event;
-      static int old_mp_x = m->x;
-      static int old_mp_y = m->y;
+
       int dx = m->x - old_mp_x;
       int dy = m->y - old_mp_y;
       if (ldown) {
-        g_camera.pos.x -=
-            g_camera.pos.z * camera_speed * (float)dx / SCREEN_WIDTH;
-        g_camera.pos.y +=
-            g_camera.pos.z * camera_speed * (float)dy / SCREEN_HEIGHT;
+        c2d.camera.pos.x -= c2d.camera.pos.z * (float)dx / SCREEN_WIDTH;
+        c2d.camera.pos.y += c2d.camera.pos.z * (float)dy / SCREEN_HEIGHT;
       }
 
       old_mp_x = m->x;
       old_mp_y = m->y;
-      float aspect = ((float)SCREEN_WIDTH / SCREEN_HEIGHT);
-      mouse_world_x = (2.0f * (float)m->x / SCREEN_WIDTH - 1.0f) *
-                          g_camera.pos.z * aspect * 0.5f +
-                      g_camera.pos.x * aspect;
-      mouse_world_y =
-          (-2.0f * (float)m->y / SCREEN_HEIGHT + 1.0f) * g_camera.pos.z * 0.5f +
-          g_camera.pos.y;
+      c2d.camera.mouse_screen_x = 2.0f * (float)m->x / SCREEN_WIDTH - 1.0f;
+      c2d.camera.mouse_screen_y = -2.0f * (float)m->y / SCREEN_HEIGHT + 1.0f;
     } break;
     case SDL_MOUSEWHEEL: {
-      g_camera.pos.z += g_camera.pos.z * (float)event.wheel.y * 1.0e-1;
-      g_camera.pos.z = clamp(g_camera.pos.z, 0.1f, 256.0f);
+      float dz = c2d.camera.pos.z * (float)event.wheel.y * 1.0e-1;
+      c2d.camera.pos.x +=
+          -0.5f * dz *
+          (c2d.camera.window_to_screen((int2){(int32_t)old_mp_x, 0}).x);
+      c2d.camera.pos.y +=
+          -0.5f * dz *
+          (c2d.camera.window_to_screen((int2){0, (int32_t)old_mp_y}).y);
+      c2d.camera.pos.z += dz;
+      c2d.camera.pos.z = clamp(c2d.camera.pos.z, 0.1f, 256.0f);
     } break;
     }
-  }
-
-  render();
-  SDL_UpdateWindowSurface(window);
-
-  return 0;
-}
-
-void main_loop() {
-  glEnable(GL_DEBUG_OUTPUT);
-  glDebugMessageCallback(MessageCallback, 0);
-  while (0 == quit_loop) {
-    main_tick();
+    //    fprintf(stdout, "Got an event\n");
+    //    fflush(stdout);
+    if (quit_loop == 1)
+      break;
+    render();
+    SDL_UpdateWindowSurface(window);
   }
 }
 int main(int argc, char **argv) {
-
-  std::thread window_loop = std::thread([] {
+  uint64_t graphics_thread_finished = 0;
+  std::thread window_loop = std::thread([&] {
     SDL_Init(SDL_INIT_VIDEO);
 
     window = SDL_CreateWindow(
@@ -2077,7 +1894,7 @@ int main(int argc, char **argv) {
     // 3.2 is minimal requirement for renderdoc
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
     SDL_GL_SetSwapInterval(0);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 0);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 23);
     glc = SDL_GL_CreateContext(window);
     ASSERT_ALWAYS(glc);
@@ -2086,6 +1903,7 @@ int main(int argc, char **argv) {
     SDL_GL_DeleteContext(glc);
     SDL_DestroyWindow(window);
     SDL_Quit();
+    graphics_thread_finished = 1;
   });
 
   call_pfc(pfcInit());
@@ -2100,9 +1918,9 @@ int main(int argc, char **argv) {
   defer(free(_image_i8));
   float dp = 1.0f / (float)width;
   PRINT_CLOCKS({ (void)0; });
-  float test_x0 = 0.0f;
+  float test_x0 = -1.0f;
   float test_y0 = 0.0f;
-  float test_x1 = 0.1f;
+  float test_x1 = 0.5f;
   float test_y1 = 0.3f;
   float test_x2 = 0.5f;
   float test_y2 = 0.5f;
@@ -2110,19 +1928,19 @@ int main(int argc, char **argv) {
   Classified_Tile tiles[0x1000];
   uint32_t tile_count = 0;
   uint32_t i = 0;
-  while (quit_loop == 0) {
-    tile_count = 0;
-    float dx = (float)((i >> 4) & 0xff) / 255.0f;
-    rasterize_triangle_tiled_4x4_256x256_defer_cull(
-        // clang-format off
-          test_x0, test_y0, // p0
-          test_x1, test_y1, // p1
-          test_x2, test_y2, // p2
-          &tiles[0], &tile_count
-        // clang-format on
-    );
-    i++;
-  }
+  //  while (graphics_thread_finished == 0) {
+  //    tile_count = 0;
+  //    float dx = (float)((i >> 4) & 0xff) / 255.0f;
+  //    rasterize_triangle_tiled_4x4_256x256_defer_cull(
+  //        // clang-format off
+  //          test_x0, test_y0, // p0
+  //          test_x1, test_y1, // p1
+  //          test_x2, test_y2, // p2
+  //          &tiles[0], &tile_count
+  //        // clang-format on
+  //    );
+  //    i++;
+  //  }
   PRINT_CLOCKS({
     i8x16 *data = (i8x16 *)((size_t)image_i8 & (~0x1fULL));
     i8x16 v_value = broadcast_i8x16(0xff);
@@ -2147,5 +1965,403 @@ int main(int argc, char **argv) {
   write_image_2d_i8_ppm_tiled("image.ppm", image_i8, width_pow, 2);
   window_loop.join();
   return 0;
+}
+void Context2D::render_stuff() {
+  glViewport(0, 0, viewport_width, viewport_height);
+  glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
+  glClearDepthf(0.0f);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glEnable(GL_DEPTH_TEST);
+  glDepthMask(GL_TRUE);
+  glDepthFunc(GL_GEQUAL);
+  glDisable(GL_CULL_FACE);
+  glLineWidth(1.0f);
+  {
+    const GLchar *line_vs =
+        R"(#version 420
+  layout (location = 0) in vec3 vertex_position;
+  layout (location = 1) in vec3 vertex_color;
+  uniform mat4 projection;
+  layout(location = 0) out vec3 color;
+  void main() {
+      color = vertex_color;
+      gl_Position =  vec4(vertex_position, 1.0) * projection;
+  })";
+    const GLchar *line_ps =
+        R"(#version 420
+  layout(location = 0) out vec4 SV_TARGET0;
+  layout(location = 0) in vec3 color;
+  void main() {
+    SV_TARGET0 = vec4(color, 1.0);
+  })";
+    const GLchar *quad_vs =
+        R"(#version 420
+  layout (location=0) in vec2 vertex_position;
+  layout (location=1) in vec3 instance_offset;
+  layout(location = 2) in vec3 instance_color;
+  layout(location = 0) out vec3 color;
+  uniform mat4 projection;
+  void main() {
+      color = instance_color;
+      gl_Position =  vec4(vertex_position + instance_offset.xy, instance_offset.z, 1.0) * projection;
+  })";
+    const GLchar *quad_ps =
+        R"(#version 420
+  layout(location = 0) out vec4 SV_TARGET0;
+  layout(location = 0) in vec3 color;
+  void main() {
+    SV_TARGET0 = vec4(color, 1.0);
+  })";
+    static GLuint line_program = create_program(line_vs, line_ps);
+    static GLuint quad_program = create_program(quad_vs, quad_ps);
+    static GLuint line_vao;
+    static GLuint line_vbo;
+    static GLuint quad_vao;
+    static GLuint quad_vbo;
+    static GLuint quad_instance_vbo;
+    static int init_va0 = [&] {
+      glGenVertexArrays(1, &line_vao);
+      glBindVertexArray(line_vao);
+      glGenBuffers(1, &line_vbo);
+      glBindBuffer(GL_ARRAY_BUFFER, line_vbo);
+
+      glGenVertexArrays(1, &quad_vao);
+      glBindVertexArray(quad_vao);
+      float pos[] = {
+          0.0f, 0.0f, //
+          1.0f, 0.0f, //
+          1.0f, 1.0f, //
+          0.0f, 0.0f, //
+          1.0f, 1.0f, //
+          0.0f, 1.0f, //
+      };
+      glGenBuffers(1, &quad_vbo);
+      glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(pos), pos, GL_DYNAMIC_DRAW);
+
+      glGenBuffers(1, &quad_instance_vbo);
+      glBindBuffer(GL_ARRAY_BUFFER, quad_instance_vbo);
+
+      glBindVertexArray(0);
+      glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+      return 0;
+    }();
+    // Draw quads
+    if (quad_storage.cursor != 0) {
+      glUseProgram(quad_program);
+      glUniformMatrix4fv(glGetUniformLocation(quad_program, "projection"), 1,
+                         GL_FALSE, (float *)&camera.proj[0]);
+      glBindVertexArray(quad_vao);
+      glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
+      glEnableVertexAttribArray(0);
+      glVertexAttribBinding(0, 0);
+      glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+
+      glBindBuffer(GL_ARRAY_BUFFER, quad_instance_vbo);
+      struct Quad_Instance_GL {
+        float x, y, z;
+        float r, g, b;
+      };
+      static_assert(sizeof(Quad_Instance_GL) == 24, "");
+      //      uint32_t max_num_quads = width * height;
+      uint32_t max_num_quads = quad_storage.cursor;
+      uint32_t num_quads = 0;
+      ts.enter_scope();
+      defer(ts.exit_scope());
+      Quad_Instance_GL *qinstances = (Quad_Instance_GL *)ts.alloc(
+          sizeof(Quad_Instance_GL) * max_num_quads);
+      ito(max_num_quads) {
+        Quad2D quad2d = *quad_storage.at(i);
+        if (!camera.intersects(quad2d.x, quad2d.y, quad2d.x + quad2d.size,
+                               quad2d.y + quad2d.size))
+          continue;
+        Quad_Instance_GL quadgl;
+        quadgl.x = quad2d.x;
+        quadgl.y = quad2d.y;
+        quadgl.z = quad2d.z;
+        quadgl.r = quad2d.color.r;
+        quadgl.g = quad2d.color.g;
+        quadgl.b = quad2d.color.b;
+        qinstances[num_quads++] = quadgl;
+      }
+      if (num_quads == 0)
+        goto skip_quads;
+      glBufferData(GL_ARRAY_BUFFER, sizeof(Quad_Instance_GL) * num_quads,
+                   qinstances, GL_DYNAMIC_DRAW);
+
+      glEnableVertexAttribArray(1);
+      glVertexAttribBinding(1, 0);
+      glVertexAttribDivisor(1, 1);
+      glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 24, 0);
+      glEnableVertexAttribArray(2);
+      glVertexAttribBinding(2, 0);
+      glVertexAttribDivisor(2, 1);
+      glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 24, (void *)12);
+
+      glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_quads);
+
+      glBindVertexArray(0);
+      glBindBuffer(GL_ARRAY_BUFFER, 0);
+      glDisableVertexAttribArray(0);
+      glDisableVertexAttribArray(1);
+      glDisableVertexAttribArray(2);
+      glVertexAttribDivisor(1, 0);
+      glVertexAttribDivisor(2, 0);
+    }
+  skip_quads:
+    // Draw lines
+    if (line_storage.cursor != 0) {
+      uint32_t num_lines = line_storage.cursor;
+      struct Line_GL {
+        float x0, y0, z0;
+        float r0, g0, b0;
+        float x1, y1, z1;
+        float r1, g1, b1;
+      };
+      static_assert(sizeof(Line_GL) == 48, "");
+      ts.enter_scope();
+      defer(ts.exit_scope());
+      Line_GL *lines = (Line_GL *)ts.alloc(sizeof(Line_GL) * num_lines);
+      ito(num_lines) {
+        Line2D l = *line_storage.at(i);
+        Line_GL lgl;
+        lgl.x0 = l.x0;
+        lgl.y0 = l.y0;
+        lgl.z0 = l.z;
+        lgl.r0 = l.color.r;
+        lgl.g0 = l.color.g;
+        lgl.b0 = l.color.b;
+        lgl.x1 = l.x1;
+        lgl.y1 = l.y1;
+        lgl.z1 = l.z;
+        lgl.r1 = l.color.r;
+        lgl.g1 = l.color.g;
+        lgl.b1 = l.color.b;
+        lines[i] = lgl;
+      }
+      glBindVertexArray(line_vao);
+      glBindBuffer(GL_ARRAY_BUFFER, line_vbo);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(Line_GL) * num_lines, lines,
+                   GL_DYNAMIC_DRAW);
+      glUseProgram(line_program);
+      glUniformMatrix4fv(glGetUniformLocation(line_program, "projection"), 1,
+                         GL_FALSE, (float *)&camera.proj[0]);
+
+      glEnableVertexAttribArray(0);
+      glVertexAttribBinding(0, 0);
+      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 24, 0);
+      glEnableVertexAttribArray(1);
+      glVertexAttribBinding(1, 0);
+      glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 24, (void *)12);
+      glDrawArrays(GL_LINES, 0, 2 * num_lines);
+
+      glBindVertexArray(0);
+      glBindBuffer(GL_ARRAY_BUFFER, 0);
+      glDisableVertexAttribArray(0);
+      glDisableVertexAttribArray(1);
+    }
+    // Draw strings
+    if (string_storage.cursor != 0) {
+      const GLchar *vsrc =
+          R"(#version 420
+  layout (location=0) in vec2 vertex_position;
+  layout (location=1) in vec3 instance_offset;
+  layout (location=2) in vec2 instance_uv_offset;
+  layout (location=3) in vec3 instance_color;
+
+  layout (location=0) out vec2 uv;
+  layout (location=1) out vec3 color;
+
+  uniform vec2 glyph_uv_size;
+  uniform vec2 glyph_size;
+  uniform vec2 viewport_size;
+  void main() {
+      color = instance_color;
+      uv = instance_uv_offset + (vertex_position * vec2(1.0, -1.0) + vec2(0.0, 1.0)) * glyph_uv_size;
+      vec4 sspos =  vec4(vertex_position * glyph_size + instance_offset.xy, 0.0, 1.0);
+      int pixel_x = int(viewport_size.x * (sspos.x * 0.5 + 0.5));
+      int pixel_y = int(viewport_size.y * (sspos.y * 0.5 + 0.5));
+      sspos.x = 2.0 * float(pixel_x) / viewport_size.x - 1.0;
+      sspos.y = 2.0 * float(pixel_y) / viewport_size.y - 1.0;
+      sspos.z = instance_offset.z;
+      gl_Position = sspos;
+
+  })";
+      const GLchar *fsrc =
+          R"(#version 420
+  layout(location = 0) out vec4 SV_TARGET0;
+
+  layout (location=0) in vec2 uv;
+  layout (location=1) in vec3 color;
+
+  uniform sampler2D image;
+  void main() {
+    if (texture2D(image, uv).x > 0.0)
+      SV_TARGET0 = vec4(color, 1.0);
+    else
+      discard;
+  })";
+      static GLuint program = create_program(vsrc, fsrc);
+      static GLuint font_texture = [&] {
+        GLuint tex;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        uint8_t *r8_data = (uint8_t *)malloc(simplefont_bitmap_height *
+                                             simplefont_bitmap_width);
+        defer(free(r8_data));
+        ito(simplefont_bitmap_height) {
+          jto(simplefont_bitmap_width) {
+            char c = simplefont_bitmap[i][j];
+            r8_data[(i)*simplefont_bitmap_width + j] = c == ' ' ? 0 : 0xff;
+          }
+        }
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, simplefont_bitmap_width,
+                     simplefont_bitmap_height, 0, GL_RED, GL_UNSIGNED_BYTE,
+                     r8_data);
+        return tex;
+      }();
+      static GLuint vao;
+      static GLuint vbo;
+      static GLuint instance_vbo;
+      static int glyph_vao = [&] {
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        float pos[] = {
+            0.0f, 0.0f, //
+            1.0f, 0.0f, //
+            1.0f, 1.0f, //
+            0.0f, 0.0f, //
+            1.0f, 1.0f, //
+            0.0f, 1.0f, //
+        };
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(pos), pos, GL_DYNAMIC_DRAW);
+        glGenBuffers(1, &instance_vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, instance_vbo);
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        return 0;
+      }();
+      struct Glyph_Instance_GL {
+        float x, y, z;
+        float u, v;
+        float r, g, b;
+      };
+      static_assert(sizeof(Glyph_Instance_GL) == 32, "");
+      uint32_t glyph_scale = 2;
+      float glyph_uv_width =
+          (float)simplefont_bitmap_glyphs_width / simplefont_bitmap_width;
+      float glyph_uv_height =
+          (float)simplefont_bitmap_glyphs_height / simplefont_bitmap_height;
+      float glyph_screen_width = 2.0f * glyph_scale *
+                                 (float)(simplefont_bitmap_glyphs_width) /
+                                 viewport_width;
+      float glyph_screen_height = 2.0f * glyph_scale *
+                                  (float)(simplefont_bitmap_glyphs_height) /
+                                  viewport_height;
+      float glyph_pad_ss = 2.0f / viewport_width;
+      uint32_t max_num_glyphs = 0;
+      uint32_t num_strings = string_storage.cursor;
+      _String2D *strings = string_storage.at(0);
+      kto(num_strings) { max_num_glyphs += (uint32_t)strings[k].len; }
+      ts.enter_scope();
+      defer(ts.exit_scope());
+      Glyph_Instance_GL *glyphs_gl = (Glyph_Instance_GL *)ts.alloc(
+          sizeof(Glyph_Instance_GL) * max_num_glyphs);
+      uint32_t num_glyphs = 0;
+
+      kto(num_strings) {
+        _String2D string = strings[k];
+        float2 ss = camera.world_to_screen((float2){string.x, string.y});
+        float min_ss_x = ss.x;
+        float min_ss_y = ss.y;
+        float max_ss_x =
+            ss.x + (glyph_screen_width + glyph_pad_ss) * string.len;
+        float max_ss_y = ss.y + glyph_screen_height;
+        if (min_ss_x > 1.0f || min_ss_y > 1.0f || max_ss_x < -1.0f ||
+            max_ss_y < -1.0f)
+          continue;
+
+        ito(string.len) {
+          uint32_t c = (uint32_t)string.c_str[i];
+
+          // Printable characters only
+          c = clamp(c, 0x20, 0x7e);
+          uint32_t row = (c - 0x20) / simplefont_bitmap_glyphs_per_row;
+          uint32_t col = (c - 0x20) % simplefont_bitmap_glyphs_per_row;
+          float v0 = ((float)row * (simplefont_bitmap_glyphs_height +
+                                    simplefont_bitmap_glyphs_pad_y * 2) +
+                      simplefont_bitmap_glyphs_pad_y) /
+                     simplefont_bitmap_height;
+          float u0 = ((float)col * (simplefont_bitmap_glyphs_width +
+                                    simplefont_bitmap_glyphs_pad_x * 2) +
+                      simplefont_bitmap_glyphs_pad_x) /
+                     simplefont_bitmap_width;
+          Glyph_Instance_GL glyph;
+          glyph.u = u0;
+          glyph.v = v0;
+          glyph.x = ss.x + (glyph_screen_width + glyph_pad_ss) * i;
+          glyph.y = ss.y;
+          glyph.z = string.z;
+          glyph.r = string.color.r;
+          glyph.g = string.color.g;
+          glyph.b = string.color.b;
+          glyphs_gl[num_glyphs++] = glyph;
+        }
+      }
+      if (num_glyphs == 0)
+        goto skip_strings;
+      glBindVertexArray(vao);
+      glBindBuffer(GL_ARRAY_BUFFER, vbo);
+      glEnableVertexAttribArray(0);
+      glVertexAttribBinding(0, 0);
+      glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+      glBindBuffer(GL_ARRAY_BUFFER, instance_vbo);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(Glyph_Instance_GL) * num_glyphs,
+                   glyphs_gl, GL_DYNAMIC_DRAW);
+      glEnableVertexAttribArray(1);
+      glVertexAttribBinding(1, 0);
+      glVertexAttribDivisor(1, 1);
+      glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 32, (void *)0);
+      glEnableVertexAttribArray(2);
+      glVertexAttribBinding(2, 0);
+      glVertexAttribDivisor(2, 1);
+      glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 32, (void *)12);
+      glEnableVertexAttribArray(3);
+      glVertexAttribBinding(3, 0);
+      glVertexAttribDivisor(3, 1);
+      glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, 32, (void *)20);
+      // Draw
+
+      glUseProgram(program);
+      glActiveTexture(GL_TEXTURE0);
+      glBindTexture(GL_TEXTURE_2D, font_texture);
+      glUniform1i(glGetUniformLocation(program, "image"), 0);
+      //      glUniformMatrix4fv(glGetUniformLocation(line_program,
+      //      "projection"), 1,
+      //                         GL_FALSE, (float *)&camera.proj[0]);
+      glUniform2f(glGetUniformLocation(program, "viewport_size"),
+                  (float)viewport_width, (float)viewport_height);
+      glUniform2f(glGetUniformLocation(program, "glyph_size"),
+                  glyph_screen_width, glyph_screen_height);
+      glUniform2f(glGetUniformLocation(program, "glyph_uv_size"),
+                  glyph_uv_width, glyph_uv_height);
+
+      glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_glyphs);
+      glBindVertexArray(0);
+      glBindBuffer(GL_ARRAY_BUFFER, 0);
+      glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+      glDisableVertexAttribArray(0);
+      glDisableVertexAttribArray(1);
+    }
+  skip_strings:
+    (void)0;
+  }
 }
 #endif // RASTER_EXE

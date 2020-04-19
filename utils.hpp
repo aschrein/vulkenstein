@@ -23,12 +23,9 @@
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
-template <typename T> T copy(T const &in) {
-  return in;
-}
+template <typename T> T copy(T const &in) { return in; }
 
-template <typename M, typename K>
-bool contains(M const &in, K const &key) {
+template <typename M, typename K> bool contains(M const &in, K const &key) {
   return in.find(key) != in.end();
 }
 
@@ -65,27 +62,74 @@ template <typename F> __Defer__<F> defer_func(F f) { return __Defer__<F>(f); }
 #define PERF_EXIT(name)
 #define OK_FALLTHROUGH (void)0;
 
-// [0 ..                     .. N-1]
-// [stack bytes...][memory bytes...]
+template<typename T = uint8_t>
 struct Temporary_Storage {
   uint8_t *ptr;
   size_t cursor;
   size_t capacity;
   size_t stack_capacity;
   size_t stack_cursor;
+  static Temporary_Storage create(size_t capacity) {
+    ASSERT_DEBUG(capacity > 0);
+    Temporary_Storage out;
+    size_t STACK_CAPACITY = 0x100 * sizeof(size_t);
+    out.ptr = (uint8_t *)malloc(STACK_CAPACITY + capacity * sizeof(T));
+    out.capacity = capacity;
+    out.cursor = 0;
+    out.stack_capacity = STACK_CAPACITY;
+    out.stack_cursor = 0;
+    return out;
+  }
+
+  void release() {
+    free(this->ptr);
+    memset(this, 0, sizeof(Temporary_Storage));
+  }
+
+  void push(T const &v) {
+    T *ptr = alloc(1);
+    memcpy(ptr, &v, sizeof(T));
+  }
+
+  bool has_items() {
+    return this->cursor > 0;
+  }
+
+  T *at(uint32_t i) {
+    return (T *)(this->ptr + this->stack_capacity + i * sizeof(T));
+  }
+
+  T *alloc(size_t size) {
+    ASSERT_DEBUG(size != 0);
+    T *ptr = (T *)(this->ptr + this->stack_capacity + this->cursor * sizeof(T));
+    this->cursor += size;
+    ASSERT_DEBUG(this->cursor < this->capacity);
+    return ptr;
+  }
+
+  void enter_scope() {
+    // Save the cursor to the stack
+    size_t *top = (size_t *)(this->ptr + this->stack_cursor);
+    *top = this->cursor;
+    // Increment stack cursor
+    this->stack_cursor += sizeof(size_t);
+    ASSERT_DEBUG(this->stack_cursor < this->stack_capacity);
+  }
+
+  void exit_scope() {
+    // Decrement stack cursor
+    ASSERT_DEBUG(this->stack_cursor >= sizeof(size_t));
+    this->stack_cursor -= sizeof(size_t);
+    // Restore the cursor from the stack
+    size_t *top = (size_t *)(this->ptr + this->stack_cursor);
+    this->cursor = *top;
+  }
+
+  void reset() {
+    this->cursor = 0;
+    this->stack_cursor = 0;
+  }
 };
-
-Temporary_Storage Temporary_Storage_new(size_t capacity);
-
-void Temporary_Storage_delete(Temporary_Storage *ts);
-
-void *Temporary_Storage_alloc(Temporary_Storage *ts, size_t size);
-
-void Temporary_Storage_enter_scope(Temporary_Storage *ts);
-
-void Temporary_Storage_exit_scope(Temporary_Storage *ts);
-
-void Temporary_Storage_reset(Temporary_Storage *ts);
 
 /** Allocates 'size' bytes using thread local allocator
  */
@@ -430,63 +474,10 @@ template <typename K, typename V> struct HashArray {
 #define UTILS_IMPL_H
 #include <string.h>
 
-Temporary_Storage Temporary_Storage_new(size_t capacity) {
-  ASSERT_DEBUG(capacity > 0);
-  Temporary_Storage out;
-  size_t STACK_CAPACITY = 0x100 * sizeof(size_t);
-  out.ptr = (uint8_t *)malloc(STACK_CAPACITY + capacity);
-  out.capacity = capacity;
-  out.cursor = 0;
-  out.stack_capacity = STACK_CAPACITY;
-  out.stack_cursor = 0;
-  return out;
-}
-
-void Temporary_Storage_delete(Temporary_Storage *ts) {
-  ASSERT_DEBUG(ts != nullptr);
-  free(ts->ptr);
-  memset(ts, 0, sizeof(Temporary_Storage));
-}
-
-void *Temporary_Storage_alloc(Temporary_Storage *ts, size_t size) {
-  ASSERT_DEBUG(ts != nullptr);
-  ASSERT_DEBUG(size != 0);
-  void *ptr = (void *)(ts->ptr + ts->stack_capacity + ts->cursor);
-  ts->cursor += size;
-  ASSERT_DEBUG(ts->cursor < ts->capacity);
-  return ptr;
-}
-
-void Temporary_Storage_enter_scope(Temporary_Storage *ts) {
-  ASSERT_DEBUG(ts != nullptr);
-  // Save the cursor to the stack
-  size_t *top = (size_t *)(ts->ptr + ts->stack_cursor);
-  *top = ts->cursor;
-  // Increment stack cursor
-  ts->stack_cursor += sizeof(size_t);
-  ASSERT_DEBUG(ts->stack_cursor < ts->stack_capacity);
-}
-
-void Temporary_Storage_exit_scope(Temporary_Storage *ts) {
-  ASSERT_DEBUG(ts != nullptr);
-  // Decrement stack cursor
-  ASSERT_DEBUG(ts->stack_cursor >= sizeof(size_t));
-  ts->stack_cursor -= sizeof(size_t);
-  // Restore the cursor from the stack
-  size_t *top = (size_t *)(ts->ptr + ts->stack_cursor);
-  ts->cursor = *top;
-}
-
-void Temporary_Storage_reset(Temporary_Storage *ts) {
-  ASSERT_DEBUG(ts != nullptr);
-  ts->cursor = 0;
-  ts->stack_cursor = 0;
-}
-
 struct Thread_Local {
-  Temporary_Storage temporal_storage;
+  Temporary_Storage<> temporal_storage;
   bool initialized = false;
-  ~Thread_Local() { Temporary_Storage_delete(&temporal_storage); }
+  ~Thread_Local() { temporal_storage.release(); }
 };
 
 // TODO(aschrein): Change to __thread?
@@ -495,23 +486,17 @@ thread_local Thread_Local g_tl{};
 Thread_Local *get_tl() {
   if (g_tl.initialized == false) {
     g_tl.initialized = true;
-    g_tl.temporal_storage = Temporary_Storage_new(1 << 24);
+    g_tl.temporal_storage = Temporary_Storage<>::create(1 << 24);
   }
   return &g_tl;
 }
 
 void *tl_alloc_tmp(size_t size) {
-  return Temporary_Storage_alloc(&get_tl()->temporal_storage, size);
+  return get_tl()->temporal_storage.alloc(size);
 }
 
-void tl_alloc_tmp_enter() {
-  Temporary_Storage *ts = &get_tl()->temporal_storage;
-  Temporary_Storage_enter_scope(ts);
-}
-void tl_alloc_tmp_exit() {
-  Temporary_Storage *ts = &get_tl()->temporal_storage;
-  Temporary_Storage_exit_scope(ts);
-}
+void tl_alloc_tmp_enter() { get_tl()->temporal_storage.enter_scope(); }
+void tl_alloc_tmp_exit() { get_tl()->temporal_storage.exit_scope(); }
 
 void *tl_alloc(size_t size) { return malloc(size); }
 
