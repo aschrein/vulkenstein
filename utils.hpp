@@ -50,6 +50,9 @@ template <typename F> __Defer__<F> defer_func(F f) { return __Defer__<F>(f); }
 #define DEFER_3(x) DEFER_2(x, __COUNTER__)
 #define defer(code) auto DEFER_3(_defer_) = defer_func([&]() { code; })
 
+#define STRINGIFY(a) _STRINGIFY(a)
+#define _STRINGIFY(a) #a
+
 #define ito(N) for (uint32_t i = 0; i < N; ++i)
 #define jto(N) for (uint32_t j = 0; j < N; ++j)
 #define uto(N) for (uint32_t u = 0; u < N; ++u)

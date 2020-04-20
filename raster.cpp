@@ -5,6 +5,35 @@
 #include "spv_stdlib/spv_stdlib.cpp"
 
 #ifdef RASTER_EXE
+#include "utils.hpp"
+Shader_Symbols *get_shader_symbols(void *ptr) { return NULL; }
+#include <GLES3/gl32.h>
+#include <SDL2/SDL.h>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <thread>
+void MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity,
+                     GLsizei length, const GLchar *message,
+                     const void *userParam) {
+  fprintf(stderr,
+          "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
+          (type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""), type, severity,
+          message);
+}
+
+double my_clock() {
+  std::chrono::time_point<std::chrono::system_clock> now =
+      std::chrono::system_clock::now();
+  auto duration = now.time_since_epoch();
+  return 1.0e-3 *
+         (double)std::chrono::duration_cast<std::chrono::milliseconds>(duration)
+             .count();
+}
+
+SDL_Window *window = NULL;
+SDL_GLContext glc;
+int SCREEN_WIDTH, SCREEN_HEIGHT;
 
 #include "3rdparty/libpfc/include/libpfc.h"
 
@@ -180,7 +209,7 @@ struct Context2D {
     float pixel_screen_width;
     float pixel_screen_height;
     float fovy, fovx;
-    uint32_t glyph_scale = 2;
+    uint32_t glyph_scale = 1;
     void update(float viewport_width, float viewport_height) {
       this->viewport_width = viewport_width;
       this->viewport_height = viewport_height;
@@ -348,6 +377,7 @@ struct Context2D {
       Temporary_Storage<char>::create(1 * (1 << 20));
   uint32_t viewport_width;
   uint32_t viewport_height;
+  bool force_update = false;
   struct Console {
     char buffer[0x100][0x100];
     uint32_t column = 0;
@@ -355,7 +385,6 @@ struct Context2D {
     Console() { memset(this, 0, sizeof(*this)); }
     void unscroll() {
       if (scroll_id != 0) {
-        column = 0;
         memcpy(&buffer[0][0], &buffer[scroll_id][0], 0x100);
         scroll_id = 0;
       }
@@ -405,74 +434,748 @@ struct Context2D {
       }
     }
     void scroll_up() {
-      if (scroll_id < 0x100)
+      if (scroll_id < 0x100) {
         scroll_id++;
+        column = strlen(buffer[scroll_id]);
+      }
     }
     void scroll_down() {
-      if (scroll_id > 0)
+      if (scroll_id > 0) {
         scroll_id--;
+        column = strlen(buffer[scroll_id]);
+      }
     }
   } console;
   bool console_mode = false;
-} c2d;
-void draw_console() {
-  float CONSOLE_TEXT_LAYER = 102.0f / 256.0f;
-  float CONSOLE_CURSOR_LAYER = 101.0f / 256.0f;
-  float CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
-  float GLYPH_HEIGHT = c2d.camera.glyph_scale * simplefont_bitmap_glyphs_height;
-  float GLYPH_WIDTH = c2d.camera.glyph_scale * simplefont_bitmap_glyphs_width;
-  float console_bottom = GLYPH_HEIGHT * 4.0f;
-  ito(3) {
-    c2d.draw_string({.c_str = c2d.console.buffer[3 - i],
-                     .x = 0,
-                     .y = GLYPH_HEIGHT * (i + 1),
-                     .z = CONSOLE_TEXT_LAYER,
-                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
-                     .world_space = false});
-  }
-  c2d.draw_string({.c_str = c2d.console.buffer[c2d.console.scroll_id],
-                   .x = 0.0f,
-                   .y = console_bottom,
+  void draw_console() {
+    float CONSOLE_TEXT_LAYER = 102.0f / 256.0f;
+    float CONSOLE_CURSOR_LAYER = 101.0f / 256.0f;
+    float CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
+    float GLYPH_HEIGHT = camera.glyph_scale * simplefont_bitmap_glyphs_height;
+    float GLYPH_WIDTH = camera.glyph_scale * simplefont_bitmap_glyphs_width;
+    uint32_t console_lines = 6;
+    float console_bottom = (GLYPH_HEIGHT + 1) * console_lines;
+    ito(console_lines - 1) {
+      draw_string({.c_str = console.buffer[console_lines - 1 - i],
+                   .x = 0,
+                   .y = (GLYPH_HEIGHT + 1) * (i + 1),
                    .z = CONSOLE_TEXT_LAYER,
                    .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
                    .world_space = false});
-  c2d.draw_rect({//
+    }
+    draw_string({.c_str = console.buffer[console.scroll_id],
                  .x = 0.0f,
-                 .y = 0.0f,
-                 .z = CONSOLE_BACKGROUND_LAYER,
-                 .width = (float)c2d.camera.viewport_width,
-                 .height = console_bottom,
-                 .color = {.r = 0.8f, .g = 0.8f, .b = 0.8f},
-                 .world_space = false});
-  c2d.draw_line({//
-                 .x0 = 0.0f,
-                 .y0 = console_bottom,
-                 .x1 = (float)c2d.camera.viewport_width,
-                 .y1 = console_bottom,
-                 .z = CONSOLE_CURSOR_LAYER,
+                 .y = console_bottom,
+                 .z = CONSOLE_TEXT_LAYER,
                  .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
                  .world_space = false});
-  c2d.draw_rect({//
-                 .x = c2d.console.column * (GLYPH_WIDTH + 1.0f),
-                 .y = console_bottom,
-                 .z = CONSOLE_CURSOR_LAYER,
-                 .width = GLYPH_WIDTH,
-                 .height = -GLYPH_HEIGHT,
-                 .color = {.r = 1.0f, .g = 1.0f, .b = 1.0f},
-                 .world_space = false});
-}
-// struct RasterDBG {};
+    draw_rect({//
+               .x = 0.0f,
+               .y = 0.0f,
+               .z = CONSOLE_BACKGROUND_LAYER,
+               .width = (float)camera.viewport_width,
+               .height = console_bottom + 1.0f,
+               .color = {.r = 0.8f, .g = 0.8f, .b = 0.8f},
+               .world_space = false});
+    draw_line({//
+               .x0 = 0.0f,
+               .y0 = console_bottom + 2.0f,
+               .x1 = (float)camera.viewport_width,
+               .y1 = console_bottom + 2.0f,
+               .z = CONSOLE_CURSOR_LAYER,
+               .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+               .world_space = false});
+    draw_rect({//
+               .x = console.column * (GLYPH_WIDTH + 1.0f),
+               .y = console_bottom,
+               .z = CONSOLE_CURSOR_LAYER,
+               .width = GLYPH_WIDTH,
+               .height = -GLYPH_HEIGHT,
+               .color = {.r = 1.0f, .g = 1.0f, .b = 1.0f},
+               .world_space = false});
+  }
+} c2d;
+struct Dbg_Command {
+  enum class Command_t {
+    GOTO,
+    EXIT,
+    NEXT,
+    CONTINUE,
+    START,
+    BREAK,
+    CLEAR,
+    SELECT_VERTEX,
+    MOVE_VERTEX,
+    DUMP,
+    UNKNOWN
+  };
+  Command_t type;
+  int32_t iarg0;
+  int32_t iarg1;
+  int32_t iarg2;
+  int32_t iarg3;
+  float farg0;
+  float farg1;
+  float farg2;
+  float farg3;
+  bool parse_decimal_int(char const *str, size_t len, int32_t *result) {
+    int32_t final = 0;
+    int32_t pow = 1;
+    ito(len) {
+      switch (str[len - 1 - i]) {
+      case '0':
+        break;
+      case '1':
+        final += 1 * pow;
+        break;
+      case '2':
+        final += 2 * pow;
+        break;
+      case '3':
+        final += 3 * pow;
+        break;
+      case '4':
+        final += 4 * pow;
+        break;
+      case '5':
+        final += 5 * pow;
+        break;
+      case '6':
+        final += 6 * pow;
+        break;
+      case '7':
+        final += 7 * pow;
+        break;
+      case '8':
+        final += 8 * pow;
+        break;
+      case '9':
+        final += 9 * pow;
+        break;
+      default:
+        return false;
+      }
+      pow *= 10;
+    }
+    *result = final;
+    return true;
+  }
+  bool parse_float(char const *str, size_t len, float *result) {
+    float final = 0.0f;
+    uint32_t i = 0;
+    for (; i < len; ++i) {
+      if (str[i] == '.')
+        break;
+      switch (str[i]) {
+      case '0':
+        final = final * 10.0f;
+        break;
+      case '1':
+        final = final * 10.0f + 1.0f;
+        break;
+      case '2':
+        final = final * 10.0f + 2.0f;
+        break;
+      case '3':
+        final = final * 10.0f + 3.0f;
+        break;
+      case '4':
+        final = final * 10.0f + 4.0f;
+        break;
+      case '5':
+        final = final * 10.0f + 5.0f;
+        break;
+      case '6':
+        final = final * 10.0f + 6.0f;
+        break;
+      case '7':
+        final = final * 10.0f + 7.0f;
+        break;
+      case '8':
+        final = final * 10.0f + 8.0f;
+        break;
+      case '9':
+        final = final * 10.0f + 9.0f;
+        break;
+      default:
+        return false;
+      }
+    }
+    i++;
+    float pow = 1.0e-1f;
+    for (; i < len; ++i) {
+      switch (str[i]) {
+      case '0':
+        break;
+      case '1':
+        final += 1.0f * pow;
+        break;
+      case '2':
+        final += 2.0f * pow;
+        break;
+      case '3':
+        final += 3.0f * pow;
+        break;
+      case '4':
+        final += 4.0f * pow;
+        break;
+      case '5':
+        final += 5.0f * pow;
+        break;
+      case '6':
+        final += 6.0f * pow;
+        break;
+      case '7':
+        final += 7.0f * pow;
+        break;
+      case '8':
+        final += 8.0f * pow;
+        break;
+      case '9':
+        final += 9.0f * pow;
+        break;
+      default:
+        return false;
+      }
+      pow *= 1.0e-1f;
+    }
+    *result = final;
+    return true;
+  }
+  bool token_match(char const *tkn, char const *str, size_t tkn_len) {
+    size_t str_len = strlen(str);
+    if (str_len != tkn_len)
+      return false;
+    ito(MIN(str_len, tkn_len)) {
+      if (tkn[i] != str[i])
+        return false;
+    }
+    return true;
+  }
+  bool parse(char const *str) {
+    type = Command_t::UNKNOWN;
+    ts.enter_scope();
+    defer(ts.exit_scope());
+    char const *cur_tkn_start = str;
+    struct Token {
+      char const *start;
+      size_t len;
+    };
+    const uint32_t max_tokens = 0x100;
+    uint32_t num_tokens = 0;
+    Token *tkns = (Token *)ts.alloc(sizeof(Token) * max_tokens);
+    uint32_t loop_counter = 0;
+    do {
+      loop_counter++;
+      if (loop_counter > 10000) {
+        UNIMPLEMENTED;
+      }
+      if (str[0] == ' ' || str[0] < 0x20 || str[0] > 0x7e) {
+        if (cur_tkn_start != str) {
+          tkns[num_tokens++] = {
+              .start = cur_tkn_start,
+              .len = (size_t)((intptr_t)str - (intptr_t)cur_tkn_start)};
+        }
+        if (str[0] == '\0')
+          break;
+        cur_tkn_start = str + 1;
+        str++;
+        continue;
+      }
+      str++;
+    } while (1);
+    if (num_tokens != 0) {
+#define CMD_NOARG(cmd_mnemonics, cmd_enum)                                     \
+  if (token_match(tkns[0].start, STRINGIFY(cmd_mnemonics), tkns[0].len) &&     \
+      num_tokens == 1) {                                                       \
+    type = Command_t::cmd_enum;                                                \
+    return true;                                                               \
+  }
+      if (token_match(tkns[0].start, "goto", tkns[0].len)) {
+        if (num_tokens != 3)
+          return false;
+        if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0))
+          return false;
+        if (!parse_decimal_int(tkns[2].start, tkns[2].len, &iarg1))
+          return false;
+        type = Command_t::GOTO;
+        return true;
+      }
+      if (token_match(tkns[0].start, "selv", tkns[0].len)) {
+        if (num_tokens != 2)
+          return false;
+        if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0))
+          return false;
+        type = Command_t::SELECT_VERTEX;
+        return true;
+      }
+      if (token_match(tkns[0].start, "mov", tkns[0].len)) {
+        if (num_tokens != 3)
+          return false;
+        if (!parse_float(tkns[1].start, tkns[1].len, &farg0))
+          return false;
+        if (!parse_float(tkns[2].start, tkns[2].len, &farg1))
+          return false;
+        fprintf(stdout, "%f %f\n", farg0, farg1);
+        fflush(stdout);
+        type = Command_t::MOVE_VERTEX;
+        return true;
+      }
+      CMD_NOARG(exit, EXIT);
+      CMD_NOARG(dump, DUMP);
+      CMD_NOARG(n, NEXT);
+      CMD_NOARG(c, CONTINUE);
+      CMD_NOARG(b, BREAK);
+      CMD_NOARG(s, START);
+      CMD_NOARG(clear, CLEAR);
 
-// static int16_t *g_debug_grid[2] = {NULL, NULL};
-// static std::mutex g_debug_grid_mutexes[2];
-// static uint64_t g_current_grid = 0;
-// static uint32_t g_debug_grid_size = 0;
-// static uint32_t selected_texel_x = 0;
-// static uint32_t selected_texel_y = 0;
-// static uint64_t selected_texel_break = 0;
-// static float mouse_world_x = 0.0f;
-// static float mouse_world_y = 0.0f;
+#undef CMD_NOARG
+    }
 
+    return false;
+  }
+};
+struct CV_Wrapper {
+  std::mutex cv_mutex;
+  std::atomic<bool> cv_predicate;
+  std::condition_variable cv;
+  void wait() {
+    std::unique_lock<std::mutex> lk(cv_mutex);
+    cv.wait(lk, [this] { return cv_predicate.load(); });
+    cv_predicate = false;
+  }
+  void notify_one() {
+    cv_predicate = true;
+    cv.notify_one();
+  }
+};
+template <uint32_t H, uint32_t W, typename Cell_t> //
+struct Gridbg {
+  Cell_t *grid;
+  std::mutex grid_mutex;
+  CV_Wrapper break_cv;
+  CV_Wrapper pause_cv;
+  std::atomic<bool> run;
+  std::atomic<size_t> current_grid;
+  std::atomic<size_t> break_requested;
+  uint32_t cur_i;
+  uint32_t cur_j;
+  // Debug triangle
+  float v_x[3];
+  float v_y[3];
+  uint32_t cur_v;
+  enum Selection_t { NONE = 0, CELL, VERTEX };
+  Selection_t selection_type;
+
+  bool select_clicked = false;
+  void init() {
+    grid = (Cell_t *)malloc(W * H * sizeof(Cell_t));
+    memset(grid, 0, W * H * sizeof(Cell_t));
+    clear();
+    {
+      ts.enter_scope();
+      defer(ts.exit_scope());
+      FILE *save = fopen("save.txt", "rb");
+      if (save != NULL) {
+        fseek(save, 0, SEEK_END);
+        long fsize = ftell(save);
+        fseek(save, 0, SEEK_SET);
+        size_t size = (size_t)fsize;
+        char *data = (char *)ts.alloc((size_t)fsize);
+        fread(data, 1, (size_t)fsize, save);
+        fclose(save);
+        ito((uint32_t)size) {
+          if (data[i] == '\n') {
+            try_command(c2d.console.buffer[0]);
+            c2d.console.newline();
+          } else {
+            c2d.console.put_char(data[i]);
+          }
+        }
+      } else {
+        v_x[0] = 0.0f;
+        v_y[0] = 0.0f;
+        v_x[1] = 100.0f;
+        v_y[1] = 100.0f;
+        v_x[2] = 000.0f;
+        v_y[2] = 100.0f;
+      }
+    }
+  }
+  void release() { free(grid); }
+  void draw() {
+    std::lock_guard<std::mutex> lock(grid_mutex);
+    ts.enter_scope();
+    c2d.frame_start(SCREEN_WIDTH, SCREEN_HEIGHT);
+    defer({
+      c2d.frame_end();
+      ts.exit_scope();
+    });
+    float dx = 1.0f;
+    float dy = 1.0f;
+    float size_x = 256.0f;
+    float size_y = 256.0f;
+    float QUAD_LAYER = 1.0f / 256.0f;
+    float GRID_LAYER = 2.0f / 256.0f;
+    float TEXT_LAYER = 3.0f / 256.0f;
+    if (c2d.camera.pos.z < 80.0f) {
+      ito(W + 1) {
+        c2d.draw_line({//
+                       .x0 = dx * (float)(i),
+                       .y0 = 0.0f,
+                       .x1 = dx * (float)(i),
+                       .y1 = size_y,
+                       .z = GRID_LAYER,
+                       .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      }
+      ito(H + 1) {
+        c2d.draw_line({//
+                       .x0 = 0.0f,
+                       .y0 = dy * (float)(i),
+                       .x1 = size_x,
+                       .y1 = dy * (float)(i),
+                       .z = GRID_LAYER,
+                       .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      }
+    }
+    if (selection_type == Selection_t::VERTEX) {
+      v_x[cur_v] = c2d.camera.mouse_world_x;
+      v_y[cur_v] = c2d.camera.mouse_world_y;
+    }
+    // Draw the debugged triangle
+    {
+      ito(3) c2d.draw_string({.c_str = &("v0\0v1\0v2\n"[i * 3]),
+                              .x = v_x[i],
+                              .y = v_y[i],
+                              .z = TEXT_LAYER,
+                              .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_line({//
+                     .x0 = v_x[0],
+                     .y0 = v_y[0],
+                     .x1 = v_x[1],
+                     .y1 = v_y[1],
+                     .z = TEXT_LAYER,
+                     .color = {.r = 1.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_line({//
+                     .x0 = v_x[0],
+                     .y0 = v_y[0],
+                     .x1 = v_x[2],
+                     .y1 = v_y[2],
+                     .z = TEXT_LAYER,
+                     .color = {.r = 1.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_line({//
+                     .x0 = v_x[2],
+                     .y0 = v_y[2],
+                     .x1 = v_x[1],
+                     .y1 = v_y[1],
+                     .z = TEXT_LAYER,
+                     .color = {.r = 1.0f, .g = 0.0f, .b = 0.0f}});
+    }
+    if (selection_type == Selection_t::CELL) {
+      uint32_t i = cur_i;
+      uint32_t j = cur_j;
+      float thickness = 0.01f * c2d.camera.pos.z;
+      c2d.draw_rect({//
+                     .x = dx * j - thickness,
+                     .y = dy * i - thickness,
+                     .z = TEXT_LAYER,
+                     .width = thickness,
+                     .height = 1.0f + 2.0f * thickness,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_rect({//
+                     .x = dx * (j + 1.0f),
+                     .y = dy * i - thickness,
+                     .z = TEXT_LAYER,
+                     .width = thickness,
+                     .height = 1.0f + 2.0f * thickness,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_rect({//
+                     .x = dx * j - thickness,
+                     .y = dy * (i + 1),
+                     .z = TEXT_LAYER,
+                     .width = 1.0f + 2.0f * thickness,
+                     .height = thickness,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_rect({//
+                     .x = dx * j - thickness,
+                     .y = dy * i - thickness,
+                     .z = TEXT_LAYER,
+                     .width = 1.0f + 2.0f * thickness,
+                     .height = thickness,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+    }
+
+    ito(H) {
+      jto(W) {
+        if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
+          continue;
+        Cell_t *cell = get_cell(i, j);
+        float r = cell->r;
+        float g = cell->g;
+        float b = cell->b;
+        if (c2d.camera.mouse_world_x > dx * j &&
+            c2d.camera.mouse_world_x < dx * (j + 1) &&
+            c2d.camera.mouse_world_y > dy * i &&
+            c2d.camera.mouse_world_y < dy * (i + 1)) {
+          if (select_clicked) {
+            selection_type = Selection_t::CELL;
+            cur_i = i;
+            cur_j = j;
+            select_clicked = false;
+          }
+          r = 1.0f;
+        }
+        if (c2d.camera.pos.z < 160.0f) {
+          c2d.draw_rect({//
+                         .x = dx * j,
+                         .y = dy * i,
+                         .z = QUAD_LAYER,
+                         .width = 1.0f,
+                         .height = 1.0f,
+                         .color = {.r = r, .g = g, .b = b}});
+        }
+      }
+    }
+    if (c2d.camera.pos.z > 160.0f) {
+      c2d.draw_line({//
+                     .x0 = 0.0f,
+                     .y0 = 0.0f,
+                     .x1 = size_x,
+                     .y1 = 0.0f,
+                     .z = QUAD_LAYER,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_line({//
+                     .x0 = 0.0f,
+                     .y0 = 0.0f,
+                     .x1 = 0.0f,
+                     .y1 = size_y,
+                     .z = QUAD_LAYER,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_line({//
+                     .x0 = size_x,
+                     .y0 = size_y,
+                     .x1 = 0.0f,
+                     .y1 = size_y,
+                     .z = QUAD_LAYER,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      c2d.draw_line({//
+                     .x0 = size_x,
+                     .y0 = size_y,
+                     .x1 = size_x,
+                     .y1 = 0.0f,
+                     .z = QUAD_LAYER,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+    }
+    c2d.draw_console();
+    if (c2d.camera.pos.z < 10.0f) {
+      char tmp_buf[0x100];
+      auto alloc_str = [&](char const *fmt, int16_t v, float x, float y) {
+        snprintf(tmp_buf, sizeof(tmp_buf), fmt, v);
+        c2d.draw_string({.c_str = tmp_buf,
+                         .x = x,
+                         .y = y,
+                         .z = TEXT_LAYER,
+                         .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+      };
+
+      ito(H) {
+        jto(W) {
+          if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1),
+                                     dy * (i + 1)))
+            continue;
+          snprintf(tmp_buf, sizeof(tmp_buf), "(%i, %i)", j, i);
+          c2d.draw_string({.c_str = tmp_buf,
+                           .x = dx * j,
+                           .y = dy * (i + 1) - c2d.camera.glyphs_world_height,
+                           .z = TEXT_LAYER,
+                           .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+
+          //          alloc_str("y = %i", (int16_t)i, dx * j,
+          //                    dy * i + c2d.camera.glyphs_world_height);
+          Cell_t *cell = get_cell(i, j);
+          kto(Cell_t::LOG_SIZE) {
+            if (cell->log[k] != NULL) {
+              alloc_str(cell->log[k], 0, dx * j,
+                        dy * i + k * (c2d.camera.glyphs_world_height +
+                                      c2d.camera.pixel_screen_height));
+            }
+          }
+          //        alloc_str("e0 = %i", grid[i * width * 3 + j * 3 + 0], dx *
+          //        j
+          //        + 0.1f,
+          //                  dy * i + dy * 0.25f);
+          //        alloc_str("e1 = %i", grid[i * width * 3 + j * 3 + 1], dx *
+          //        j
+          //        + 0.1f,
+          //                  dy * i + dy * 0.5f);
+          //        alloc_str("e2 = %i", grid[i * width * 3 + j * 3 + 2], dx *
+          //        j
+          //        + 0.1f,
+          //                  dy * i + dy * 0.75f);
+        }
+      }
+    }
+  }
+  void try_command(char const *str) {
+    Dbg_Command cmd;
+    if (cmd.parse(str)) {
+      switch (cmd.type) {
+      case Dbg_Command::Command_t::GOTO: {
+        int32_t x = cmd.iarg0;
+        int32_t y = cmd.iarg1;
+        cur_i = y;
+        cur_j = x;
+        selection_type = Selection_t::CELL;
+        if (x >= 0 && x < 256 && y >= 0 && y < 256) {
+          c2d.camera.pos.x = (float)x;
+          c2d.camera.pos.y = (float)y;
+        }
+        break;
+      }
+      case Dbg_Command::Command_t::NEXT: {
+        next();
+        break;
+      }
+      case Dbg_Command::Command_t::EXIT: {
+        run = false;
+        global_resume();
+      }
+      case Dbg_Command::Command_t::BREAK: {
+        set_break();
+        break;
+      }
+      case Dbg_Command::Command_t::CONTINUE: {
+        set_continue();
+        break;
+      }
+      case Dbg_Command::Command_t::CLEAR: {
+        clear();
+        break;
+      }
+      case Dbg_Command::Command_t::SELECT_VERTEX: {
+        clear();
+        selection_type = Selection_t::VERTEX;
+        cur_v = cmd.iarg0;
+        break;
+      }
+      case Dbg_Command::Command_t::START: {
+        run = true;
+        global_resume();
+        break;
+      }
+      case Dbg_Command::Command_t::DUMP: {
+        FILE *save = fopen("save.txt", "wb");
+        ito(3) {
+          fprintf(save, "selv %i\n", i);
+          fprintf(save, "mov %f %f\n", v_x[i], v_y[i]);
+        }
+        fflush(save);
+        fclose(save);
+        break;
+      }
+      case Dbg_Command::Command_t::MOVE_VERTEX: {
+        if (selection_type == Selection_t::VERTEX) {
+          v_x[cur_v] = cmd.farg0;
+          v_y[cur_v] = cmd.farg1;
+          selection_type = Selection_t::NONE;
+        } else {
+          c2d.console.put_line("[ERROR] No vertex is selected!");
+        }
+        break;
+      }
+      default:
+        UNIMPLEMENTED;
+      }
+    } else {
+      c2d.console.put_line("[ERROR] Unknown command!");
+    }
+  }
+  void clear() {
+    ito(H) {
+      jto(W) { get_cell(i, j)->clear(); }
+    }
+  }
+  void next() { break_cv.notify_one(); }
+  void set_continue() {
+    break_requested = false;
+    next();
+  }
+  void set_break() { break_requested = true; }
+  Cell_t *get_cell(uint32_t i, uint32_t j) { return &grid[i * W + j]; }
+  void global_resume() { pause_cv.notify_one(); }
+
+  // client functions
+  void put_line(uint32_t i, uint32_t j, char const *fmt, ...) {
+    if (i == cur_i && j == cur_j) {
+      std::lock_guard<std::mutex> lock(grid_mutex);
+      char buffer[0x100];
+      va_list args;
+      va_start(args, fmt);
+      vsnprintf(buffer, sizeof(buffer), fmt, args);
+      va_end(args);
+      get_cell(i, j)->put_line(buffer);
+    }
+  }
+  void set_color(uint32_t i, uint32_t j, float r, float g, float b) {
+    // if (i == cur_i && j == cur_j) {
+    std::lock_guard<std::mutex> lock(grid_mutex);
+    get_cell(i, j)->set_color(r, g, b);
+    //}
+  }
+  void on_start(uint32_t i, uint32_t j) {}
+  bool on_pause() {
+    pause_cv.wait();
+    return run;
+  }
+  void on_end(uint32_t i, uint32_t j) {}
+  void on_break(uint32_t i, uint32_t j) {
+    if (break_requested && i == cur_i && j == cur_j) {
+      break_cv.wait();
+    }
+  }
+};
+struct Raster_Cell {
+  static const size_t LOG_SIZE = 0x30;
+  // Need to use long lived allocations
+  char *log[LOG_SIZE];
+  float r, g, b;
+  void release() {
+    ito(LOG_SIZE) {
+      if (log[i] != NULL)
+        free((void *)log[i]);
+    }
+    memset(this, 0, sizeof(*this));
+  }
+  void put_line(char const *str) {
+    // shift the log up
+    if (log[LOG_SIZE - 1] != NULL)
+      free(log[LOG_SIZE - 1]);
+    ito(LOG_SIZE - 1) { log[LOG_SIZE - i - 1] = log[LOG_SIZE - i - 2]; }
+    size_t len = strlen(str);
+    char *new_str = (char *)malloc(len + 1);
+    memcpy(new_str, str, len);
+    new_str[len] = '\0';
+    log[0] = new_str;
+  }
+  void set_color(float r, float g, float b) {
+    this->r = r;
+    this->g = g;
+    this->b = b;
+  }
+  void clear() {
+    release();
+    r = 0.4f;
+    g = 0.4f;
+    b = 0.4f;
+  }
+};
+Gridbg<256, 256, Raster_Cell> gridbg;
+#define GRIDBG_START(i, j) gridbg.on_start(i, j)
+#define GRIDBG_PAUSE() gridbg.on_pause()
+#define GRIDBG_BREAK(i, j) gridbg.on_break(i, j)
+#define GRIDBG_END(i, j) gridbg.on_end(i, j)
+#define GRIDBG_PUTLINE(i, j, fmt, ...) gridbg.put_line(i, j, fmt, __VA_ARGS__)
+#define GRIDBG_SETCOLOR(i, j, r, g, b) gridbg.set_color(i, j, r, g, b)
 #endif // RASTER_EXE
 
 uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
@@ -721,10 +1424,10 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
   // address is less than 16(0b10000) (crosses 128 bits for the high lane)
   //////////////////////////////////////////////
   // Second pass: move across 128 bit lanes
-  // _mm256_permute4x64_epi64 is used to make different 128 bit lanes accessible
-  // for the shuffle instruction. 0x4E == 01'00'11'10 == [1, 0, 3, 2]
-  // effectively swaps the low and hight 128 bit lanes.
-  // Finally we just or those passes together to get combined local+far moves
+  // _mm256_permute4x64_epi64 is used to make different 128 bit lanes
+  // accessible for the shuffle instruction. 0x4E == 01'00'11'10 == [1, 0, 3,
+  // 2] effectively swaps the low and hight 128 bit lanes. Finally we just or
+  // those passes together to get combined local+far moves
   __m256i K0 = init_i8x32(0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
                           0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0xF0, 0xF0,
                           0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
@@ -807,8 +1510,6 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
   //  // DEBUG
   // ~15 cycles per tile
   for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
-    //    if (y == max_y_tile - 1)
-    //      debug_break;
     int16_t e0_1 = e0_0;
     int16_t e1_1 = e1_0;
     int16_t e2_1 = e2_0;
@@ -822,33 +1523,22 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
         int16_t e1_3 = e1_2;
         int16_t e2_3 = e2_2;
         jto(4) {
-          //          // DEBUG
-          //          uint32_t texel_x = x * 4 + j;
-          //          uint32_t texel_y = y * 4 + i;
-          //          if (selected_texel_break == 1 && texel_x ==
-          //          selected_texel_x &&
-          //              texel_y == selected_texel_y) {
-          //            debug_break;
-          //            selected_texel_break = 0;
-          //          }
-          //          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) *
-          //          3 + 0] =
-          //              e0_3;
-          //          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) *
-          //          3 + 1] =
-          //              e1_3;
-          //          g_debug_grid[next_grid][((y * 4 + i) * 256 + x * 4 + j) *
-          //          3 + 2] =
-          //              e2_3;
-          //          // DEBUG
+          uint32_t idx = x * 4 + j;
+          uint32_t idy = y * 4 + i;
+          GRIDBG_START(idx, idy);
           uint16_t e0_sign = (uint16_t)e0_3 >> 15;
           uint16_t e1_sign = (uint16_t)e1_3 >> 15;
           uint16_t e2_sign = (uint16_t)e2_3 >> 15;
+          GRIDBG_PUTLINE(idx, idy, "e0=%i\n", e0_3);
+          GRIDBG_PUTLINE(idx, idy, "e1=%i\n", e0_3);
+          GRIDBG_PUTLINE(idx, idy, "e2=%i\n", e0_3);
           uint16_t mask_1 = (e0_sign | e1_sign | e2_sign);
+          GRIDBG_SETCOLOR(idx, idy, mask_1 ? 0.0f : 0.8f, 0.8f, 0.6f);
           mask = mask | ((mask_1 & 1) << ((i << 2) | j));
           e0_3 += n0_x;
           e1_3 += n1_x;
           e2_3 += n2_x;
+          GRIDBG_END(idx, idy);
         }
         e0_2 += n0_y;
         e1_2 += n1_y;
@@ -1332,7 +2022,8 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
         (uint16_t *)(((size_t)state->index_buffer->get_ptr() +
                       state->index_buffer_offset) &
                      (~0b1ull));
-    //    ASSERT_ALWAYS(state->index_type == VkIndexType::VK_INDEX_TYPE_UINT32);
+    //    ASSERT_ALWAYS(state->index_type ==
+    //    VkIndexType::VK_INDEX_TYPE_UINT32);
     auto get_index = [&](uint32_t i) {
       switch (state->index_type) {
       case VkIndexType::VK_INDEX_TYPE_UINT16:
@@ -1401,16 +2092,18 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
 
     //    descriptor_set_0[0] =
     //    state->descriptor_sets[0]->slots[0].buffer->get_ptr(); float4 *mat =
-    //    (float4 *)descriptor_set_0[0]; ito(4) fprintf(stdout, "%f %f %f %f\n",
-    //    mat[i].x, mat[i].y, mat[i].z,
+    //    (float4 *)descriptor_set_0[0]; ito(4) fprintf(stdout, "%f %f %f
+    //    %f\n", mat[i].x, mat[i].y, mat[i].z,
     //                   mat[i].w);
     //    fprintf(stdout, "__________________\n");
     //    mat += 4;
-    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
+    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y,
+    //    mat[i].z,
     //                   mat[i].w);
     //    fprintf(stdout, "__________________\n");
     //    mat += 4;
-    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y, mat[i].z,
+    //    ito(4) fprintf(stdout, "%f %f %f %f\n", mat[i].x, mat[i].y,
+    //    mat[i].z,
     //                   mat[i].w);
     //    fprintf(stdout, "#################\n");
     ito(num_invocations) {
@@ -1718,33 +2411,6 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
 
 #ifdef RASTER_EXE
 #define UTILS_IMPL
-#include "utils.hpp"
-Shader_Symbols *get_shader_symbols(void *ptr) { return NULL; }
-#include <chrono>
-#include <GLES3/gl32.h>
-#include <SDL2/SDL.h>
-#include <thread>
-void MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity,
-                     GLsizei length, const GLchar *message,
-                     const void *userParam) {
-  fprintf(stderr,
-          "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
-          (type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""), type, severity,
-          message);
-}
-
-double my_clock() {
-  std::chrono::time_point<std::chrono::system_clock> now =
-      std::chrono::system_clock::now();
-  auto duration = now.time_since_epoch();
-  return 1.0e-3 *
-         (double)std::chrono::duration_cast<std::chrono::milliseconds>(duration)
-             .count();
-}
-
-SDL_Window *window = NULL;
-SDL_GLContext glc;
-int SCREEN_WIDTH, SCREEN_HEIGHT;
 
 void compile_shader(GLuint shader) {
   glCompileShader(shader);
@@ -1813,213 +2479,18 @@ void render() {
   last_time = cur_time;
 
   // Scoped temporary allocator
-  ts.enter_scope();
-  c2d.frame_start(SCREEN_WIDTH, SCREEN_HEIGHT);
+
   // submit the commands
-  float dx = 1.0f;
-  float dy = 1.0f;
-  float size_x = 256.0f;
-  float size_y = 256.0f;
-  float QUAD_LAYER = 1.0f / 256.0f;
-  float GRID_LAYER = 2.0f / 256.0f;
-  float TEXT_LAYER = 3.0f / 256.0f;
-  if (c2d.camera.pos.z < 80.0f) {
-    ito(256 + 1) {
-      c2d.draw_line({//
-                     .x0 = dx * (float)(i),
-                     .y0 = 0.0f,
-                     .x1 = dx * (float)(i),
-                     .y1 = size_y,
-                     .z = GRID_LAYER,
-                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
-      c2d.draw_line({//
-                     .x0 = 0.0f,
-                     .y0 = dy * (float)(i),
-                     .x1 = size_x,
-                     .y1 = dy * (float)(i),
-                     .z = GRID_LAYER,
-                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
-    }
-  }
-
-  ito(256) {
-    jto(256) {
-      if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
-        continue;
-      //      int16_t e0 = grid[i * width * 3 + j * 3 + 0];
-      //      int16_t e1 = grid[i * width * 3 + j * 3 + 1];
-      //      int16_t e2 = grid[i * width * 3 + j * 3 + 2];
-      //      if (e0 == 0 && e1 == e0 && e2 == e0) {
-      //        continue;
-      //      }
-      //          if (e0 < 0 || e1 < 0 || e2 < 0) {
-      //        r = 1.0f;
-      //        g = 0.0f;
-      //        b = 0.0f;
-      //      }
-      float r = 1.0f;
-      float g = 0.0f;
-      float b = 0.0f;
-      if (c2d.camera.mouse_world_x > dx * j &&
-          c2d.camera.mouse_world_x < dx * (j + 1) &&
-          c2d.camera.mouse_world_y > dy * i &&
-          c2d.camera.mouse_world_y < dy * (i + 1)) {
-        //              r = 0.0f;
-        //              g = 1.0f;
-        g = 1.0f;
-        //              selected_texel_x = j;
-        //              selected_texel_y = i;
-      }
-      c2d.draw_rect({//
-                     .x = dx * j,
-                     .y = dy * i,
-                     .z = QUAD_LAYER,
-                     .width = 1.0f,
-                     .height = 1.0f,
-                     .color = {.r = r, .g = g, .b = b}});
-    }
-  }
-  draw_console();
-  if (c2d.camera.pos.z < 10.0f) {
-    char tmp_buf[0x100];
-    auto alloc_str = [&](char const *fmt, int16_t v, float x, float y) {
-      snprintf(tmp_buf, sizeof(tmp_buf), fmt, v);
-      c2d.draw_string({.c_str = tmp_buf,
-                       .x = x,
-                       .y = y,
-                       .z = TEXT_LAYER,
-                       .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
-    };
-
-    ito(256) {
-      jto(256) {
-        if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
-          continue;
-        alloc_str("x = %i", (int16_t)j, dx * j, dy * i);
-        alloc_str("y = %i", (int16_t)i, dx * j,
-                  dy * i + c2d.camera.glyphs_world_height);
-        //        alloc_str("e0 = %i", grid[i * width * 3 + j * 3 + 0], dx * j +
-        //        0.1f,
-        //                  dy * i + dy * 0.25f);
-        //        alloc_str("e1 = %i", grid[i * width * 3 + j * 3 + 1], dx * j +
-        //        0.1f,
-        //                  dy * i + dy * 0.5f);
-        //        alloc_str("e2 = %i", grid[i * width * 3 + j * 3 + 2], dx * j +
-        //        0.1f,
-        //                  dy * i + dy * 0.75f);
-      }
-    }
-  }
-
+  gridbg.draw();
   //  if (g_debug_grid[g_current_grid]) {
-  //    std::lock_guard<std::mutex> lock(g_debug_grid_mutexes[g_current_grid]);
+  //    std::lock_guard<std::mutex>
+  //    lock(g_debug_grid_mutexes[g_current_grid]);
   //    draw_grid_i16(g_debug_grid[g_current_grid], 256, 256, 256.0f, 256.0f);
   //  }
-  c2d.frame_end();
-  ts.exit_scope();
+
   glFinish();
   SDL_GL_SwapWindow(window);
 }
-
-struct Dbg_Command {
-  enum class Command_t { GOTO, EXIT, UNKNOWN };
-  Command_t type;
-  int32_t iarg0;
-  int32_t iarg1;
-  int32_t iarg2;
-  int32_t iarg3;
-  bool parse_decimal_int(char const *str, size_t len, int32_t *result) {
-    int32_t final = 0;
-    int32_t pow = 1;
-    ito(len) {
-      switch (str[len - 1 - i]) {
-      case '0':
-        break;
-      case '1':
-        final += 1 * pow;
-        break;
-      case '2':
-        final += 2 * pow;
-        break;
-      case '3':
-        final += 3 * pow;
-        break;
-      case '4':
-        final += 4 * pow;
-        break;
-      case '5':
-        final += 5 * pow;
-        break;
-      case '6':
-        final += 6 * pow;
-        break;
-      case '7':
-        final += 7 * pow;
-        break;
-      case '8':
-        final += 8 * pow;
-        break;
-      case '9':
-        final += 9 * pow;
-        break;
-      default:
-        return false;
-      }
-      pow *= 10;
-    }
-    *result = final;
-    return true;
-  }
-  bool parse(char const *str) {
-    type = Command_t::UNKNOWN;
-    ts.enter_scope();
-    defer(ts.exit_scope());
-    char const *cur_tkn_start = str;
-    struct Token {
-      char const *start;
-      size_t len;
-    };
-    const uint32_t max_tokens = 0x100;
-    uint32_t num_tokens = 0;
-    Token *tkns = (Token *)ts.alloc(sizeof(Token) * max_tokens);
-    uint32_t loop_counter = 0;
-    do {
-      loop_counter++;
-      if (loop_counter > 10000) {
-        UNIMPLEMENTED;
-      }
-      if (str[0] == ' ' || str[0] < 0x20 || str[0] > 0x7e) {
-        if (cur_tkn_start != str) {
-          tkns[num_tokens++] = {
-              .start = cur_tkn_start,
-              .len = (size_t)((intptr_t)str - (intptr_t)cur_tkn_start)};
-        }
-        if (str[0] == '\0')
-          break;
-        cur_tkn_start = str + 1;
-        str++;
-        continue;
-      }
-      str++;
-    } while (1);
-    if (num_tokens != 0) {
-      if (strncmp(tkns[0].start, "goto", tkns[0].len) == 0) {
-        if (num_tokens != 3)
-          return false;
-        if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0))
-          return false;
-        if (!parse_decimal_int(tkns[2].start, tkns[2].len, &iarg1))
-          return false;
-        type = Command_t::GOTO;
-        return true;
-      } else if (strncmp(tkns[0].start, "exit", tkns[0].len) == 0) {
-        type = Command_t::EXIT;
-        return true;
-      }
-    }
-    return false;
-  }
-};
 
 void main_loop() {
   glEnable(GL_DEBUG_OUTPUT);
@@ -2031,6 +2502,8 @@ void main_loop() {
   static bool quit_loop = 0;
   static int old_mp_x = 0;
   static int old_mp_y = 0;
+  static bool hyper_pressed = false;
+  static bool skip_key = false;
   while (SDL_WaitEvent(&event)) {
     SDL_GetWindowSize(window, &SCREEN_WIDTH, &SCREEN_HEIGHT);
     switch (event.type) {
@@ -2038,8 +2511,35 @@ void main_loop() {
       quit_loop = 1;
       break;
     }
+    case SDL_KEYUP: {
+      //      fprintf(stdout, "up %i\n", event.key.keysym.scancode);
+      //      fflush(stdout);
+      if (event.key.keysym.scancode == 258)
+        break;
+      if (event.key.keysym.scancode == 57) {
+        hyper_pressed = false;
+        skip_key = false;
+        break;
+      }
+      break;
+    }
     case SDL_KEYDOWN: {
       uint32_t c = event.key.keysym.sym;
+      //      fprintf(stdout, "down %i\n", event.key.keysym.scancode);
+      //      fflush(stdout);
+      if (event.key.keysym.scancode == 258)
+        break;
+      if (event.key.keysym.scancode == 57) {
+        hyper_pressed = true;
+        skip_key = true;
+        break;
+      }
+      if (skip_key) {
+        //        skip_key = false;
+        break;
+      }
+      //      if (hyper_pressed)
+      //        skip_key = true;
       if (c >= 0x20 && c <= 0x7e) {
         c2d.console.put_char((char)c);
       }
@@ -2060,27 +2560,7 @@ void main_loop() {
       }
       if (event.key.keysym.sym == SDLK_RETURN) {
         c2d.console.newline();
-        Dbg_Command cmd;
-        if (cmd.parse(c2d.console.buffer[1])) {
-          switch (cmd.type) {
-          case Dbg_Command::Command_t::GOTO: {
-            int32_t x = cmd.iarg0;
-            int32_t y = cmd.iarg1;
-            if (x >= 0 && x < 256 && y >= 0 && y < 256) {
-              c2d.camera.pos.x = (float)x;
-              c2d.camera.pos.y = (float)y;
-            }
-            break;
-          }
-          case Dbg_Command::Command_t::EXIT: {
-            exit(0);
-          }
-          default:
-            UNIMPLEMENTED;
-          }
-        } else {
-          c2d.console.put_line("[ERROR] Unknown command!");
-        }
+        gridbg.try_command(c2d.console.buffer[1]);
       }
       switch (event.key.keysym.sym) {
 
@@ -2114,6 +2594,7 @@ void main_loop() {
         //        0xffffffff) {
         //          selected_texel_break = 1;
         //        }
+        gridbg.select_clicked = true;
       }
       if (m->button == 1) {
 
@@ -2128,6 +2609,8 @@ void main_loop() {
       break;
     }
     case SDL_WINDOWEVENT_FOCUS_LOST: {
+      skip_key = false;
+      hyper_pressed = false;
       ldown = false;
       break;
     }
@@ -2158,8 +2641,6 @@ void main_loop() {
       c2d.camera.pos.z = clamp(c2d.camera.pos.z, 0.1f, 256.0f);
     } break;
     }
-    //    fprintf(stdout, "Got an event\n");
-    //    fflush(stdout);
     if (quit_loop == 1)
       break;
     render();
@@ -2168,11 +2649,12 @@ void main_loop() {
 }
 int main(int argc, char **argv) {
   uint64_t graphics_thread_finished = 0;
+  gridbg.init();
   std::thread window_loop = std::thread([&] {
     SDL_Init(SDL_INIT_VIDEO);
 
     window = SDL_CreateWindow(
-        "RasterDBG", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 512, 512,
+        "2DBG", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 512, 512,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     // 3.2 is minimal requirement for renderdoc
@@ -2188,6 +2670,7 @@ int main(int argc, char **argv) {
     SDL_DestroyWindow(window);
     SDL_Quit();
     graphics_thread_finished = 1;
+    exit(0);
   });
 
   call_pfc(pfcInit());
@@ -2202,29 +2685,23 @@ int main(int argc, char **argv) {
   defer(free(_image_i8));
   float dp = 1.0f / (float)width;
   PRINT_CLOCKS({ (void)0; });
-  float test_x0 = -1.0f;
-  float test_y0 = 0.0f;
-  float test_x1 = 0.5f;
-  float test_y1 = 0.3f;
-  float test_x2 = 0.5f;
-  float test_y2 = 0.5f;
+
   // ~5k cycles
   Classified_Tile tiles[0x1000];
   uint32_t tile_count = 0;
   uint32_t i = 0;
-  //  while (graphics_thread_finished == 0) {
-  //    tile_count = 0;
-  //    float dx = (float)((i >> 4) & 0xff) / 255.0f;
-  //    rasterize_triangle_tiled_4x4_256x256_defer_cull(
-  //        // clang-format off
-  //          test_x0, test_y0, // p0
-  //          test_x1, test_y1, // p1
-  //          test_x2, test_y2, // p2
-  //          &tiles[0], &tile_count
-  //        // clang-format on
-  //    );
-  //    i++;
-  //  }
+  while (GRIDBG_PAUSE()) {
+    tile_count = 0;
+    rasterize_triangle_tiled_4x4_256x256_defer_cull(
+        // clang-format off
+            gridbg.v_y[0] / 256.0f, gridbg.v_x[0] / 256.0f, // p0
+            gridbg.v_y[1] / 256.0f, gridbg.v_x[1] / 256.0f,  // p1
+            gridbg.v_y[2] / 256.0f, gridbg.v_x[2] / 256.0f, // p2
+            &tiles[0], &tile_count
+        // clang-format on
+    );
+    i++;
+  }
   PRINT_CLOCKS({
     i8x16 *data = (i8x16 *)((size_t)image_i8 & (~0x1fULL));
     i8x16 v_value = broadcast_i8x16(0xff);
@@ -2511,8 +2988,8 @@ void Context2D::render_stuff() {
       color = instance_color;
       uv = instance_uv_offset + (vertex_position * vec2(1.0, -1.0) + vec2(0.0, 1.0)) * glyph_uv_size;
       vec4 sspos =  vec4(vertex_position * glyph_size + instance_offset.xy, 0.0, 1.0);
-      int pixel_x = int(viewport_size.x * (sspos.x * 0.5 + 0.5));
-      int pixel_y = int(viewport_size.y * (sspos.y * 0.5 + 0.5));
+      int pixel_x = int(viewport_size.x * (sspos.x * 0.5 + 0.5) + 0.5);
+      int pixel_y = int(viewport_size.y * (sspos.y * 0.5 + 0.5) + 0.5);
       sspos.x = 2.0 * float(pixel_x) / viewport_size.x - 1.0;
       sspos.y = 2.0 * float(pixel_y) / viewport_size.y - 1.0;
       sspos.z = instance_offset.z;
