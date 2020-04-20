@@ -179,6 +179,7 @@ struct Context2D {
     float glyphs_screen_width;
     float pixel_screen_width;
     float pixel_screen_height;
+    float fovy, fovx;
     uint32_t glyph_scale = 2;
     void update(float viewport_width, float viewport_height) {
       this->viewport_width = viewport_width;
@@ -186,13 +187,14 @@ struct Context2D {
       height_over_width = ((float)viewport_height / viewport_width);
       width_over_heigth = ((float)viewport_width / viewport_height);
       float e = (float)2.4e-7f;
-      float fov = 2.0f;
+      fovy = 2.0f;
+      fovx = 2.0f * height_over_width;
       // clang-format off
       float4 proj[4] = {
-        {fov * height_over_width/pos.z,   0.0f,          0.0f,      -2.0f * pos.x/pos.z},
-        {0.0f,                            fov/pos.z,     0.0f,      -2.0f * pos.y/pos.z},
-        {0.0f,                            0.0f,          1.0f,      0.0f},
-        {0.0f,                            0.0f,          0.0f,      1.0f}
+        {fovx/pos.z,   0.0f,          0.0f,      -fovx * pos.x/pos.z},
+        {0.0f,         fovy/pos.z,    0.0f,      -fovy * pos.y/pos.z},
+        {0.0f,         0.0f,          1.0f,      0.0f},
+        {0.0f,         0.0f,          0.0f,      1.0f}
       };
       // clang-format on
       memcpy(&this->proj[0], &proj[0], sizeof(proj));
@@ -229,8 +231,8 @@ struct Context2D {
     float2 screen_to_world(float2 p) {
       return (float2){
           //
-          p.x * pos.z * width_over_heigth * 0.5f + pos.x * width_over_heigth,
-          p.y * pos.z * 0.5f + pos.y,
+          p.x * pos.z / fovx + pos.x,
+          p.y * pos.z / fovy + pos.y,
       };
     }
     float2 window_to_world(int2 p) {
@@ -278,30 +280,32 @@ struct Context2D {
   struct Rect2D {
     float x, y, z, width, height;
     Color color;
-    bool transform = true;
+    bool world_space = true;
   };
   struct Line2D {
     float x0, y0, x1, y1, z;
     Color color;
-    bool transform = true;
+    bool world_space = true;
   };
   struct String2D {
     char const *c_str;
     float x, y, z;
     Color color;
-    bool transform = true;
+    bool world_space = true;
   };
   struct _String2D {
     char *c_str;
     uint32_t len;
     float x, y, z;
     Color color;
-    bool transform;
+    bool world_space;
   };
   void draw_rect(Rect2D p) { quad_storage.push(p); }
   void draw_line(Line2D l) { line_storage.push(l); }
   void draw_string(String2D s) {
     size_t len = strlen(s.c_str);
+    if (len == 0)
+      return;
     char *dst = char_storage.alloc(len + 1);
     memcpy(dst, s.c_str, len);
     dst[len] = '\0';
@@ -312,7 +316,7 @@ struct Context2D {
     internal_string.x = s.x;
     internal_string.y = s.y;
     internal_string.z = s.z;
-    internal_string.transform = s.transform;
+    internal_string.world_space = s.world_space;
 
     string_storage.push(internal_string);
   }
@@ -359,8 +363,10 @@ struct Context2D {
     void backspace() {
       unscroll();
       if (column > 0) {
+        ito(0x100 - column) {
+          buffer[0][column + i - 1] = buffer[0][column + i];
+        }
         column--;
-        buffer[0][column] = '\0';
       }
     }
     void newline() {
@@ -409,7 +415,52 @@ struct Context2D {
   } console;
   bool console_mode = false;
 } c2d;
-
+void draw_console() {
+  float CONSOLE_TEXT_LAYER = 102.0f / 256.0f;
+  float CONSOLE_CURSOR_LAYER = 101.0f / 256.0f;
+  float CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
+  float GLYPH_HEIGHT = c2d.camera.glyph_scale * simplefont_bitmap_glyphs_height;
+  float GLYPH_WIDTH = c2d.camera.glyph_scale * simplefont_bitmap_glyphs_width;
+  float console_bottom = GLYPH_HEIGHT * 4.0f;
+  ito(3) {
+    c2d.draw_string({.c_str = c2d.console.buffer[3 - i],
+                     .x = 0,
+                     .y = GLYPH_HEIGHT * (i + 1),
+                     .z = CONSOLE_TEXT_LAYER,
+                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+                     .world_space = false});
+  }
+  c2d.draw_string({.c_str = c2d.console.buffer[c2d.console.scroll_id],
+                   .x = 0.0f,
+                   .y = console_bottom,
+                   .z = CONSOLE_TEXT_LAYER,
+                   .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+                   .world_space = false});
+  c2d.draw_rect({//
+                 .x = 0.0f,
+                 .y = 0.0f,
+                 .z = CONSOLE_BACKGROUND_LAYER,
+                 .width = (float)c2d.camera.viewport_width,
+                 .height = console_bottom,
+                 .color = {.r = 0.8f, .g = 0.8f, .b = 0.8f},
+                 .world_space = false});
+  c2d.draw_line({//
+                 .x0 = 0.0f,
+                 .y0 = console_bottom,
+                 .x1 = (float)c2d.camera.viewport_width,
+                 .y1 = console_bottom,
+                 .z = CONSOLE_CURSOR_LAYER,
+                 .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+                 .world_space = false});
+  c2d.draw_rect({//
+                 .x = c2d.console.column * (GLYPH_WIDTH + 1.0f),
+                 .y = console_bottom,
+                 .z = CONSOLE_CURSOR_LAYER,
+                 .width = GLYPH_WIDTH,
+                 .height = -GLYPH_HEIGHT,
+                 .color = {.r = 1.0f, .g = 1.0f, .b = 1.0f},
+                 .world_space = false});
+}
 // struct RasterDBG {};
 
 // static int16_t *g_debug_grid[2] = {NULL, NULL};
@@ -1772,9 +1823,6 @@ void render() {
   float QUAD_LAYER = 1.0f / 256.0f;
   float GRID_LAYER = 2.0f / 256.0f;
   float TEXT_LAYER = 3.0f / 256.0f;
-  float CONSOLE_TEXT_LAYER = 102.0f / 256.0f;
-  float CONSOLE_CURSOR_LAYER = 101.0f / 256.0f;
-  float CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
   if (c2d.camera.pos.z < 80.0f) {
     ito(256 + 1) {
       c2d.draw_line({//
@@ -1831,47 +1879,7 @@ void render() {
                      .color = {.r = r, .g = g, .b = b}});
     }
   }
-
-  ito(3) {
-    c2d.draw_string({.c_str = c2d.console.buffer[3 - i],
-                     .x = -1.0f,
-                     .y = 1.0f - (c2d.camera.glyphs_screen_height +
-                                   c2d.camera.pixel_screen_height * 2.0f) *
-                                      (i + 1),
-                     .z = CONSOLE_TEXT_LAYER,
-                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
-                     .transform = false});
-  }
-  c2d.draw_string({.c_str = c2d.console.buffer[c2d.console.scroll_id],
-                   .x = -1.0f,
-                   .y = 1.0f - (c2d.camera.glyphs_screen_height +
-                                   c2d.camera.pixel_screen_height * 2.0f) * 4,
-                   .z = CONSOLE_TEXT_LAYER,
-                   .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
-                   .transform = false});
-  c2d.draw_rect({//
-                 .x = -1.0f,
-                 .y = 1.0f- (c2d.camera.glyphs_screen_height +
-                                   c2d.camera.pixel_screen_height * 2.0f) * 4,
-                 .z = CONSOLE_BACKGROUND_LAYER,
-                 .width = 2.0f,
-                 .height = (c2d.camera.glyphs_screen_height +
-                            c2d.camera.pixel_screen_height * 2.0f) *
-                           4,
-                 .color = {.r = 0.8f, .g = 0.8f, .b = 0.8f},
-                 .transform = false});
-  c2d.draw_rect(
-      {//
-       .x = -1.0f + c2d.console.column * (c2d.camera.glyphs_screen_width +
-                                          c2d.camera.pixel_screen_width * 1.0f),
-       .y = 1.0f- (c2d.camera.glyphs_screen_height +
-                                   c2d.camera.pixel_screen_height * 2.0f) * 4,
-       .z = CONSOLE_CURSOR_LAYER,
-       .width = c2d.camera.glyphs_screen_width,
-       .height = c2d.camera.glyphs_screen_height,
-       .color = {.r = 1.0f, .g = 1.0f, .b = 1.0f},
-       .transform = false});
-
+  draw_console();
   if (c2d.camera.pos.z < 10.0f) {
     char tmp_buf[0x100];
     auto alloc_str = [&](char const *fmt, int16_t v, float x, float y) {
@@ -2129,7 +2137,7 @@ void main_loop() {
       int dx = m->x - old_mp_x;
       int dy = m->y - old_mp_y;
       if (ldown) {
-        c2d.camera.pos.x -= c2d.camera.pos.z * (float)dx / SCREEN_WIDTH;
+        c2d.camera.pos.x -= c2d.camera.pos.z * (float)dx / SCREEN_HEIGHT;
         c2d.camera.pos.y += c2d.camera.pos.z * (float)dy / SCREEN_HEIGHT;
       }
 
@@ -2264,7 +2272,7 @@ void Context2D::render_stuff() {
       if (vertex_position.w > 0.0)
         gl_Position = vertex_position * projection;
       else
-        gl_Position = vertex_position;
+        gl_Position = vec4(vertex_position.xyz, 1.0);
   })";
     const GLchar *line_ps =
         R"(#version 420
@@ -2358,17 +2366,27 @@ void Context2D::render_stuff() {
           sizeof(Rect_Instance_GL) * max_num_quads);
       ito(max_num_quads) {
         Rect2D quad2d = *quad_storage.at(i);
-        if (quad2d.transform &&
+        if (quad2d.world_space &&
             !camera.intersects(quad2d.x, quad2d.y, quad2d.x + quad2d.width,
                                quad2d.y + quad2d.height))
           continue;
         Rect_Instance_GL quadgl;
-        quadgl.x = quad2d.x;
-        quadgl.y = quad2d.y;
-        quadgl.z = quad2d.z;
-        quadgl.w = quad2d.transform ? 1.0f : 0.0f;
-        quadgl.width = quad2d.width;
-        quadgl.height = quad2d.height;
+        if (quad2d.world_space) {
+          quadgl.x = quad2d.x;
+          quadgl.y = quad2d.y;
+          quadgl.z = quad2d.z;
+          quadgl.w = 1.0f;
+          quadgl.width = quad2d.width;
+          quadgl.height = quad2d.height;
+        } else {
+          quadgl.x = 2.0f * quad2d.x / viewport_width - 1.0f;
+          quadgl.y = -2.0f * quad2d.y / viewport_height + 1.0f;
+          quadgl.z = quad2d.z;
+          quadgl.w = 0.0f;
+          quadgl.width = 2.0f * quad2d.width / viewport_width;
+          quadgl.height = -2.0f * quad2d.height / viewport_height;
+        }
+
         quadgl.r = quad2d.color.r;
         quadgl.g = quad2d.color.g;
         quadgl.b = quad2d.color.b;
@@ -2422,17 +2440,32 @@ void Context2D::render_stuff() {
       ito(num_lines) {
         Line2D l = *line_storage.at(i);
         Line_GL lgl;
-        lgl.x0 = l.x0;
-        lgl.y0 = l.y0;
-        lgl.z0 = l.z;
-        lgl.w0 = l.transform ? 1.0f : 0.0f;
-        lgl.r0 = l.color.r;
-        lgl.g0 = l.color.g;
-        lgl.b0 = l.color.b;
-        lgl.x1 = l.x1;
-        lgl.y1 = l.y1;
-        lgl.z1 = l.z;
-        lgl.w1 = l.transform ? 1.0f : 0.0f;
+        if (l.world_space) {
+          lgl.x0 = l.x0;
+          lgl.y0 = l.y0;
+          lgl.z0 = l.z;
+          lgl.w0 = 1.0f;
+          lgl.r0 = l.color.r;
+          lgl.g0 = l.color.g;
+          lgl.b0 = l.color.b;
+          lgl.x1 = l.x1;
+          lgl.y1 = l.y1;
+          lgl.z1 = l.z;
+          lgl.w1 = 1.0f;
+        } else {
+          lgl.x0 = 2.0f * l.x0 / viewport_width - 1.0f;
+          lgl.y0 = -2.0f * l.y0 / viewport_height + 1.0f;
+          lgl.z0 = l.z;
+          lgl.w0 = 0.0f;
+          lgl.r0 = l.color.r;
+          lgl.g0 = l.color.g;
+          lgl.b0 = l.color.b;
+          lgl.x1 = 2.0f * l.x1 / viewport_width - 1.0f;
+          lgl.y1 = -2.0f * l.y1 / viewport_height + 1.0f;
+          lgl.z1 = l.z;
+          lgl.w1 = 0.0f;
+        }
+
         lgl.r1 = l.color.r;
         lgl.g1 = l.color.g;
         lgl.b1 = l.color.b;
@@ -2574,8 +2607,11 @@ void Context2D::render_stuff() {
         if (string.len == 0)
           continue;
         float2 ss = (float2){string.x, string.y};
-        if (string.transform)
+        if (string.world_space) {
           ss = camera.world_to_screen(ss);
+        } else {
+          ss = camera.window_to_screen((int2){(int32_t)ss.x, (int32_t)ss.y});
+        }
         float min_ss_x = ss.x;
         float min_ss_y = ss.y;
         float max_ss_x =
