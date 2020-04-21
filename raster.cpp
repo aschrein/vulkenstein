@@ -498,14 +498,18 @@ struct Context2D {
 struct Dbg_Command {
   enum class Command_t {
     GOTO,
+    LOG_ALL,
     EXIT,
     NEXT,
     CONTINUE,
     START,
     BREAK,
+    HARD_BREAK,
     CLEAR,
     SELECT_VERTEX,
     MOVE_VERTEX,
+    MOVE_CAMERA,
+    SET_MODE,
     DUMP,
     UNKNOWN
   };
@@ -518,10 +522,22 @@ struct Dbg_Command {
   float farg1;
   float farg2;
   float farg3;
+  char c[0x20];
+  bool cmp(char const *str) { return token_match(c, str, strlen(c)); }
+  void copy_tkn(char const *tkn, size_t tkn_len) {
+    memcpy(c, tkn, MIN(sizeof(c), tkn_len));
+    c[MIN(sizeof(c) - 1, tkn_len)] = '\0';
+  }
   bool parse_decimal_int(char const *str, size_t len, int32_t *result) {
     int32_t final = 0;
     int32_t pow = 1;
-    ito(len) {
+    int32_t sign = 1;
+    uint32_t i = 0;
+    if (str[0] == '-') {
+      sign = -1;
+      i = 1;
+    }
+    for (; i < len; ++i) {
       switch (str[len - 1 - i]) {
       case '0':
         break;
@@ -557,12 +573,17 @@ struct Dbg_Command {
       }
       pow *= 10;
     }
-    *result = final;
+    *result = sign * final;
     return true;
   }
   bool parse_float(char const *str, size_t len, float *result) {
     float final = 0.0f;
     uint32_t i = 0;
+    float sign = 1.0f;
+    if (str[0] == '-') {
+      sign = -1.0f;
+      i = 1;
+    }
     for (; i < len; ++i) {
       if (str[i] == '.')
         break;
@@ -639,7 +660,7 @@ struct Dbg_Command {
       }
       pow *= 1.0e-1f;
     }
-    *result = final;
+    *result = sign * final;
     return true;
   }
   bool token_match(char const *tkn, char const *str, size_t tkn_len) {
@@ -716,18 +737,43 @@ struct Dbg_Command {
           return false;
         if (!parse_float(tkns[2].start, tkns[2].len, &farg1))
           return false;
-        fprintf(stdout, "%f %f\n", farg0, farg1);
-        fflush(stdout);
         type = Command_t::MOVE_VERTEX;
         return true;
       }
+      if (token_match(tkns[0].start, "movc", tkns[0].len)) {
+        if (num_tokens != 4)
+          return false;
+        if (!parse_float(tkns[1].start, tkns[1].len, &farg0))
+          return false;
+        if (!parse_float(tkns[2].start, tkns[2].len, &farg1))
+          return false;
+        if (!parse_float(tkns[3].start, tkns[3].len, &farg2))
+          return false;
+        type = Command_t::MOVE_CAMERA;
+        return true;
+      }
+      if (token_match(tkns[0].start, "setm", tkns[0].len)) {
+        if (num_tokens != 2)
+          return false;
+        copy_tkn(tkns[1].start, tkns[1].len);
+        type = Command_t::SET_MODE;
+        return true;
+      }
+      if (token_match(tkns[0].start, "clear", tkns[0].len)) {
+        if (num_tokens != 2)
+          return false;
+        copy_tkn(tkns[1].start, tkns[1].len);
+        type = Command_t::CLEAR;
+        return true;
+      }
       CMD_NOARG(exit, EXIT);
+      CMD_NOARG(log_all, LOG_ALL);
       CMD_NOARG(dump, DUMP);
       CMD_NOARG(n, NEXT);
       CMD_NOARG(c, CONTINUE);
       CMD_NOARG(b, BREAK);
+      CMD_NOARG(hb, HARD_BREAK);
       CMD_NOARG(s, START);
-      CMD_NOARG(clear, CLEAR);
 
 #undef CMD_NOARG
     }
@@ -749,6 +795,8 @@ struct CV_Wrapper {
     cv.notify_one();
   }
 };
+enum class Selection_t { NONE = 0, CELL, VERTEX };
+enum class Impl_Mode_t { NONE = 0, REF, OPT };
 template <uint32_t H, uint32_t W, typename Cell_t> //
 struct Gridbg {
   Cell_t *grid;
@@ -756,22 +804,47 @@ struct Gridbg {
   CV_Wrapper break_cv;
   CV_Wrapper pause_cv;
   std::atomic<bool> run;
+  std::atomic<bool> log_all;
   std::atomic<size_t> current_grid;
-  std::atomic<size_t> break_requested;
+  std::atomic<bool> break_requested;
+  std::atomic<bool> hard_break_requested;
   uint32_t cur_i;
   uint32_t cur_j;
+
   // Debug triangle
   float v_x[3];
   float v_y[3];
   uint32_t cur_v;
-  enum Selection_t { NONE = 0, CELL, VERTEX };
   Selection_t selection_type;
+  Impl_Mode_t impl_mode;
 
   bool select_clicked = false;
+  void save() {
+    FILE *save = fopen("save.txt", "wb");
+    ito(3) {
+      fprintf(save, "selv %i\n", i);
+      fprintf(save, "mov %f %f\n", v_x[i], v_y[i]);
+    }
+    if (log_all) {
+      fprintf(save, "log_all\n");
+    }
+    if (selection_type == Selection_t::CELL)
+      fprintf(save, "goto %i %i\n", cur_i, cur_j);
+    fprintf(save, "movc %f %f %f\n", c2d.camera.pos.x, c2d.camera.pos.y,
+            c2d.camera.pos.z);
+    if (impl_mode == Impl_Mode_t::REF) {
+      fprintf(save, "setm ref\n");
+    } else if (impl_mode == Impl_Mode_t::OPT) {
+      fprintf(save, "setm opt\n");
+    }
+    fprintf(save, "s\n");
+    fflush(save);
+    fclose(save);
+  }
   void init() {
     grid = (Cell_t *)malloc(W * H * sizeof(Cell_t));
     memset(grid, 0, W * H * sizeof(Cell_t));
-    clear();
+    clear_all();
     {
       ts.enter_scope();
       defer(ts.exit_scope());
@@ -811,6 +884,10 @@ struct Gridbg {
       c2d.frame_end();
       ts.exit_scope();
     });
+    if (select_clicked && selection_type == Selection_t::VERTEX) {
+      selection_type = Selection_t::CELL;
+      select_clicked = false;
+    }
     float dx = 1.0f;
     float dy = 1.0f;
     float size_x = 256.0f;
@@ -871,9 +948,7 @@ struct Gridbg {
                      .z = TEXT_LAYER,
                      .color = {.r = 1.0f, .g = 0.0f, .b = 0.0f}});
     }
-    if (selection_type == Selection_t::CELL) {
-      uint32_t i = cur_i;
-      uint32_t j = cur_j;
+    auto draw_frame = [&](uint32_t i, uint32_t j, float r, float g, float b) {
       float thickness = 0.01f * c2d.camera.pos.z;
       c2d.draw_rect({//
                      .x = dx * j - thickness,
@@ -881,28 +956,33 @@ struct Gridbg {
                      .z = TEXT_LAYER,
                      .width = thickness,
                      .height = 1.0f + 2.0f * thickness,
-                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+                     .color = {.r = r, .g = g, .b = b}});
       c2d.draw_rect({//
                      .x = dx * (j + 1.0f),
                      .y = dy * i - thickness,
                      .z = TEXT_LAYER,
                      .width = thickness,
                      .height = 1.0f + 2.0f * thickness,
-                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+                     .color = {.r = r, .g = g, .b = b}});
       c2d.draw_rect({//
                      .x = dx * j - thickness,
                      .y = dy * (i + 1),
                      .z = TEXT_LAYER,
                      .width = 1.0f + 2.0f * thickness,
                      .height = thickness,
-                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+                     .color = {.r = r, .g = g, .b = b}});
       c2d.draw_rect({//
                      .x = dx * j - thickness,
                      .y = dy * i - thickness,
                      .z = TEXT_LAYER,
                      .width = 1.0f + 2.0f * thickness,
                      .height = thickness,
-                     .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+                     .color = {.r = r, .g = g, .b = b}});
+    };
+    if (selection_type == Selection_t::CELL) {
+      uint32_t i = cur_i;
+      uint32_t j = cur_j;
+      draw_frame(i, j, 0.0f, 0.0f, 0.0f);
     }
 
     ito(H) {
@@ -917,13 +997,12 @@ struct Gridbg {
             c2d.camera.mouse_world_x < dx * (j + 1) &&
             c2d.camera.mouse_world_y > dy * i &&
             c2d.camera.mouse_world_y < dy * (i + 1)) {
-          if (select_clicked) {
-            selection_type = Selection_t::CELL;
+          if (select_clicked && selection_type == Selection_t::CELL) {
             cur_i = i;
             cur_j = j;
             select_clicked = false;
           }
-          r = 1.0f;
+          draw_frame(i, j, 1.0f, 0.0f, 0.0f);
         }
         if (c2d.camera.pos.z < 160.0f) {
           c2d.draw_rect({//
@@ -933,6 +1012,16 @@ struct Gridbg {
                          .width = 1.0f,
                          .height = 1.0f,
                          .color = {.r = r, .g = g, .b = b}});
+        }
+        if (c2d.camera.pos.z < 60.0f) {
+          float point_size = 1.0e-2f;
+          c2d.draw_rect({//
+                         .x = dx * (j + 0.5f) - point_size,
+                         .y = dy * (i + 0.5f) - point_size,
+                         .z = TEXT_LAYER,
+                         .width = point_size,
+                         .height = point_size,
+                         .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
         }
       }
     }
@@ -1038,22 +1127,53 @@ struct Gridbg {
       }
       case Dbg_Command::Command_t::EXIT: {
         run = false;
+        save();
         global_resume();
       }
       case Dbg_Command::Command_t::BREAK: {
         set_break();
         break;
       }
+      case Dbg_Command::Command_t::SET_MODE: {
+        if (cmd.cmp("ref")) {
+          impl_mode = Impl_Mode_t::REF;
+        } else if (cmd.cmp("opt")) {
+          impl_mode = Impl_Mode_t::OPT;
+        } else {
+          c2d.console.put_line("unknown mode");
+        }
+
+        break;
+      }
+      case Dbg_Command::Command_t::LOG_ALL: {
+        log_all = !log_all;
+        if (log_all)
+          c2d.console.put_line("log all enabled");
+        else
+          c2d.console.put_line("log all disabled");
+        break;
+      }
+      case Dbg_Command::Command_t::HARD_BREAK: {
+        hard_break_requested = true;
+        break;
+      }
       case Dbg_Command::Command_t::CONTINUE: {
+        hard_break_requested = false;
         set_continue();
         break;
       }
       case Dbg_Command::Command_t::CLEAR: {
-        clear();
+        if (cmd.cmp("all")) {
+          clear_all();
+        } else if (cmd.cmp("log")) {
+          clear_logs();
+        } else {
+          c2d.console.put_line("unknown mode");
+        }
+
         break;
       }
       case Dbg_Command::Command_t::SELECT_VERTEX: {
-        clear();
         selection_type = Selection_t::VERTEX;
         cur_v = cmd.iarg0;
         break;
@@ -1064,13 +1184,7 @@ struct Gridbg {
         break;
       }
       case Dbg_Command::Command_t::DUMP: {
-        FILE *save = fopen("save.txt", "wb");
-        ito(3) {
-          fprintf(save, "selv %i\n", i);
-          fprintf(save, "mov %f %f\n", v_x[i], v_y[i]);
-        }
-        fflush(save);
-        fclose(save);
+        save();
         break;
       }
       case Dbg_Command::Command_t::MOVE_VERTEX: {
@@ -1083,6 +1197,12 @@ struct Gridbg {
         }
         break;
       }
+      case Dbg_Command::Command_t::MOVE_CAMERA: {
+        c2d.camera.pos.x = cmd.farg0;
+        c2d.camera.pos.y = cmd.farg1;
+        c2d.camera.pos.z = cmd.farg2;
+        break;
+      }
       default:
         UNIMPLEMENTED;
       }
@@ -1090,9 +1210,14 @@ struct Gridbg {
       c2d.console.put_line("[ERROR] Unknown command!");
     }
   }
-  void clear() {
+  void clear_all() {
     ito(H) {
-      jto(W) { get_cell(i, j)->clear(); }
+      jto(W) { get_cell(i, j)->clear_all(); }
+    }
+  }
+  void clear_logs() {
+    ito(H) {
+      jto(W) { get_cell(i, j)->clear_logs(); }
     }
   }
   void next() { break_cv.notify_one(); }
@@ -1106,7 +1231,7 @@ struct Gridbg {
 
   // client functions
   void put_line(uint32_t i, uint32_t j, char const *fmt, ...) {
-    if (i == cur_i && j == cur_j) {
+    if (log_all || i == cur_i && j == cur_j) {
       std::lock_guard<std::mutex> lock(grid_mutex);
       char buffer[0x100];
       va_list args;
@@ -1140,10 +1265,7 @@ struct Raster_Cell {
   char *log[LOG_SIZE];
   float r, g, b;
   void release() {
-    ito(LOG_SIZE) {
-      if (log[i] != NULL)
-        free((void *)log[i]);
-    }
+    clear_logs();
     memset(this, 0, sizeof(*this));
   }
   void put_line(char const *str) {
@@ -1162,15 +1284,30 @@ struct Raster_Cell {
     this->g = g;
     this->b = b;
   }
-  void clear() {
+  void clear_all() {
     release();
     r = 0.4f;
     g = 0.4f;
     b = 0.4f;
   }
+  void clear_logs() {
+
+    ito(LOG_SIZE) {
+      if (log[i] != NULL)
+        free((void *)log[i]);
+      log[i] = NULL;
+    }
+  }
 };
 Gridbg<256, 256, Raster_Cell> gridbg;
-#define GRIDBG_START(i, j) gridbg.on_start(i, j)
+#define debug_break __asm__("int3")
+#define GRIDBG_START(i, j)                                                     \
+  {                                                                            \
+    if (gridbg.hard_break_requested) {                                         \
+      debug_break;                                                             \
+    }                                                                          \
+    gridbg.on_start(i, j);                                                     \
+  }
 #define GRIDBG_PAUSE() gridbg.on_pause()
 #define GRIDBG_BREAK(i, j) gridbg.on_break(i, j)
 #define GRIDBG_END(i, j) gridbg.on_end(i, j)
@@ -1456,7 +1593,106 @@ struct Classified_Tile {
 #pragma pack(pop)
 
 static_assert(sizeof(Classified_Tile) == 4, "incorrect padding");
-#define debug_break __asm__("int3")
+
+void rasterize_triangle_tiled_1x1_256x256_defer_ref(
+    float _x0, float _y0, float _x1, float _y1, float _x2, float _y2,
+    Classified_Tile *tile_buffer, uint32_t *tile_count) {
+  float k = 256.0f;
+  float x0 = vki::clamp(_x0 * k, 0.0f, 256.0f);
+  float y0 = vki::clamp(_y0 * k, 0.0f, 256.0f);
+  float x1 = vki::clamp(_x1 * k, 0.0f, 256.0f);
+  float y1 = vki::clamp(_y1 * k, 0.0f, 256.0f);
+  float x2 = vki::clamp(_x2 * k, 0.0f, 256.0f);
+  float y2 = vki::clamp(_y2 * k, 0.0f, 256.0f);
+
+  float n0_x = -(y1 - y0);
+  float n0_y = (x1 - x0);
+  float n1_x = -(y2 - y1);
+  float n1_y = (x2 - x1);
+  float n2_x = -(y0 - y2);
+  float n2_y = (x0 - x2);
+
+  float min_x = MIN(x0, MIN(x1, x2));
+  float max_x = MAX(x0, MAX(x1, x2));
+  float min_y = MIN(y0, MIN(y1, y2));
+  float max_y = MAX(y0, MAX(y1, y2));
+
+  int16_t imin_x = (int16_t)(min_x + 0.5f);
+  int16_t imax_x = (int16_t)(max_x + 0.5f);
+  int16_t imin_y = (int16_t)(min_y + 0.5f);
+  int16_t imax_y = (int16_t)(max_y + 0.5f);
+
+  imin_x &= (~0b11);
+  imin_y &= (~0b11);
+  imax_x = (imax_x + 0b11) & (~0b11);
+  imax_y = (imax_y + 0b11) & (~0b11);
+
+  min_x = (float)imin_x + 0.5f;
+  max_x = (float)imax_x + 0.5f;
+  min_y = (float)imin_y + 0.5f;
+  max_y = (float)imax_y + 0.5f;
+
+  float e0_0 = n0_x * (min_x - x0) + n0_y * (min_y - y0);
+  float e1_0 = n1_x * (min_x - x1) + n1_y * (min_y - y1);
+  float e2_0 = n2_x * (min_x - x2) + n2_y * (min_y - y2);
+
+  uint8_t min_y_tile = 0xff & (imin_y >> 2);
+  uint8_t max_y_tile = 0xff & (imax_y >> 2);
+  uint8_t min_x_tile = 0xff & (imin_x >> 2);
+  uint8_t max_x_tile = 0xff & (imax_x >> 2);
+  // clang-format on
+  uint32_t _tile_count = *tile_count;
+  // ~15 cycles per tile
+  for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
+    float e0_1 = e0_0;
+    float e1_1 = e1_0;
+    float e2_1 = e2_0;
+    for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
+      uint16_t mask = 0;
+      float e0_2 = e0_1;
+      float e1_2 = e1_1;
+      float e2_2 = e2_1;
+      ito(4) {
+        float e0_3 = e0_2;
+        float e1_3 = e1_2;
+        float e2_3 = e2_2;
+        jto(4) {
+          uint32_t idx = x * 4 + j;
+          uint32_t idy = y * 4 + i;
+          GRIDBG_START(idx, idy);
+          uint16_t e0_sign = e0_3 < 0.0f ? 1 : 0;
+          uint16_t e1_sign = e1_3 < 0.0f ? 1 : 0;
+          uint16_t e2_sign = e2_3 < 0.0f ? 1 : 0;
+          GRIDBG_PUTLINE(idx, idy, "e0=%f\n", e0_3);
+          GRIDBG_PUTLINE(idx, idy, "e1=%f\n", e1_3);
+          GRIDBG_PUTLINE(idx, idy, "e2=%f\n", e2_3);
+          uint16_t mask_1 = (e0_sign | e1_sign | e2_sign);
+          GRIDBG_SETCOLOR(idx, idy, mask_1 ? 0.0f : 0.8f, 0.8f, 0.6f);
+          mask = mask | ((mask_1 & 1) << ((i << 2) | j));
+          e0_3 += n0_x;
+          e1_3 += n1_x;
+          e2_3 += n2_x;
+          GRIDBG_END(idx, idy);
+        }
+        e0_2 += n0_y;
+        e1_2 += n1_y;
+        e2_2 += n2_y;
+      }
+      if (mask != 0xffff) {
+        tile_buffer[_tile_count] = {x, y, (uint16_t)~mask};
+        _tile_count = _tile_count + 1;
+      }
+      e0_1 += n0_x * 4;
+      e1_1 += n1_x * 4;
+      e2_1 += n2_x * 4;
+    }
+    e0_0 += n0_y * 4;
+    e1_0 += n1_y * 4;
+    e2_0 += n2_y * 4;
+  };
+  *tile_count = _tile_count;
+}
+
 void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
                                                 float _y1, float _x2, float _y2,
                                                 Classified_Tile *tile_buffer,
@@ -1499,15 +1735,6 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
   uint8_t max_x_tile = 0xff & (max_x >> 2);
   // clang-format on
   uint32_t _tile_count = *tile_count;
-  //  // DEBUG
-  //  uint64_t next_grid = (g_current_grid + 1) & 1;
-  //  std::lock_guard<std::mutex> lock(g_debug_grid_mutexes[next_grid]);
-  //  if (g_debug_grid[next_grid] == NULL) {
-  //    g_debug_grid[next_grid] = (int16_t *)malloc(256 * 256 * 2 * 3);
-  //    g_debug_grid_size = 256;
-  //  }
-  //  memset(g_debug_grid[next_grid], 0, 256 * 256 * 2 * 3);
-  //  // DEBUG
   // ~15 cycles per tile
   for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
     int16_t e0_1 = e0_0;
@@ -1530,8 +1757,8 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
           uint16_t e1_sign = (uint16_t)e1_3 >> 15;
           uint16_t e2_sign = (uint16_t)e2_3 >> 15;
           GRIDBG_PUTLINE(idx, idy, "e0=%i\n", e0_3);
-          GRIDBG_PUTLINE(idx, idy, "e1=%i\n", e0_3);
-          GRIDBG_PUTLINE(idx, idy, "e2=%i\n", e0_3);
+          GRIDBG_PUTLINE(idx, idy, "e1=%i\n", e1_3);
+          GRIDBG_PUTLINE(idx, idy, "e2=%i\n", e2_3);
           uint16_t mask_1 = (e0_sign | e1_sign | e2_sign);
           GRIDBG_SETCOLOR(idx, idy, mask_1 ? 0.0f : 0.8f, 0.8f, 0.6f);
           mask = mask | ((mask_1 & 1) << ((i << 2) | j));
@@ -1557,9 +1784,6 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
     e2_0 += n2_y * 4;
   };
   *tile_count = _tile_count;
-  //          // DEBUG
-  //  g_current_grid = next_grid;
-  //          // DEBUG
 }
 
 void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
@@ -1852,15 +2076,19 @@ void rasterize_triangle_tiled_4x4_256x256_defer_cull(
   if (num_vertices < 3)
     return;
   ito(num_vertices - 2) {
-    // DEBUG
-    //    if (i == 0)
-    //      continue;
-    //
-    rasterize_triangle_tiled_1x1_256x256_defer( //
-        vertices[i + 2].x, vertices[i + 2].y,   //
-        vertices[i + 1].x, vertices[i + 1].y,   //
-        vertices[0].x, vertices[0].y,           //
-        tile_buffer, tile_count);
+    if (gridbg.impl_mode == Impl_Mode_t::REF) {
+      rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+          vertices[i + 2].x, vertices[i + 2].y,       //
+          vertices[i + 1].x, vertices[i + 1].y,       //
+          vertices[0].x, vertices[0].y,               //
+          tile_buffer, tile_count);
+    } else {
+      rasterize_triangle_tiled_1x1_256x256_defer( //
+          vertices[i + 2].x, vertices[i + 2].y,   //
+          vertices[i + 1].x, vertices[i + 1].y,   //
+          vertices[0].x, vertices[0].y,           //
+          tile_buffer, tile_count);
+    }
   }
 }
 
@@ -2467,11 +2695,6 @@ GLuint create_program(GLchar const *vsrc, GLchar const *fsrc) {
 
 void render() {
 
-  static int init = [] {
-    c2d.camera.pos = (float3){0.0, 0.0, 2.0};
-    return 0;
-  }();
-
   // Update delta time
   double last_time = my_clock();
   double cur_time = my_clock();
@@ -2499,16 +2722,16 @@ void main_loop() {
 
   float camera_speed = 1.0f;
   static bool ldown = false;
-  static bool quit_loop = 0;
   static int old_mp_x = 0;
   static int old_mp_y = 0;
   static bool hyper_pressed = false;
   static bool skip_key = false;
+  SDL_StartTextInput();
   while (SDL_WaitEvent(&event)) {
     SDL_GetWindowSize(window, &SCREEN_WIDTH, &SCREEN_HEIGHT);
     switch (event.type) {
     case SDL_QUIT: {
-      quit_loop = 1;
+      gridbg.try_command("exit");
       break;
     }
     case SDL_KEYUP: {
@@ -2523,10 +2746,17 @@ void main_loop() {
       }
       break;
     }
+    case SDL_TEXTINPUT: {
+      uint32_t c = event.text.text[0];
+      //                printf("%s\n", event.text.text);
+      if (c >= 0x20 && c <= 0x7e) {
+        c2d.console.put_char((char)c);
+      }
+    } break;
     case SDL_KEYDOWN: {
       uint32_t c = event.key.keysym.sym;
-      //      fprintf(stdout, "down %i\n", event.key.keysym.scancode);
-      //      fflush(stdout);
+      //            fprintf(stdout, "down %i\n", event.key.keysym.sym);
+      //            fflush(stdout);
       if (event.key.keysym.scancode == 258)
         break;
       if (event.key.keysym.scancode == 57) {
@@ -2540,9 +2770,7 @@ void main_loop() {
       }
       //      if (hyper_pressed)
       //        skip_key = true;
-      if (c >= 0x20 && c <= 0x7e) {
-        c2d.console.put_char((char)c);
-      }
+
       if (event.key.keysym.sym == SDLK_BACKSPACE) {
         c2d.console.backspace();
       }
@@ -2564,24 +2792,8 @@ void main_loop() {
       }
       switch (event.key.keysym.sym) {
 
-      case SDLK_w: {
-
-        break;
-      }
       case SDLK_ESCAPE: {
-        quit_loop = 1;
-        break;
-      }
-      case SDLK_s: {
-
-        break;
-      }
-      case SDLK_a: {
-
-        break;
-      }
-      case SDLK_d: {
-
+        gridbg.try_command("exit");
         break;
       }
       }
@@ -2641,7 +2853,7 @@ void main_loop() {
       c2d.camera.pos.z = clamp(c2d.camera.pos.z, 0.1f, 256.0f);
     } break;
     }
-    if (quit_loop == 1)
+    if (gridbg.run == false)
       break;
     render();
     SDL_UpdateWindowSurface(window);
@@ -2654,7 +2866,7 @@ int main(int argc, char **argv) {
     SDL_Init(SDL_INIT_VIDEO);
 
     window = SDL_CreateWindow(
-        "2DBG", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 512, 512,
+        "2DBG", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1024, 1024,
         SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     // 3.2 is minimal requirement for renderdoc
@@ -2670,7 +2882,6 @@ int main(int argc, char **argv) {
     SDL_DestroyWindow(window);
     SDL_Quit();
     graphics_thread_finished = 1;
-    exit(0);
   });
 
   call_pfc(pfcInit());
@@ -2691,11 +2902,13 @@ int main(int argc, char **argv) {
   uint32_t tile_count = 0;
   uint32_t i = 0;
   while (GRIDBG_PAUSE()) {
+    if (graphics_thread_finished == 1)
+      break;
     tile_count = 0;
     rasterize_triangle_tiled_4x4_256x256_defer_cull(
         // clang-format off
             gridbg.v_y[0] / 256.0f, gridbg.v_x[0] / 256.0f, // p0
-            gridbg.v_y[1] / 256.0f, gridbg.v_x[1] / 256.0f,  // p1
+            gridbg.v_y[1] / 256.0f, gridbg.v_x[1] / 256.0f, // p1
             gridbg.v_y[2] / 256.0f, gridbg.v_x[2] / 256.0f, // p2
             &tiles[0], &tile_count
         // clang-format on
