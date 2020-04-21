@@ -1,14 +1,14 @@
 // clang-format off
 // origin: Tamsyn
 
-const uint32_t simplefont_bitmap_width           = 128;
-const uint32_t simplefont_bitmap_height          = 128;
-const uint32_t simplefont_bitmap_glyphs_per_row  = 16;
-const uint32_t simplefont_bitmap_glyphs_width    = 8;
-const uint32_t simplefont_bitmap_glyphs_pad_x    = 0;
-const uint32_t simplefont_bitmap_glyphs_pad_y    = 0;
-const uint32_t simplefont_bitmap_glyphs_height   = 16;
-char const *simplefont_bitmap[] = {
+static const uint32_t simplefont_bitmap_width           = 128;
+static const uint32_t simplefont_bitmap_height          = 128;
+static const uint32_t simplefont_bitmap_glyphs_per_row  = 16;
+static const uint32_t simplefont_bitmap_glyphs_width    = 8;
+static const uint32_t simplefont_bitmap_glyphs_pad_x    = 0;
+static const uint32_t simplefont_bitmap_glyphs_pad_y    = 0;
+static const uint32_t simplefont_bitmap_glyphs_height   = 16;
+static char const *simplefont_bitmap[] = {
 "                                                                                                                                ",
 "                  *  *                                     *                                                                    ",
 "           *      *  *              *             **       *         *    *                                                   * ",
@@ -139,3 +139,26 @@ char const *simplefont_bitmap[] = {
 "                                                                                                                                ",
 };
 // clang-format on
+static char const *g_random_colors[]{
+    "#778899", "#800080", "#9ACD32", "#8B0000", "#808080", "#FFEFD5", "#FF6347",
+    "#008B8B", "#1E90FF", "#00FA9A", "#D2691E", "#8B008B", "#00CED1", "#006400",
+    "#4169E1", "#000000", "#F0FFFF", "#8FBC8F", "#708090", "#CD5C5C", "#F0FFF0",
+    "#7B68EE", "#F8F8FF", "#6495ED", "#00FFFF", "#228B22", "#008080", "#FAEBD7",
+    "#191970", "#A52A2A", "#48D1CC", "#DC143C", "#FFDEAD", "#EE82EE", "#DB7093",
+    "#FF69B4", "#00BFFF", "#B22222", "#008000", "#696969", "#7FFFD4", "#FFFFFF",
+    "#9400D3", "#FFA07A", "#F08080", "#FF8C00", "#66CDAA", "#FFDAB9", "#FFE4B5",
+    "#DA70D6", "#FFFAFA", "#9932CC", "#BA55D3", "#D3D3D3", "#F5F5F5", "#808000",
+    "#FF7F50", "#4682B4", "#98FB98", "#FF0000", "#9966CC", "#F0E68C", "#3CB371",
+    "#FFF8DC", "#B0E0E6", "#DEB887", "#40E0D0", "#BDB76B", "#7B68EE", "#FF00FF",
+    "#ADFF2F", "#800000", "#0000CD", "#4B0082", "#DAA520", "#B0C4DE", "#7CFC00",
+    "#FFF5EE", "#FF4500", "#FFFACD", "#FFC0CB", "#FFE4C4", "#2E8B57", "#A0522D",
+    "#8B4513", "#00FF7F", "#FAF0E6", "#FF00FF", "#E9967A", "#FFF0F5", "#FFD700",
+    "#00FF00", "#483D8B", "#DDA0DD", "#FAFAD2", "#000080", "#FFEBCD", "#2F4F4F",
+    "#AFEEEE", "#F5FFFA", "#FA8072", "#0000FF", "#EEE8AA", "#BC8F8F", "#F5DEB3",
+    "#20B2AA", "#00008B", "#32CD32", "#C71585", "#87CEFA", "#E6E6FA", "#FFE4E1",
+    "#6A5ACD", "#F4A460", "#FF1493", "#6B8E23", "#90EE90", "#556B2F", "#5F9EA0",
+    "#CD853F", "#7FFF00", "#DCDCDC", "#FFFF00", "#ADD8E6", "#FDF5E6", "#FFFFE0",
+    "#A9A9A9", "#B8860B", "#FFA500", "#FFFAF0", "#8A2BE2", "#D8BFD8", "#FFA07A",
+    "#F5F5DC", "#87CEEB", "#00FFFF", "#FFFFF0", "#9370DB", "#E0FFFF", "#F0F8FF",
+    "#C0C0C0", "#FFB6C1", "#D2B48C",
+};

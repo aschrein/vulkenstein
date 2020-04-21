@@ -795,6 +795,23 @@ struct CV_Wrapper {
     cv.notify_one();
   }
 };
+float3 parse_color(char const *str) {
+  ASSERT_ALWAYS(str[0] == '#');
+  auto hex_to_decimal = [](char c) {
+    if (c >= '0' && c <= '9') {
+      return (uint32_t)c - (uint32_t)'0';
+    } else if (c >= 'a' && c <= 'f') {
+      return 10 + (uint32_t)c - (uint32_t)'a';
+    } else if (c >= 'A' && c <= 'F') {
+      return 10 + (uint32_t)c - (uint32_t)'A';
+    }
+    UNIMPLEMENTED;
+  };
+  uint32_t r = hex_to_decimal(str[1]) * 16 + hex_to_decimal(str[2]);
+  uint32_t g = hex_to_decimal(str[3]) * 16 + hex_to_decimal(str[4]);
+  uint32_t b = hex_to_decimal(str[5]) * 16 + hex_to_decimal(str[6]);
+  return (float3){(float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f};
+}
 enum class Selection_t { NONE = 0, CELL, VERTEX };
 enum class Impl_Mode_t { NONE = 0, REF, OPT };
 template <uint32_t H, uint32_t W, typename Cell_t> //
@@ -990,9 +1007,11 @@ struct Gridbg {
         if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
           continue;
         Cell_t *cell = get_cell(i, j);
-        float r = cell->r;
-        float g = cell->g;
-        float b = cell->b;
+        float3 rand_color =
+            parse_color(g_random_colors[cell->hits * 8 + cell->misses]);
+        float r = rand_color.r; // vki::clamp(cell->r, 0.0f, 1.0f);
+        float g = rand_color.g; // vki::clamp(cell->g, 0.0f, 1.0f);
+        float b = rand_color.b; // vki::clamp(cell->b, 0.0f, 1.0f);
         if (c2d.camera.mouse_world_x > dx * j &&
             c2d.camera.mouse_world_x < dx * (j + 1) &&
             c2d.camera.mouse_world_y > dy * i &&
@@ -1247,7 +1266,21 @@ struct Gridbg {
     get_cell(i, j)->set_color(r, g, b);
     //}
   }
+  void add_color(uint32_t i, uint32_t j, float r, float g, float b) {
+    // if (i == cur_i && j == cur_j) {
+    std::lock_guard<std::mutex> lock(grid_mutex);
+    get_cell(i, j)->add_color(r, g, b);
+    //}
+  }
   void on_start(uint32_t i, uint32_t j) {}
+  void on_hit(uint32_t i, uint32_t j) {
+    std::lock_guard<std::mutex> lock(grid_mutex);
+    get_cell(i, j)->on_hit();
+  }
+  void on_miss(uint32_t i, uint32_t j) {
+    std::lock_guard<std::mutex> lock(grid_mutex);
+    get_cell(i, j)->on_miss();
+  }
   bool on_pause() {
     pause_cv.wait();
     return run;
@@ -1264,6 +1297,8 @@ struct Raster_Cell {
   // Need to use long lived allocations
   char *log[LOG_SIZE];
   float r, g, b;
+  uint32_t hits;
+  uint32_t misses;
   void release() {
     clear_logs();
     memset(this, 0, sizeof(*this));
@@ -1284,12 +1319,19 @@ struct Raster_Cell {
     this->g = g;
     this->b = b;
   }
+  void add_color(float r, float g, float b) {
+    this->r += r;
+    this->g += g;
+    this->b += b;
+  }
   void clear_all() {
     release();
     r = 0.4f;
     g = 0.4f;
     b = 0.4f;
   }
+  void on_hit() { hits++; }
+  void on_miss() { misses++; }
   void clear_logs() {
 
     ito(LOG_SIZE) {
@@ -1313,6 +1355,9 @@ Gridbg<256, 256, Raster_Cell> gridbg;
 #define GRIDBG_END(i, j) gridbg.on_end(i, j)
 #define GRIDBG_PUTLINE(i, j, fmt, ...) gridbg.put_line(i, j, fmt, __VA_ARGS__)
 #define GRIDBG_SETCOLOR(i, j, r, g, b) gridbg.set_color(i, j, r, g, b)
+#define GRIDBG_ADDCOLOR(i, j, r, g, b) gridbg.add_color(i, j, r, g, b)
+#define GRIDBG_HIT(i, j) gridbg.on_hit(i, j)
+#define GRIDBG_MISS(i, j) gridbg.on_miss(i, j)
 #endif // RASTER_EXE
 
 uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
@@ -1659,20 +1704,24 @@ void rasterize_triangle_tiled_1x1_256x256_defer_ref(
         jto(4) {
           uint32_t idx = x * 4 + j;
           uint32_t idy = y * 4 + i;
-          GRIDBG_START(idx, idy);
+          GRIDBG_START(idy, idx);
           uint16_t e0_sign = e0_3 < 0.0f ? 1 : 0;
           uint16_t e1_sign = e1_3 < 0.0f ? 1 : 0;
           uint16_t e2_sign = e2_3 < 0.0f ? 1 : 0;
-          GRIDBG_PUTLINE(idx, idy, "e0=%f\n", e0_3);
-          GRIDBG_PUTLINE(idx, idy, "e1=%f\n", e1_3);
-          GRIDBG_PUTLINE(idx, idy, "e2=%f\n", e2_3);
+          GRIDBG_PUTLINE(idy, idx, "e0=%f\n", e0_3);
+          GRIDBG_PUTLINE(idy, idx, "e1=%f\n", e1_3);
+          GRIDBG_PUTLINE(idy, idx, "e2=%f\n", e2_3);
           uint16_t mask_1 = (e0_sign | e1_sign | e2_sign);
-          GRIDBG_SETCOLOR(idx, idy, mask_1 ? 0.0f : 0.8f, 0.8f, 0.6f);
+          if (mask_1 == 0) {
+            GRIDBG_HIT(idy, idx);
+          } else {
+            GRIDBG_MISS(idy, idx);
+          }
           mask = mask | ((mask_1 & 1) << ((i << 2) | j));
           e0_3 += n0_x;
           e1_3 += n1_x;
           e2_3 += n2_x;
-          GRIDBG_END(idx, idy);
+          GRIDBG_END(idy, idx);
         }
         e0_2 += n0_y;
         e1_2 += n1_y;
@@ -1752,20 +1801,20 @@ void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
         jto(4) {
           uint32_t idx = x * 4 + j;
           uint32_t idy = y * 4 + i;
-          GRIDBG_START(idx, idy);
+          GRIDBG_START(idy, idx);
           uint16_t e0_sign = (uint16_t)e0_3 >> 15;
           uint16_t e1_sign = (uint16_t)e1_3 >> 15;
           uint16_t e2_sign = (uint16_t)e2_3 >> 15;
-          GRIDBG_PUTLINE(idx, idy, "e0=%i\n", e0_3);
-          GRIDBG_PUTLINE(idx, idy, "e1=%i\n", e1_3);
-          GRIDBG_PUTLINE(idx, idy, "e2=%i\n", e2_3);
+          GRIDBG_PUTLINE(idy, idx, "e0=%i\n", e0_3);
+          GRIDBG_PUTLINE(idy, idx, "e1=%i\n", e1_3);
+          GRIDBG_PUTLINE(idy, idx, "e2=%i\n", e2_3);
           uint16_t mask_1 = (e0_sign | e1_sign | e2_sign);
-          GRIDBG_SETCOLOR(idx, idy, mask_1 ? 0.0f : 0.8f, 0.8f, 0.6f);
+          GRIDBG_SETCOLOR(idy, idx, mask_1 ? 0.0f : 0.8f, 0.8f, 0.6f);
           mask = mask | ((mask_1 & 1) << ((i << 2) | j));
           e0_3 += n0_x;
           e1_3 += n1_x;
           e2_3 += n2_x;
-          GRIDBG_END(idx, idy);
+          GRIDBG_END(idy, idx);
         }
         e0_2 += n0_y;
         e1_2 += n1_y;
@@ -2065,6 +2114,7 @@ void rasterize_triangle_tiled_4x4_256x256_defer_cull(
         vertices[1].x = 0.0f;
         float t1 = -cw0.x / dx0;
         vertices[1].y = cw0.y + dy0 * t1;
+
         if (vc[1] == vc[2] && vc[1] == 0) {
           vertices[2] = cw1;
           vertices[3] = cw2;
@@ -2907,9 +2957,9 @@ int main(int argc, char **argv) {
     tile_count = 0;
     rasterize_triangle_tiled_4x4_256x256_defer_cull(
         // clang-format off
-            gridbg.v_y[0] / 256.0f, gridbg.v_x[0] / 256.0f, // p0
-            gridbg.v_y[1] / 256.0f, gridbg.v_x[1] / 256.0f, // p1
-            gridbg.v_y[2] / 256.0f, gridbg.v_x[2] / 256.0f, // p2
+            gridbg.v_x[0] / 256.0f, gridbg.v_y[0] / 256.0f, // p0
+            gridbg.v_x[1] / 256.0f, gridbg.v_y[1] / 256.0f, // p1
+            gridbg.v_x[2] / 256.0f, gridbg.v_y[2] / 256.0f, // p2
             &tiles[0], &tile_count
         // clang-format on
     );
