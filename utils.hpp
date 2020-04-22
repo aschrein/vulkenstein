@@ -36,6 +36,7 @@ template <typename M, typename K> bool contains(M const &in, K const &key) {
   }
 
 #define UNIMPLEMENTED UNIMPLEMENTED_("")
+#define TRAP UNIMPLEMENTED_("")
 
 template <typename F> struct __Defer__ {
   F f;

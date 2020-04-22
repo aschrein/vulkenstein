@@ -530,7 +530,7 @@ struct GPU_State { // doesn't do any ref counting here
 } // namespace cmd
 } // namespace vki
 struct Shader_Symbols {
-  void (*spv_main)(void *);
+  void (*spv_main)(void *, uint64_t);
   uint32_t (*get_private_size)();
   uint32_t (*get_export_count)();
   uint32_t (*get_input_count)();

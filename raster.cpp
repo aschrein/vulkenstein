@@ -1,8 +1,19 @@
 #include "utils.hpp"
 #include "vk.hpp"
 
+void printf_flush(char const *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  vprintf(fmt, args);
+  va_end(args);
+  fflush(stdout);
+}
+
 #define SPV_STDLIB_JUST_TYPES
 #include "spv_stdlib/spv_stdlib.cpp"
+enum class Impl_Mode_t { NONE = 0, REF, OPT };
+Impl_Mode_t impl_mode = Impl_Mode_t::REF;
+static Temporary_Storage<> ts = Temporary_Storage<>::create(64 * (1 << 20));
 
 #ifdef RASTER_EXE
 #include "utils.hpp"
@@ -184,7 +195,6 @@ void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
 
 #include "simplefont.h"
 #include <mutex>
-static Temporary_Storage<> ts = Temporary_Storage<>::create(64 * (1 << 20));
 
 struct Context2D {
   struct Oth_Camera {
@@ -424,6 +434,14 @@ struct Context2D {
       }
       newline();
     }
+    void put_fmt(char const *fmt, ...) {
+      char buffer[0x100];
+      va_list args;
+      va_start(args, fmt);
+      vsnprintf(buffer, sizeof(buffer), fmt, args);
+      va_end(args);
+      put_line(buffer);
+    }
     void put_char(char c) {
       unscroll();
       if (c >= 0x20 && c <= 0x7e && column < 0x100 - 1) {
@@ -453,7 +471,7 @@ struct Context2D {
     float CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
     float GLYPH_HEIGHT = camera.glyph_scale * simplefont_bitmap_glyphs_height;
     float GLYPH_WIDTH = camera.glyph_scale * simplefont_bitmap_glyphs_width;
-    uint32_t console_lines = 6;
+    uint32_t console_lines = 8;
     float console_bottom = (GLYPH_HEIGHT + 1) * console_lines;
     ito(console_lines - 1) {
       draw_string({.c_str = console.buffer[console_lines - 1 - i],
@@ -813,7 +831,6 @@ float3 parse_color(char const *str) {
   return (float3){(float)r / 255.0f, (float)g / 255.0f, (float)b / 255.0f};
 }
 enum class Selection_t { NONE = 0, CELL, VERTEX };
-enum class Impl_Mode_t { NONE = 0, REF, OPT };
 template <uint32_t H, uint32_t W, typename Cell_t> //
 struct Gridbg {
   Cell_t *grid;
@@ -825,6 +842,7 @@ struct Gridbg {
   std::atomic<size_t> current_grid;
   std::atomic<bool> break_requested;
   std::atomic<bool> hard_break_requested;
+  std::atomic<bool> clear_on_start;
   uint32_t cur_i;
   uint32_t cur_j;
 
@@ -833,11 +851,10 @@ struct Gridbg {
   float v_y[3];
   uint32_t cur_v;
   Selection_t selection_type;
-  Impl_Mode_t impl_mode;
 
   bool select_clicked = false;
   void save() {
-    FILE *save = fopen("save.txt", "wb");
+    FILE *save = fopen("tmp.txt", "wb");
     ito(3) {
       fprintf(save, "selv %i\n", i);
       fprintf(save, "mov %f %f\n", v_x[i], v_y[i]);
@@ -857,6 +874,7 @@ struct Gridbg {
     fprintf(save, "s\n");
     fflush(save);
     fclose(save);
+    rename("tmp.txt", "save.txt");
   }
   void init() {
     grid = (Cell_t *)malloc(W * H * sizeof(Cell_t));
@@ -890,6 +908,7 @@ struct Gridbg {
         v_x[2] = 000.0f;
         v_y[2] = 100.0f;
       }
+      clear_on_start = true;
     }
   }
   void release() { free(grid); }
@@ -1023,17 +1042,17 @@ struct Gridbg {
           }
           draw_frame(i, j, 1.0f, 0.0f, 0.0f);
         }
-        if (c2d.camera.pos.z < 160.0f) {
-          c2d.draw_rect({//
-                         .x = dx * j,
-                         .y = dy * i,
-                         .z = QUAD_LAYER,
-                         .width = 1.0f,
-                         .height = 1.0f,
-                         .color = {.r = r, .g = g, .b = b}});
-        }
+        //        if (c2d.camera.pos.z < 200.0f) {
+        c2d.draw_rect({//
+                       .x = dx * j,
+                       .y = dy * i,
+                       .z = QUAD_LAYER,
+                       .width = 1.0f,
+                       .height = 1.0f,
+                       .color = {.r = r, .g = g, .b = b}});
+        //        }
         if (c2d.camera.pos.z < 60.0f) {
-          float point_size = 1.0e-2f;
+          float point_size = 2.0e-3f * c2d.camera.pos.z;
           c2d.draw_rect({//
                          .x = dx * (j + 0.5f) - point_size,
                          .y = dy * (i + 0.5f) - point_size,
@@ -1199,6 +1218,8 @@ struct Gridbg {
       }
       case Dbg_Command::Command_t::START: {
         run = true;
+        if (clear_on_start)
+          clear_all();
         global_resume();
         break;
       }
@@ -1358,6 +1379,17 @@ Gridbg<256, 256, Raster_Cell> gridbg;
 #define GRIDBG_ADDCOLOR(i, j, r, g, b) gridbg.add_color(i, j, r, g, b)
 #define GRIDBG_HIT(i, j) gridbg.on_hit(i, j)
 #define GRIDBG_MISS(i, j) gridbg.on_miss(i, j)
+#else
+#define debug_break
+#define GRIDBG_START(i, j)
+#define GRIDBG_PAUSE()
+#define GRIDBG_BREAK(i, j)
+#define GRIDBG_END(i, j)
+#define GRIDBG_PUTLINE(i, j, fmt, ...)
+#define GRIDBG_SETCOLOR(i, j, r, g, b)
+#define GRIDBG_ADDCOLOR(i, j, r, g, b)
+#define GRIDBG_HIT(i, j)
+#define GRIDBG_MISS(i, j)
 #endif // RASTER_EXE
 
 uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
@@ -1633,34 +1665,26 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
 struct Classified_Tile {
   uint8_t x;
   uint8_t y;
+  float e_0, e_1, e_2;
   uint16_t mask;
 };
 #pragma pack(pop)
 
-static_assert(sizeof(Classified_Tile) == 4, "incorrect padding");
+// static_assert(sizeof(Classified_Tile) == 4, "incorrect padding");
 
 void rasterize_triangle_tiled_1x1_256x256_defer_ref(
-    float _x0, float _y0, float _x1, float _y1, float _x2, float _y2,
+    float x0, float y0, float x1, float y1, float x2, float y2, float n0_x,
+    float n0_y, float n1_x, float n1_y, float n2_x, float n2_y,
     Classified_Tile *tile_buffer, uint32_t *tile_count) {
-  float k = 256.0f;
-  float x0 = vki::clamp(_x0 * k, 0.0f, 256.0f);
-  float y0 = vki::clamp(_y0 * k, 0.0f, 256.0f);
-  float x1 = vki::clamp(_x1 * k, 0.0f, 256.0f);
-  float y1 = vki::clamp(_y1 * k, 0.0f, 256.0f);
-  float x2 = vki::clamp(_x2 * k, 0.0f, 256.0f);
-  float y2 = vki::clamp(_y2 * k, 0.0f, 256.0f);
-
-  float n0_x = -(y1 - y0);
-  float n0_y = (x1 - x0);
-  float n1_x = -(y2 - y1);
-  float n1_y = (x2 - x1);
-  float n2_x = -(y0 - y2);
-  float n2_y = (x0 - x2);
-
   float min_x = MIN(x0, MIN(x1, x2));
   float max_x = MAX(x0, MAX(x1, x2));
   float min_y = MIN(y0, MIN(y1, y2));
   float max_y = MAX(y0, MAX(y1, y2));
+
+  min_x = vki::clamp(min_x, 0.0f, 256.0f);
+  max_x = vki::clamp(max_x, 0.0f, 256.0f);
+  min_y = vki::clamp(min_y, 0.0f, 256.0f);
+  max_y = vki::clamp(max_y, 0.0f, 256.0f);
 
   int16_t imin_x = (int16_t)(min_x + 0.5f);
   int16_t imax_x = (int16_t)(max_x + 0.5f);
@@ -1728,7 +1752,7 @@ void rasterize_triangle_tiled_1x1_256x256_defer_ref(
         e2_2 += n2_y;
       }
       if (mask != 0xffff) {
-        tile_buffer[_tile_count] = {x, y, (uint16_t)~mask};
+        tile_buffer[_tile_count] = {x, y, e0_2, e1_2, e2_2, (uint16_t)~mask};
         _tile_count = _tile_count + 1;
       }
       e0_1 += n0_x * 4;
@@ -1742,405 +1766,554 @@ void rasterize_triangle_tiled_1x1_256x256_defer_ref(
   *tile_count = _tile_count;
 }
 
-void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float _x1,
-                                                float _y1, float _x2, float _y2,
-                                                Classified_Tile *tile_buffer,
-                                                uint32_t *tile_count) {
-  int16_t pixel_precision = 8;
-  float k = (float)(1 << pixel_precision);
-  int16_t upper_bound = (int16_t)((int16_t)1 << 8) - (int16_t)1;
-  int16_t lower_bound = 0;
-  int16_t x0 = vki::clamp((int16_t)(_x0 * k + 0.5f), lower_bound, upper_bound);
-  int16_t y0 = vki::clamp((int16_t)(_y0 * k + 0.5f), lower_bound, upper_bound);
-  int16_t x1 = vki::clamp((int16_t)(_x1 * k + 0.5f), lower_bound, upper_bound);
-  int16_t y1 = vki::clamp((int16_t)(_y1 * k + 0.5f), lower_bound, upper_bound);
-  int16_t x2 = vki::clamp((int16_t)(_x2 * k + 0.5f), lower_bound, upper_bound);
-  int16_t y2 = vki::clamp((int16_t)(_y2 * k + 0.5f), lower_bound, upper_bound);
+// void rasterize_triangle_tiled_1x1_256x256_defer(float _x0, float _y0, float
+// _x1,
+//                                                float _y1, float _x2, float
+//                                                _y2, Classified_Tile
+//                                                *tile_buffer, uint32_t
+//                                                *tile_count) {
+//  int16_t pixel_precision = 8;
+//  float k = (float)(1 << pixel_precision);
+//  int16_t upper_bound = (int16_t)((int16_t)1 << 8) - (int16_t)1;
+//  int16_t lower_bound = 0;
+//  int16_t x0 = vki::clamp((int16_t)(_x0 * k + 0.5f), lower_bound,
+//  upper_bound); int16_t y0 = vki::clamp((int16_t)(_y0 * k + 0.5f),
+//  lower_bound, upper_bound); int16_t x1 = vki::clamp((int16_t)(_x1 * k +
+//  0.5f), lower_bound, upper_bound); int16_t y1 = vki::clamp((int16_t)(_y1 * k
+//  + 0.5f), lower_bound, upper_bound); int16_t x2 = vki::clamp((int16_t)(_x2 *
+//  k + 0.5f), lower_bound, upper_bound); int16_t y2 = vki::clamp((int16_t)(_y2
+//  * k + 0.5f), lower_bound, upper_bound);
 
-  int16_t n0_x = -(y1 - y0);
-  int16_t n0_y = (x1 - x0);
-  int16_t n1_x = -(y2 - y1);
-  int16_t n1_y = (x2 - x1);
-  int16_t n2_x = -(y0 - y2);
-  int16_t n2_y = (x0 - x2);
+//  int16_t n0_x = -(y1 - y0);
+//  int16_t n0_y = (x1 - x0);
+//  int16_t n1_x = -(y2 - y1);
+//  int16_t n1_y = (x2 - x1);
+//  int16_t n2_x = -(y0 - y2);
+//  int16_t n2_y = (x0 - x2);
 
-  int16_t min_x = MIN(x0, MIN(x1, x2));
-  int16_t max_x = MAX(x0, MAX(x1, x2));
-  int16_t min_y = MIN(y0, MIN(y1, y2));
-  int16_t max_y = MAX(y0, MAX(y1, y2));
+//  int16_t min_x = MIN(x0, MIN(x1, x2));
+//  int16_t max_x = MAX(x0, MAX(x1, x2));
+//  int16_t min_y = MIN(y0, MIN(y1, y2));
+//  int16_t max_y = MAX(y0, MAX(y1, y2));
 
-  min_x &= (~0b11);
-  min_y &= (~0b11);
-  max_x = (max_x + 0b11) & (~0b11);
-  max_y = (max_y + 0b11) & (~0b11);
+//  min_x &= (~0b11);
+//  min_y &= (~0b11);
+//  max_x = (max_x + 0b11) & (~0b11);
+//  max_y = (max_y + 0b11) & (~0b11);
 
-  int16_t e0_0 = n0_x * (min_x - x0) + n0_y * (min_y - y0);
-  int16_t e1_0 = n1_x * (min_x - x1) + n1_y * (min_y - y1);
-  int16_t e2_0 = n2_x * (min_x - x2) + n2_y * (min_y - y2);
+//  int16_t e0_0 = n0_x * (min_x - x0) + n0_y * (min_y - y0);
+//  int16_t e1_0 = n1_x * (min_x - x1) + n1_y * (min_y - y1);
+//  int16_t e2_0 = n2_x * (min_x - x2) + n2_y * (min_y - y2);
 
-  uint8_t min_y_tile = 0xff & (min_y >> 2);
-  uint8_t max_y_tile = 0xff & (max_y >> 2);
-  uint8_t min_x_tile = 0xff & (min_x >> 2);
-  uint8_t max_x_tile = 0xff & (max_x >> 2);
-  // clang-format on
-  uint32_t _tile_count = *tile_count;
-  // ~15 cycles per tile
-  for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
-    int16_t e0_1 = e0_0;
-    int16_t e1_1 = e1_0;
-    int16_t e2_1 = e2_0;
-    for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
-      uint16_t mask = 0;
-      int16_t e0_2 = e0_1;
-      int16_t e1_2 = e1_1;
-      int16_t e2_2 = e2_1;
-      ito(4) {
-        int16_t e0_3 = e0_2;
-        int16_t e1_3 = e1_2;
-        int16_t e2_3 = e2_2;
-        jto(4) {
-          uint32_t idx = x * 4 + j;
-          uint32_t idy = y * 4 + i;
-          GRIDBG_START(idy, idx);
-          uint16_t e0_sign = (uint16_t)e0_3 >> 15;
-          uint16_t e1_sign = (uint16_t)e1_3 >> 15;
-          uint16_t e2_sign = (uint16_t)e2_3 >> 15;
-          GRIDBG_PUTLINE(idy, idx, "e0=%i\n", e0_3);
-          GRIDBG_PUTLINE(idy, idx, "e1=%i\n", e1_3);
-          GRIDBG_PUTLINE(idy, idx, "e2=%i\n", e2_3);
-          uint16_t mask_1 = (e0_sign | e1_sign | e2_sign);
-          GRIDBG_SETCOLOR(idy, idx, mask_1 ? 0.0f : 0.8f, 0.8f, 0.6f);
-          mask = mask | ((mask_1 & 1) << ((i << 2) | j));
-          e0_3 += n0_x;
-          e1_3 += n1_x;
-          e2_3 += n2_x;
-          GRIDBG_END(idy, idx);
-        }
-        e0_2 += n0_y;
-        e1_2 += n1_y;
-        e2_2 += n2_y;
-      }
-      if (mask != 0xffff) {
-        tile_buffer[_tile_count] = {x, y, (uint16_t)~mask};
-        _tile_count = _tile_count + 1;
-      }
-      e0_1 += n0_x * 4;
-      e1_1 += n1_x * 4;
-      e2_1 += n2_x * 4;
-    }
-    e0_0 += n0_y * 4;
-    e1_0 += n1_y * 4;
-    e2_0 += n2_y * 4;
-  };
-  *tile_count = _tile_count;
-}
+//  uint8_t min_y_tile = 0xff & (min_y >> 2);
+//  uint8_t max_y_tile = 0xff & (max_y >> 2);
+//  uint8_t min_x_tile = 0xff & (min_x >> 2);
+//  uint8_t max_x_tile = 0xff & (max_x >> 2);
+//  // clang-format on
+//  uint32_t _tile_count = *tile_count;
+//  // ~15 cycles per tile
+//  for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
+//    int16_t e0_1 = e0_0;
+//    int16_t e1_1 = e1_0;
+//    int16_t e2_1 = e2_0;
+//    for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
+//      uint16_t mask = 0;
+//      int16_t e0_2 = e0_1;
+//      int16_t e1_2 = e1_1;
+//      int16_t e2_2 = e2_1;
+//      ito(4) {
+//        int16_t e0_3 = e0_2;
+//        int16_t e1_3 = e1_2;
+//        int16_t e2_3 = e2_2;
+//        jto(4) {
+//          uint32_t idx = x * 4 + j;
+//          uint32_t idy = y * 4 + i;
+//          GRIDBG_START(idy, idx);
+//          uint16_t e0_sign = (uint16_t)e0_3 >> 15;
+//          uint16_t e1_sign = (uint16_t)e1_3 >> 15;
+//          uint16_t e2_sign = (uint16_t)e2_3 >> 15;
+//          GRIDBG_PUTLINE(idy, idx, "e0=%i\n", e0_3);
+//          GRIDBG_PUTLINE(idy, idx, "e1=%i\n", e1_3);
+//          GRIDBG_PUTLINE(idy, idx, "e2=%i\n", e2_3);
+//          uint16_t mask_1 = (e0_sign | e1_sign | e2_sign);
+//          if (mask_1 == 0) {
+//            GRIDBG_HIT(idy, idx);
+//          } else {
+//            GRIDBG_MISS(idy, idx);
+//          }
+//          mask = mask | ((mask_1 & 1) << ((i << 2) | j));
+//          e0_3 += n0_x;
+//          e1_3 += n1_x;
+//          e2_3 += n2_x;
+//          GRIDBG_END(idy, idx);
+//        }
+//        e0_2 += n0_y;
+//        e1_2 += n1_y;
+//        e2_2 += n2_y;
+//      }
+//      if (mask != 0xffff) {
+//        tile_buffer[_tile_count] = {x, y, (uint16_t)~mask};
+//        _tile_count = _tile_count + 1;
+//      }
+//      e0_1 += n0_x * 4;
+//      e1_1 += n1_x * 4;
+//      e2_1 += n2_x * 4;
+//    }
+//    e0_0 += n0_y * 4;
+//    e1_0 += n1_y * 4;
+//    e2_0 += n2_y * 4;
+//  };
+//  *tile_count = _tile_count;
+//}
 
-void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float _x1,
-                                                float _y1, float _x2, float _y2,
-                                                Classified_Tile *tile_buffer,
-                                                uint32_t *tile_count) {
-  int16_t pixel_precision = 8;
-  float k = (float)(1 << pixel_precision);
-  int16_t upper_bound = (int16_t)((int16_t)1 << 8) - (int16_t)1;
-  int16_t lower_bound = 0;
-  int16_t x0 = vki::clamp((int16_t)(_x0 * k + 0.5f), lower_bound, upper_bound);
-  int16_t y0 = vki::clamp((int16_t)(_y0 * k + 0.5f), lower_bound, upper_bound);
-  int16_t x1 = vki::clamp((int16_t)(_x1 * k + 0.5f), lower_bound, upper_bound);
-  int16_t y1 = vki::clamp((int16_t)(_y1 * k + 0.5f), lower_bound, upper_bound);
-  int16_t x2 = vki::clamp((int16_t)(_x2 * k + 0.5f), lower_bound, upper_bound);
-  int16_t y2 = vki::clamp((int16_t)(_y2 * k + 0.5f), lower_bound, upper_bound);
+// void rasterize_triangle_tiled_4x4_256x256_defer(float _x0, float _y0, float
+// _x1,
+//                                                float _y1, float _x2, float
+//                                                _y2, Classified_Tile
+//                                                *tile_buffer, uint32_t
+//                                                *tile_count) {
+//  int16_t pixel_precision = 8;
+//  float k = (float)(1 << pixel_precision);
+//  int16_t upper_bound = (int16_t)((int16_t)1 << 8) - (int16_t)1;
+//  int16_t lower_bound = 0;
+//  int16_t x0 = vki::clamp((int16_t)(_x0 * k + 0.5f), lower_bound,
+//  upper_bound); int16_t y0 = vki::clamp((int16_t)(_y0 * k + 0.5f),
+//  lower_bound, upper_bound); int16_t x1 = vki::clamp((int16_t)(_x1 * k +
+//  0.5f), lower_bound, upper_bound); int16_t y1 = vki::clamp((int16_t)(_y1 * k
+//  + 0.5f), lower_bound, upper_bound); int16_t x2 = vki::clamp((int16_t)(_x2 *
+//  k + 0.5f), lower_bound, upper_bound); int16_t y2 = vki::clamp((int16_t)(_y2
+//  * k + 0.5f), lower_bound, upper_bound);
 
-  int16_t n0_x = -(y1 - y0);
-  int16_t n0_y = (x1 - x0);
-  int16_t n1_x = -(y2 - y1);
-  int16_t n1_y = (x2 - x1);
-  int16_t n2_x = -(y0 - y2);
-  int16_t n2_y = (x0 - x2);
+//  int16_t n0_x = -(y1 - y0);
+//  int16_t n0_y = (x1 - x0);
+//  int16_t n1_x = -(y2 - y1);
+//  int16_t n1_y = (x2 - x1);
+//  int16_t n2_x = -(y0 - y2);
+//  int16_t n2_y = (x0 - x2);
 
-  int16_t min_x = MIN(x0, MIN(x1, x2));
-  int16_t max_x = MAX(x0, MAX(x1, x2));
-  int16_t min_y = MIN(y0, MIN(y1, y2));
-  int16_t max_y = MAX(y0, MAX(y1, y2));
+//  int16_t min_x = MIN(x0, MIN(x1, x2));
+//  int16_t max_x = MAX(x0, MAX(x1, x2));
+//  int16_t min_y = MIN(y0, MIN(y1, y2));
+//  int16_t max_y = MAX(y0, MAX(y1, y2));
 
-  min_x &= (~0b11);
-  min_y &= (~0b11);
-  max_x = (max_x + 0b11) & (~0b11);
-  max_y = (max_y + 0b11) & (~0b11);
-  // Work on 4 x 4 tiles
-  //   x 00 01 10 11
-  //  y _____________
-  // 00 |_0|_1|_2|_3|
-  // 01 |_4|_5|_6|_7|
-  // 10 |_8|_9|10|11|
-  // 11 |12|13|14|15|
-  //
-  // clang-format off
-  i16x16 v_e0_init = init_i16x16(
-    n0_x * 0 + n0_y * 0,
-    n0_x * 1 + n0_y * 0,
-    n0_x * 2 + n0_y * 0,
-    n0_x * 3 + n0_y * 0,
-    n0_x * 0 + n0_y * 1,
-    n0_x * 1 + n0_y * 1,
-    n0_x * 2 + n0_y * 1,
-    n0_x * 3 + n0_y * 1,
-    n0_x * 0 + n0_y * 2,
-    n0_x * 1 + n0_y * 2,
-    n0_x * 2 + n0_y * 2,
-    n0_x * 3 + n0_y * 2,
-    n0_x * 0 + n0_y * 3,
-    n0_x * 1 + n0_y * 3,
-    n0_x * 2 + n0_y * 3,
-    n0_x * 3 + n0_y * 3
-  );
-  i16x16 v_e1_init = init_i16x16(
-    n1_x * 0 + n1_y * 0,
-    n1_x * 1 + n1_y * 0,
-    n1_x * 2 + n1_y * 0,
-    n1_x * 3 + n1_y * 0,
-    n1_x * 0 + n1_y * 1,
-    n1_x * 1 + n1_y * 1,
-    n1_x * 2 + n1_y * 1,
-    n1_x * 3 + n1_y * 1,
-    n1_x * 0 + n1_y * 2,
-    n1_x * 1 + n1_y * 2,
-    n1_x * 2 + n1_y * 2,
-    n1_x * 3 + n1_y * 2,
-    n1_x * 0 + n1_y * 3,
-    n1_x * 1 + n1_y * 3,
-    n1_x * 2 + n1_y * 3,
-    n1_x * 3 + n1_y * 3
-  );
-  i16x16 v_e2_init = init_i16x16(
-    n2_x * 0 + n2_y * 0,
-    n2_x * 1 + n2_y * 0,
-    n2_x * 2 + n2_y * 0,
-    n2_x * 3 + n2_y * 0,
-    n2_x * 0 + n2_y * 1,
-    n2_x * 1 + n2_y * 1,
-    n2_x * 2 + n2_y * 1,
-    n2_x * 3 + n2_y * 1,
-    n2_x * 0 + n2_y * 2,
-    n2_x * 1 + n2_y * 2,
-    n2_x * 2 + n2_y * 2,
-    n2_x * 3 + n2_y * 2,
-    n2_x * 0 + n2_y * 3,
-    n2_x * 1 + n2_y * 3,
-    n2_x * 2 + n2_y * 3,
-    n2_x * 3 + n2_y * 3
-  );
-  i16x16 v_e0_delta_x = broadcast_i16x16(
-    n0_x * 4
-  );
-  i16x16 v_e0_delta_y = broadcast_i16x16(
-    n0_y * 4
-  );
-  i16x16 v_e1_delta_x = broadcast_i16x16(
-    n1_x * 4
-  );
-  i16x16 v_e1_delta_y = broadcast_i16x16(
-    n1_y * 4
-  );
-  i16x16 v_e2_delta_x = broadcast_i16x16(
-    n2_x * 4
-  );
-  i16x16 v_e2_delta_y = broadcast_i16x16(
-    n2_y * 4
-  );
-  int16_t e0_0 = n0_x * (min_x - x0) + n0_y * (min_y - y0);
-  int16_t e1_0 = n1_x * (min_x - x1) + n1_y * (min_y - y1);
-  int16_t e2_0 = n2_x * (min_x - x2) + n2_y * (min_y - y2);
-  i16x16 v_e0_0 = broadcast_i16x16(e0_0);
-  i16x16 v_e1_0 = broadcast_i16x16(e1_0);
-  i16x16 v_e2_0 = broadcast_i16x16(e2_0);
-  v_e0_0 = add_i16x16(v_e0_0, v_e0_init);
-  v_e1_0 = add_i16x16(v_e1_0, v_e1_init);
-  v_e2_0 = add_i16x16(v_e2_0, v_e2_init);
-  uint8_t min_y_tile = 0xff & (min_y >> 2);
-  uint8_t max_y_tile = 0xff & (max_y >> 2);
-  uint8_t min_x_tile = 0xff & (min_x >> 2);
-  uint8_t max_x_tile = 0xff & (max_x >> 2);
-  // clang-format on
-  uint32_t _tile_count = *tile_count;
-  // ~15 cycles per tile
-  for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
-    i16x16 v_e0_1 = v_e0_0;
-    i16x16 v_e1_1 = v_e1_0;
-    i16x16 v_e2_1 = v_e2_0;
-    for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
-      // DEBUG
-      //      if (x != 0)
-      //        continue;
-      //
+//  min_x &= (~0b11);
+//  min_y &= (~0b11);
+//  max_x = (max_x + 0b11) & (~0b11);
+//  max_y = (max_y + 0b11) & (~0b11);
+//  // Work on 4 x 4 tiles
+//  //   x 00 01 10 11
+//  //  y _____________
+//  // 00 |_0|_1|_2|_3|
+//  // 01 |_4|_5|_6|_7|
+//  // 10 |_8|_9|10|11|
+//  // 11 |12|13|14|15|
+//  //
+//  // clang-format off
+//  i16x16 v_e0_init = init_i16x16(
+//    n0_x * 0 + n0_y * 0,
+//    n0_x * 1 + n0_y * 0,
+//    n0_x * 2 + n0_y * 0,
+//    n0_x * 3 + n0_y * 0,
+//    n0_x * 0 + n0_y * 1,
+//    n0_x * 1 + n0_y * 1,
+//    n0_x * 2 + n0_y * 1,
+//    n0_x * 3 + n0_y * 1,
+//    n0_x * 0 + n0_y * 2,
+//    n0_x * 1 + n0_y * 2,
+//    n0_x * 2 + n0_y * 2,
+//    n0_x * 3 + n0_y * 2,
+//    n0_x * 0 + n0_y * 3,
+//    n0_x * 1 + n0_y * 3,
+//    n0_x * 2 + n0_y * 3,
+//    n0_x * 3 + n0_y * 3
+//  );
+//  i16x16 v_e1_init = init_i16x16(
+//    n1_x * 0 + n1_y * 0,
+//    n1_x * 1 + n1_y * 0,
+//    n1_x * 2 + n1_y * 0,
+//    n1_x * 3 + n1_y * 0,
+//    n1_x * 0 + n1_y * 1,
+//    n1_x * 1 + n1_y * 1,
+//    n1_x * 2 + n1_y * 1,
+//    n1_x * 3 + n1_y * 1,
+//    n1_x * 0 + n1_y * 2,
+//    n1_x * 1 + n1_y * 2,
+//    n1_x * 2 + n1_y * 2,
+//    n1_x * 3 + n1_y * 2,
+//    n1_x * 0 + n1_y * 3,
+//    n1_x * 1 + n1_y * 3,
+//    n1_x * 2 + n1_y * 3,
+//    n1_x * 3 + n1_y * 3
+//  );
+//  i16x16 v_e2_init = init_i16x16(
+//    n2_x * 0 + n2_y * 0,
+//    n2_x * 1 + n2_y * 0,
+//    n2_x * 2 + n2_y * 0,
+//    n2_x * 3 + n2_y * 0,
+//    n2_x * 0 + n2_y * 1,
+//    n2_x * 1 + n2_y * 1,
+//    n2_x * 2 + n2_y * 1,
+//    n2_x * 3 + n2_y * 1,
+//    n2_x * 0 + n2_y * 2,
+//    n2_x * 1 + n2_y * 2,
+//    n2_x * 2 + n2_y * 2,
+//    n2_x * 3 + n2_y * 2,
+//    n2_x * 0 + n2_y * 3,
+//    n2_x * 1 + n2_y * 3,
+//    n2_x * 2 + n2_y * 3,
+//    n2_x * 3 + n2_y * 3
+//  );
+//  i16x16 v_e0_delta_x = broadcast_i16x16(
+//    n0_x * 4
+//  );
+//  i16x16 v_e0_delta_y = broadcast_i16x16(
+//    n0_y * 4
+//  );
+//  i16x16 v_e1_delta_x = broadcast_i16x16(
+//    n1_x * 4
+//  );
+//  i16x16 v_e1_delta_y = broadcast_i16x16(
+//    n1_y * 4
+//  );
+//  i16x16 v_e2_delta_x = broadcast_i16x16(
+//    n2_x * 4
+//  );
+//  i16x16 v_e2_delta_y = broadcast_i16x16(
+//    n2_y * 4
+//  );
+//  int16_t e0_0 = n0_x * (min_x - x0) + n0_y * (min_y - y0);
+//  int16_t e1_0 = n1_x * (min_x - x1) + n1_y * (min_y - y1);
+//  int16_t e2_0 = n2_x * (min_x - x2) + n2_y * (min_y - y2);
+//  i16x16 v_e0_0 = broadcast_i16x16(e0_0);
+//  i16x16 v_e1_0 = broadcast_i16x16(e1_0);
+//  i16x16 v_e2_0 = broadcast_i16x16(e2_0);
+//  v_e0_0 = add_i16x16(v_e0_0, v_e0_init);
+//  v_e1_0 = add_i16x16(v_e1_0, v_e1_init);
+//  v_e2_0 = add_i16x16(v_e2_0, v_e2_init);
+//  uint8_t min_y_tile = 0xff & (min_y >> 2);
+//  uint8_t max_y_tile = 0xff & (max_y >> 2);
+//  uint8_t min_x_tile = 0xff & (min_x >> 2);
+//  uint8_t max_x_tile = 0xff & (max_x >> 2);
+//  // clang-format on
+//  uint32_t _tile_count = *tile_count;
+//  // ~15 cycles per tile
+//  for (uint8_t y = min_y_tile; y < max_y_tile; y += 1) {
+//    i16x16 v_e0_1 = v_e0_0;
+//    i16x16 v_e1_1 = v_e1_0;
+//    i16x16 v_e2_1 = v_e2_0;
+//    for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
+//      ito(4) {
+//        jto(4) {
+//          uint32_t idx = x * 4 + j;
+//          uint32_t idy = y * 4 + i;
+//          GRIDBG_START(idy, idx);
+//        }
+//      }
+//      uint16_t e0_sign_0 = extract_sign_i16x16(v_e0_1);
+//      uint16_t e1_sign_0 = extract_sign_i16x16(v_e1_1);
+//      uint16_t e2_sign_0 = extract_sign_i16x16(v_e2_1);
+//      ito(4) {
+//        jto(4) {
+//          uint32_t idx = x * 4 + j;
+//          uint32_t idy = y * 4 + i;
+//          GRIDBG_PUTLINE(idy, idx, "e0=%i\n",
+//                         1 & (e0_sign_0 >> (j | (i << 2))));
+//          GRIDBG_PUTLINE(idy, idx, "e1=%i\n",
+//                         1 & (e1_sign_0 >> (j | (i << 2))));
+//          GRIDBG_PUTLINE(idy, idx, "e2=%i\n",
+//                         1 & (e1_sign_0 >> (j | (i << 2))));
+//        }
+//      }
+//      uint16_t mask_0 = (e0_sign_0 | e1_sign_0 | e2_sign_0);
+//      if (mask_0 == 0 || mask_0 != 0xffffu) {
+//        tile_buffer[_tile_count] = {x, y, (uint16_t)~mask_0};
+//        _tile_count = _tile_count + 1;
+//      }
+//      v_e0_1 = add_i16x16(v_e0_1, v_e0_delta_x);
+//      v_e1_1 = add_i16x16(v_e1_1, v_e1_delta_x);
+//      v_e2_1 = add_i16x16(v_e2_1, v_e2_delta_x);
+//    }
+//    v_e0_0 = add_i16x16(v_e0_0, v_e0_delta_y);
+//    v_e1_0 = add_i16x16(v_e1_0, v_e1_delta_y);
+//    v_e2_0 = add_i16x16(v_e2_0, v_e2_delta_y);
+//  };
+//  *tile_count = _tile_count;
+//}
 
-      uint16_t e0_sign_0 = extract_sign_i16x16(v_e0_1);
-      uint16_t e1_sign_0 = extract_sign_i16x16(v_e1_1);
-      uint16_t e2_sign_0 = extract_sign_i16x16(v_e2_1);
-      uint16_t mask_0 = (e0_sign_0 | e1_sign_0 | e2_sign_0);
-      if (mask_0 == 0 || mask_0 != 0xffffu) {
-        tile_buffer[_tile_count] = {x, y, (uint16_t)~mask_0};
-        _tile_count = _tile_count + 1;
-      }
-      v_e0_1 = add_i16x16(v_e0_1, v_e0_delta_x);
-      v_e1_1 = add_i16x16(v_e1_1, v_e1_delta_x);
-      v_e2_1 = add_i16x16(v_e2_1, v_e2_delta_x);
-    }
-    v_e0_0 = add_i16x16(v_e0_0, v_e0_delta_y);
-    v_e1_0 = add_i16x16(v_e1_0, v_e1_delta_y);
-    v_e2_0 = add_i16x16(v_e2_0, v_e2_delta_y);
-  };
-  *tile_count = _tile_count;
-}
+// void rasterize_triangle_tiled_4x4_256x256_defer_cull(
+//    float x0, float y0, float x1, float y1, float x2, float y2,
+//    Classified_Tile *tile_buffer, uint32_t *tile_count) {
 
-void rasterize_triangle_tiled_4x4_256x256_defer_cull(
-    float x0, float y0, float x1, float y1, float x2, float y2,
-    Classified_Tile *tile_buffer, uint32_t *tile_count) {
+//  // there could be up to 6 vertices after culling
+//  uint32_t num_vertices = 0;
+//  float2 vertices[6 * 3];
+//  uint8_t vc[3] = {0, 0, 0};
+//  vc[0] |= x0 > 1.0f ? 1 : x0 < 0.0f ? 2 : 0;
+//  vc[0] |= y0 > 1.0f ? 4 : y0 < 0.0f ? 8 : 0;
+//  vc[1] |= x1 > 1.0f ? 1 : x1 < 0.0f ? 2 : 0;
+//  vc[1] |= y1 > 1.0f ? 4 : y1 < 0.0f ? 8 : 0;
+//  vc[2] |= x2 > 1.0f ? 1 : x2 < 0.0f ? 2 : 0;
+//  vc[2] |= y2 > 1.0f ? 4 : y2 < 0.0f ? 8 : 0;
 
-  // there could be up to 6 vertices after culling
-  uint32_t num_vertices = 0;
-  float2 vertices[6 * 3];
-  uint8_t vc[3] = {0, 0, 0};
-  vc[0] |= x0 > 1.0f ? 1 : x0 < 0.0f ? 2 : 0;
-  vc[0] |= y0 > 1.0f ? 4 : y0 < 0.0f ? 8 : 0;
-  vc[1] |= x1 > 1.0f ? 1 : x1 < 0.0f ? 2 : 0;
-  vc[1] |= y1 > 1.0f ? 4 : y1 < 0.0f ? 8 : 0;
-  vc[2] |= x2 > 1.0f ? 1 : x2 < 0.0f ? 2 : 0;
-  vc[2] |= y2 > 1.0f ? 4 : y2 < 0.0f ? 8 : 0;
+//  float min_x = MIN(x0, MIN(x1, x2));
+//  float min_y = MIN(y0, MIN(y1, y2));
+//  float max_x = MAX(x0, MAX(x1, x2));
+//  float max_y = MAX(y0, MAX(y1, y2));
 
-  float min_x = MIN(x0, MIN(x1, x2));
-  float min_y = MIN(y0, MIN(y1, y2));
-  float max_x = MAX(x0, MAX(x1, x2));
-  float max_y = MAX(y0, MAX(y1, y2));
+//  if (                // bounding box doesn't intersect the tile
+//      min_x > 1.0f || //
+//      min_y > 1.0f || //
+//      max_x < 0.0f || //
+//      max_y < 0.0f    //
+//  )
+//    return;
 
-  if (                // bounding box doesn't intersect the tile
-      min_x > 1.0f || //
-      min_y > 1.0f || //
-      max_x < 0.0f || //
-      max_y < 0.0f    //
-  )
-    return;
+//  // totally inside of the tile
+//  if (vc[0] == 0 && 0 == vc[1] && 0 == vc[2]) {
+//    num_vertices = 3;
+//    vertices[0] = (float2){x0, y0};
+//    vertices[1] = (float2){x1, y1};
+//    vertices[2] = (float2){x2, y2};
+//  } else {
+//    // vertices sorted by x value
+//    float2 u0, u1, u2;
+//    bool x01 = x0 < x1;
+//    bool x12 = x1 < x2;
+//    bool x20 = x2 < x0;
+//    if (x01) {
+//      if (x20) {
+//        u0 = (float2){x2, y2};
+//        u1 = (float2){x0, y0};
+//        u2 = (float2){x1, y1};
+//      } else {
+//        u0 = (float2){x0, y0};
+//        if (x12) {
+//          u1 = (float2){x1, y1};
+//          u2 = (float2){x2, y2};
+//        } else {
+//          u1 = (float2){x2, y2};
+//          u2 = (float2){x1, y1};
+//        }
+//      }
+//    } else {
+//      if (x12) {
+//        u0 = (float2){x1, y1};
+//        if (x20) {
+//          u1 = (float2){x2, y2};
+//          u2 = (float2){x0, y0};
+//        } else {
+//          u1 = (float2){x0, y0};
+//          u2 = (float2){x2, y2};
+//        }
+//      } else {
+//        u0 = (float2){x2, y2};
+//        u1 = (float2){x1, y1};
+//        u2 = (float2){x0, y0};
+//      }
+//    }
 
-  // totally inside of the tile
-  if (vc[0] == 0 && 0 == vc[1] && 0 == vc[2]) {
-    num_vertices = 3;
-    vertices[0] = (float2){x0, y0};
-    vertices[1] = (float2){x1, y1};
-    vertices[2] = (float2){x2, y2};
-  } else {
-    // vertices sorted by x value
-    float2 u0, u1, u2;
-    bool x01 = x0 < x1;
-    bool x12 = x1 < x2;
-    bool x20 = x2 < x0;
-    if (x01) {
-      if (x20) {
-        u0 = (float2){x2, y2};
-        u1 = (float2){x0, y0};
-        u2 = (float2){x1, y1};
-      } else {
-        u0 = (float2){x0, y0};
-        if (x12) {
-          u1 = (float2){x1, y1};
-          u2 = (float2){x2, y2};
-        } else {
-          u1 = (float2){x2, y2};
-          u2 = (float2){x1, y1};
-        }
-      }
-    } else {
-      if (x12) {
-        u0 = (float2){x1, y1};
-        if (x20) {
-          u1 = (float2){x2, y2};
-          u2 = (float2){x0, y0};
-        } else {
-          u1 = (float2){x0, y0};
-          u2 = (float2){x2, y2};
-        }
-      } else {
-        u0 = (float2){x2, y2};
-        u1 = (float2){x1, y1};
-        u2 = (float2){x0, y0};
-      }
-    }
+//    // clockwise sorted vertices
+//    // the idea is that for a triangle there is always a leftmost, uppermost
+//    and
+//    // downmost which are sorted in clockwise order so it doesn't matter if
+//    some
+//    // are aligned
+//    float2 cw0, cw1, cw2;
+//    cw0 = u0;
+//    if (u1.y > u2.y) {
+//      cw1 = u1;
+//      cw2 = u2;
+//    } else {
+//      cw2 = u1;
+//      cw1 = u2;
+//    }
+//    float dx0 = cw1.x - cw0.x;
+//    float dy0 = cw1.y - cw0.y;
+//    float dx1 = cw2.x - cw1.x;
+//    float dy1 = cw2.y - cw1.y;
+//    float dx2 = cw0.x - cw2.x;
+//    float dy2 = cw0.y - cw2.y;
+//    vc[0] = 0;
+//    vc[1] = 0;
+//    vc[2] = 0;
+//    vc[0] |= cw0.x > 1.0f ? 1 : cw0.x < 0.0f ? 2 : 0;
+//    vc[0] |= cw0.y > 1.0f ? 4 : cw0.y < 0.0f ? 8 : 0;
+//    vc[1] |= cw1.x > 1.0f ? 1 : cw1.x < 0.0f ? 2 : 0;
+//    vc[1] |= cw1.y > 1.0f ? 4 : cw1.y < 0.0f ? 8 : 0;
+//    vc[2] |= cw2.x > 1.0f ? 1 : cw2.x < 0.0f ? 2 : 0;
+//    vc[2] |= cw2.y > 1.0f ? 4 : cw2.y < 0.0f ? 8 : 0;
 
-    // clockwise sorted vertices
-    float2 cw0, cw1, cw2;
-    cw0 = u0;
-    if (u1.y > u2.y) {
-      cw1 = u1;
-      cw2 = u2;
-    } else {
-      cw2 = u1;
-      cw1 = u2;
-    }
-    float dx0 = cw1.x - cw0.x;
-    float dy0 = cw1.y - cw0.y;
-    float dx1 = cw2.x - cw1.x;
-    float dy1 = cw2.y - cw1.y;
-    float dx2 = cw0.x - cw2.x;
-    float dy2 = cw0.y - cw2.y;
-    vc[0] = 0;
-    vc[1] = 0;
-    vc[2] = 0;
-    vc[0] |= cw0.x > 1.0f ? 1 : cw0.x < 0.0f ? 2 : 0;
-    vc[0] |= cw0.y > 1.0f ? 4 : cw0.y < 0.0f ? 8 : 0;
-    vc[1] |= cw1.x > 1.0f ? 1 : cw1.x < 0.0f ? 2 : 0;
-    vc[1] |= cw1.y > 1.0f ? 4 : cw1.y < 0.0f ? 8 : 0;
-    vc[2] |= cw2.x > 1.0f ? 1 : cw2.x < 0.0f ? 2 : 0;
-    vc[2] |= cw2.y > 1.0f ? 4 : cw2.y < 0.0f ? 8 : 0;
-    //       |       |
-    //    6  |   4   |  5
-    //  _____|_______|_____
-    //       |       |
-    //    2  |   0   |  1
-    //  _____|_______|_____
-    //       |       |
-    //   10  |   8   |  9
-    //       |       |
-    if ((vc[0] == 6 || vc[0] == 4 || vc[0] == 5) &&
-        (vc[2] == 6 || vc[2] == 4 || vc[2] == 5))
-      return;
-    if ((vc[0] == 10 || vc[0] == 8 || vc[0] == 9) &&
-        (vc[1] == 10 || vc[1] == 8 || vc[1] == 9))
-      return;
-    if (vc[0] != 0) {
-      ASSERT_ALWAYS(vc[0] == 2 || vc[0] == 8 || vc[0] == 10);
-      if (vc[0] == 2) {
-        vertices[0].x = 0.0f;
-        float t0 = -cw2.x / dx2;
-        vertices[0].y = cw2.y + dy2 * t0;
+//    // There shoudn't be degenerate cases(discarded earlier)
+//    if ((vc[0] == 6 || vc[0] == 4 || vc[0] == 5) &&
+//        (vc[2] == 6 || vc[2] == 4 || vc[2] == 5))
+//      TRAP;
+//    if ((vc[0] == 10 || vc[0] == 8 || vc[0] == 9) &&
+//        (vc[1] == 10 || vc[1] == 8 || vc[1] == 9))
+//      TRAP;
 
-        vertices[1].x = 0.0f;
-        float t1 = -cw0.x / dx0;
-        vertices[1].y = cw0.y + dy0 * t1;
+//    uint8_t p[4] = {0, 0, 0, 0};
+//    auto point_inside = [&](float x, float y) -> uint8_t {
+//      return // Evaluate edge functions for all corners
+//          ((x - cw0.x) * (-dy0) + (y - cw0.y) * (dx0) < 0 ? 1 : 0) |
+//          ((x - cw1.x) * (-dy1) + (y - cw1.y) * (dx1) < 0 ? 2 : 0) |
+//          ((x - cw2.x) * (-dy2) + (y - cw2.y) * (dx2) < 0 ? 4 : 0);
+//    };
+//    p[0] = point_inside(0.0f, 0.0f);
+//    p[1] = point_inside(0.0f, 1.0f);
+//    p[2] = point_inside(1.0f, 1.0f);
+//    p[3] = point_inside(1.0f, 0.0f);
+//    uint8_t pc[3] = {0, 0, 0};
+//    pc[0] |= cw0.y > cw0.x ? 1 : 0;
+//    pc[0] |= cw0.y > (1.0f - cw0.x) ? 2 : 0;
+//    pc[1] |= cw1.y > cw1.x ? 1 : 0;
+//    pc[1] |= cw1.y > (1.0f - cw1.x) ? 2 : 0;
+//    pc[2] |= cw2.y > cw2.x ? 1 : 0;
+//    pc[2] |= cw2.y > (1.0f - cw2.x) ? 2 : 0;
 
-        if (vc[1] == vc[2] && vc[1] == 0) {
-          vertices[2] = cw1;
-          vertices[3] = cw2;
-          num_vertices += 4;
-        }
-      }
-    }
-  }
-  if (num_vertices < 3)
-    return;
-  ito(num_vertices - 2) {
-    if (gridbg.impl_mode == Impl_Mode_t::REF) {
-      rasterize_triangle_tiled_1x1_256x256_defer_ref( //
-          vertices[i + 2].x, vertices[i + 2].y,       //
-          vertices[i + 1].x, vertices[i + 1].y,       //
-          vertices[0].x, vertices[0].y,               //
-          tile_buffer, tile_count);
-    } else {
-      rasterize_triangle_tiled_1x1_256x256_defer( //
-          vertices[i + 2].x, vertices[i + 2].y,   //
-          vertices[i + 1].x, vertices[i + 1].y,   //
-          vertices[0].x, vertices[0].y,           //
-          tile_buffer, tile_count);
-    }
-  }
-}
+//    //  pc - diagonal indices
+//    //  __________________
+//    //  |\               /|
+//    //  | \             / |
+//    //  |   \    3    /   |
+//    //  |     \     /     |
+//    //  |  1    \ /    2  |
+//    //  |       / \       |
+//    //  |     /     \     |
+//    //  |   /    0    \   |
+//    //  | /             \ |
+//    //  |/_______________\|
+//    //
+//    //  p - corners of the visible area
+//    //
+//    //      |       |
+//    //    6 |   4   |  5
+//    //  ____p1______p2___
+//    //      |       |
+//    //    2 |   0   |  1
+//    //  ____p0______p3___
+//    //      |       |
+//    //   10 |   8   |  9
+//    //      |       |
+//    //
+//    //  vc - quadrant indices
+//    //
+//    //       |       |
+//    //    6  |   4   |  5
+//    //  _____|_______|_____
+//    //       |       |
+//    //    2  |   0   |  1
+//    //  _____|_______|_____
+//    //       |       |
+//    //   10  |   8   |  9
+//    //       |       |
+
+//    auto push_vertex = [&](float x, float y) {
+//      vertices[num_vertices++] = (float2){x, y};
+//    };
+//    // All corners are either inside or outside
+//    if (p[0] == p[1] && p[2] == p[3] && p[3] == p[0]) {
+//      // the whole visible area is inside of the triangle
+//      if (p[0] == 0b111) {
+//        push_vertex(0.0f, 0.0f);
+//        push_vertex(0.0f, 1.0f);
+//        push_vertex(1.0f, 1.0f);
+//        push_vertex(1.0f, 0.0f);
+//      } else if (p[0] == 0) { // no corners are inside
+//        // Do nothing
+//      } else {
+//        UNIMPLEMENTED;
+//      }
+//    } else { // Mixed case
+//             // some corners are inside the triangle, and some vertices are
+//             // outside of the rendering area
+//      // We need to push triangles in clockwise order
+//      // We pick either the cw0 or (0, 0) as the first vertex
+//      if (vc[0] == 0) {
+//        push_vertex(cw0.x, cw0.y);
+//        if (vc[1] == 4)
+//          push_vertex(cw0.x + dx0 * ((1.0f - cw0.y) / dy0), 1.0f);
+
+//        if (p[2] == 0b111)
+//          push_vertex(1.0f, 1.0f);
+
+//        if (vc[1] == 0)
+//          push_vertex(cw1.x, cw1.y);
+
+//      } else {
+//        if (p[0] == 1) {
+//          push_vertex(0.0f, 0.0f);
+//        }
+//      }
+//    }
+
+//    //    // the leftmost
+//    //    if (vc[0] != 0) {
+//    //      ASSERT_ALWAYS(    //
+//    //          vc[0] == 2 || //
+//    //          vc[0] == 6 || //
+//    //          vc[0] == 4 || //
+//    //          vc[0] == 8 || //
+//    //          vc[0] == 10);
+//    //      if (vc[0] == 2 || vc[0] == 10 || vc[0] == 8) {
+//    //        if (p[0] == 1)
+//    //          push_vertex(0.0f, 0.0f);
+//    //        else
+//    //          push_vertex(0.0f, cw2.y + dy2 * (-cw2.x / dx2));
+//    //      }
+//    //    }
+//    //    if (vc[1] == 0) {
+//    //      push_vertex(cw1.x, cw1.y);
+//    //    }
+//    //    // the uppermost
+//    //    if (vc[1] != 0) {
+//    //      ASSERT_ALWAYS(    //
+//    //          vc[1] == 2 || //
+//    //          vc[1] == 6 || //
+//    //          vc[1] == 4 || //
+//    //          vc[1] == 5 || //
+//    //          vc[1] == 1);
+//    //      if (vc[1] == 4 && vc[0] != 6) {
+//    //        push_vertex(cw0.x + dx0 * ((1.0f - cw0.y) / dy0), 1.0f);
+//    //      }
+//    //    }
+//    //    if (vc[2] == 0) {
+//    //      push_vertex(cw2.x, cw2.y);
+//    //    }
+//    //    // the downmost
+//    //    if (vc[2] != 0) {
+//    //      ASSERT_ALWAYS(     //
+//    //          vc[2] == 2 ||  //
+//    //          vc[2] == 10 || //
+//    //          vc[2] == 8 ||  //
+//    //          vc[2] == 9 ||  //
+//    //          vc[2] == 1);
+//    ////      if (vc[2] == && vc[1] != 6) {
+//    ////        push_vertex(cw0.x + dx0 * ((1.0f - cw0.y) / dy0), 1.0f);
+//    ////      }
+//    //    }
+//  }
+//  if (num_vertices < 3)
+//    return;
+//  //  c2d.console.put_fmt("sorted triangle:");
+//  //  ito(num_vertices) {
+//  //    c2d.console.put_fmt("v%i: (%f, %f)", i, vertices[i].x, vertices[i].y);
+//  //  }
+//  ito(num_vertices - 2) {
+//    if (impl_mode == Impl_Mode_t::REF) {
+//      rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+//          vertices[i + 2].x, vertices[i + 2].y,       //
+//          vertices[i + 1].x, vertices[i + 1].y,       //
+//          vertices[0].x, vertices[0].y,               //
+//          tile_buffer, tile_count);
+//    } else {
+//      rasterize_triangle_tiled_1x1_256x256_defer( //
+//          vertices[i + 2].x, vertices[i + 2].y,   //
+//          vertices[i + 1].x, vertices[i + 1].y,   //
+//          vertices[0].x, vertices[0].y,           //
+//          tile_buffer, tile_count);
+//    }
+//  }
+//}
 
 float clamp(float x, float min, float max) {
   return x > max ? max : x < min ? min : x;
@@ -2158,6 +2331,8 @@ uint32_t rgba32f_to_rgba8(float4 in) {
 void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                   uint32_t instanceCount, uint32_t firstIndex,
                   int32_t vertexOffset, uint32_t firstInstance) {
+  ts.enter_scope();
+  defer(ts.exit_scope());
   Shader_Symbols *vs_symbols =
       get_shader_symbols(state->graphics_pipeline->vs->jitted_code);
   Shader_Symbols *ps_symbols =
@@ -2244,8 +2419,6 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
   // Vertex shading
   uint8_t *vs_output = NULL;
   float4 *vs_vertex_positions = NULL;
-  defer(if (vs_output != NULL) free(vs_output));
-  defer(if (vs_vertex_positions != NULL) free(vs_vertex_positions));
   vki::VkPipeline_Impl *pipeline = state->graphics_pipeline;
   {
     struct Attribute_Desc {
@@ -2287,11 +2460,10 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
     uint32_t total_data_units_needed = num_invocations * subgroup_size;
     uint8_t *attributes =
-        (uint8_t *)malloc(total_data_units_needed * vs_symbols->input_stride);
-    defer(free(attributes));
-    vs_output =
-        (uint8_t *)malloc(total_data_units_needed * vs_symbols->output_stride);
-    vs_vertex_positions = (float4 *)malloc(total_data_units_needed * 16);
+        (uint8_t *)ts.alloc(total_data_units_needed * vs_symbols->input_stride);
+    vs_output = (uint8_t *)ts.alloc(total_data_units_needed *
+                                    vs_symbols->output_stride);
+    vs_vertex_positions = (float4 *)ts.alloc(total_data_units_needed * 16);
     uint32_t *index_src_i32 =
         (uint32_t *)(((size_t)state->index_buffer->get_ptr() +
                       state->index_buffer_offset) &
@@ -2366,7 +2538,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     info.output = NULL;
     info.builtin_output = NULL;
     info.push_constants = state->push_constants;
-    info.print_fn = (void *)printf;
+    info.print_fn = (void *)printf_flush;
 
     //    descriptor_set_0[0] =
     //    state->descriptor_sets[0]->slots[0].buffer->get_ptr(); float4 *mat =
@@ -2390,18 +2562,17 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       info.output = vs_output + i * subgroup_size * vs_symbols->output_stride;
       // Assume there's only gl_Position
       info.builtin_output = vs_vertex_positions + i * subgroup_size;
-      vs_symbols->spv_main(&info);
+      vs_symbols->spv_main(&info, (~0));
     }
   }
-  // Assemble that into triangles
+  // Assemble triangles
   ASSERT_ALWAYS(state->graphics_pipeline->IA_topology ==
                 VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
   ASSERT_ALWAYS(indexCount % 3 == 0);
   // so the triangle could be split in up to 6 triangles after culling
   float4 *screenspace_positions =
-      (float4 *)malloc(sizeof(float4) * indexCount * 6);
+      (float4 *)ts.alloc(sizeof(float4) * indexCount * 6);
   uint32_t rasterizer_triangles_count = 0;
-  defer(free(screenspace_positions));
   ito(indexCount / 3) {
     float4 v0 = vs_vertex_positions[i * 3 + 0];
     float4 v1 = vs_vertex_positions[i * 3 + 1];
@@ -2415,25 +2586,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     screenspace_positions[i * 3 + 2] = v2;
     rasterizer_triangles_count++;
   }
-  //  rasterizer_triangles_count = 2;
-  // Rastrization
-  struct Pixel_Invocation_Info {
-    uint32_t triangle_id;
-    // Barycentric coordinates
-    float b_0, b_1, b_2;
-    uint32_t x, y;
-  };
-  uint32_t max_pixel_invocations = 1 << 25;
-  Pixel_Invocation_Info *pinfos = (Pixel_Invocation_Info *)malloc(
-      sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
-  defer(free(pinfos));
 
-  uint32_t num_pixel_invocations = 0;
-
-  Classified_Tile *tiles =
-      (Classified_Tile *)malloc(sizeof(Classified_Tile) * (1 << 20));
-  defer(free(tiles));
-  uint32_t tile_count = 0;
 #if 0
   kto(rasterizer_triangles_count) {
     float4 v0 = screenspace_positions[k * 3 + 0];
@@ -2537,74 +2690,14 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
   }
   NOTNULL(depth);
   NOTNULL(rt);
-  float4 *pixel_output = NULL;
-  defer(if (pixel_output != NULL) free(pixel_output));
   ASSERT_ALWAYS(rt->format == VkFormat::VK_FORMAT_R8G8B8A8_SRGB);
-  if (0) {
-    uint32_t subgroup_size = ps_symbols->subgroup_size;
-    uint32_t num_invocations =
-        (num_pixel_invocations + subgroup_size - 1) / subgroup_size;
-    pixel_output =
-        (float4 *)malloc(sizeof(float4) * num_invocations * subgroup_size);
-    // Perform relocation of data for vs->ps
-    uint8_t *pixel_input = NULL;
-    defer(if (pixel_input != NULL) free(pixel_input));
-    pixel_input = (uint8_t *)malloc(3 * ps_symbols->input_stride *
-                                    num_invocations * subgroup_size);
-    ito(num_pixel_invocations) {
-      // TODO: interpolate
-      Pixel_Invocation_Info info = pinfos[i];
-      jto(ps_symbols->input_item_count) {
-        kto(3) {
-          memcpy(                                                         //
-              pixel_input +                                               //
-                  ps_symbols->input_stride * (i * 3 + k) +                //
-                  ps_symbols->input_slots[j].offset,                      //
-              vs_output +                                                 //
-                  vs_symbols->output_slots[j].offset +                    //
-                  vs_symbols->output_stride * (info.triangle_id * 3 + k), //
-              vki::get_format_bpp((VkFormat)ps_symbols->input_slots[j].format));
-        }
-      }
-    }
-
-    info.work_group_size = (uint3){subgroup_size, 1, 1};
-    info.invocation_count = (uint3){num_invocations, 1, 1};
-    info.subgroup_size = (uint3){subgroup_size, 1, 1};
-    info.subgroup_x_bits = 0xff;
-    info.subgroup_x_offset = 0x0;
-    info.subgroup_y_bits = 0x0;
-    info.subgroup_y_offset = 0x0;
-    info.subgroup_z_bits = 0x0;
-    info.subgroup_z_offset = 0x0;
-    info.input = NULL;
-    info.output = NULL;
-    info.builtin_output = NULL;
-    info.push_constants = state->push_constants;
-    info.print_fn = (void *)printf;
-    ito(num_invocations) {
-      float barycentrics[0x100] = {};
-      jto(subgroup_size) {
-        Pixel_Invocation_Info pinfo = pinfos[j + i * subgroup_size];
-        barycentrics[j * 3 + 0] = pinfo.b_0;
-        barycentrics[j * 3 + 1] = pinfo.b_1;
-        barycentrics[j * 3 + 2] = pinfo.b_2;
-      }
-      info.barycentrics = barycentrics;
-      info.invocation_id = (uint3){i, 0, 0};
-      info.input =
-          pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
-      info.output = pixel_output + i * subgroup_size;
-      // Assume there's only gl_Position
-      info.builtin_output = vs_vertex_positions + i * subgroup_size;
-      ps_symbols->spv_main(&info);
-    }
-  }
 
   uint32_t x_num_tiles = (rt->img->extent.width + 255) / 256;
   uint32_t y_num_tiles = (rt->img->extent.height + 255) / 256;
   yto(y_num_tiles) {
     xto(x_num_tiles) {
+      ts.enter_scope();
+      defer(ts.exit_scope());
       // So like we're covering the screen with 256x256 tiles and do
       // rasterization on them and then apply that to the screen
       //
@@ -2615,11 +2708,25 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       // |     .       |
       // |_____._______|
       //
+      // Rastrization
+      struct Pixel_Invocation_Info {
+        uint32_t triangle_id;
+        // Barycentric coordinates
+        float b_0, b_1, b_2;
+        uint32_t x, y;
+      };
+      uint32_t max_pixel_invocations = 1 << 16;
+      Pixel_Invocation_Info *pinfos = (Pixel_Invocation_Info *)ts.alloc(
+          sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
+      uint32_t num_pixel_invocations = 0;
+      Classified_Tile *tiles =
+          (Classified_Tile *)ts.alloc(sizeof(Classified_Tile) * (1 << 20));
+
       float tile_x = ((float)x * 256.0f) / (float)rt->img->extent.width;
       float tile_y = ((float)y * 256.0f) / (float)rt->img->extent.height;
       float tile_size_x = 256.0f / (float)rt->img->extent.width;
       float tile_size_y = 256.0f / (float)rt->img->extent.height;
-      tile_count = 0;
+      // Run the rasterizer
       kto(rasterizer_triangles_count) {
         float4 v0 = screenspace_positions[k * 3 + 0];
         float4 v1 = screenspace_positions[k * 3 + 1];
@@ -2630,41 +2737,160 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
         float y1 = (v1.y * 0.5f + 0.5f - tile_y) / tile_size_y;
         float x2 = (v2.x * 0.5f + 0.5f - tile_x) / tile_size_x;
         float y2 = (v2.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-        rasterize_triangle_tiled_4x4_256x256_defer_cull( //
-            x0, y0,                                      //
-            x1, y1,                                      //
-            x2, y2,                                      //
+        x0 = x0 * 256.0f;
+        y0 = y0 * 256.0f;
+        x1 = x1 * 256.0f;
+        y1 = y1 * 256.0f;
+        x2 = x2 * 256.0f;
+        y2 = y2 * 256.0f;
+        float n0_x = -(y1 - y0);
+        float n0_y = (x1 - x0);
+        float n1_x = -(y2 - y1);
+        float n1_y = (x2 - x1);
+        float n2_x = -(y0 - y2);
+        float n2_y = (x0 - x2);
+        uint32_t tile_count = 0;
+        rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+            x0, y0,                                     //
+            x1, y1,                                     //
+            x2, y2,                                     //
+            n0_x, n0_y,                                 //
+            n1_x, n1_y,                                 //
+            n2_x, n2_y,                                 //
             tiles, &tile_count);
-      }
-      ito(tile_count) {
-        uint32_t subtile_x = (uint32_t)tiles[i].x * 4 + x * 256;
-        uint32_t subtile_y = (uint32_t)tiles[i].y * 4 + y * 256;
-        kto(4) {
-          jto(4) {
-            uint32_t texel_y = (subtile_y + k);
-            uint32_t texel_x = (subtile_x + j);
-            if (texel_x >= rt->img->extent.width)
-              break;
-            if (texel_y >= rt->img->extent.height)
-              break;
-            ((uint32_t *)rt->img
-                 ->get_ptr())[texel_y * rt->img->extent.width + texel_x] =
-                (tiles[i].mask & (1 << ((k << 2) | j))) == 0 ? 0x0 : 0xff0000ff;
+        ito(tile_count) {
+          Classified_Tile tile = tiles[i];
+
+          for (uint32_t sub_y = 0; sub_y < 4; sub_y++) {
+            for (uint32_t sub_x = 0; sub_x < 4; sub_x++) {
+              if (tile.mask & (1 << (sub_x | (sub_y << 2)))) {
+                float b2 = tile.e_0 + n0_x * sub_x + n0_y * sub_y;
+                float b0 = tile.e_1 + n1_x * sub_x + n1_y * sub_y;
+                float b1 = tile.e_2 + n2_x * sub_x + n2_y * sub_y;
+                float sum = b0 + b1 + b2;
+                b0 /= sum;
+                b1 /= sum;
+                b2 /= sum;
+                float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
+                b0 = b0 / v0.w / bw;
+                b1 = b1 / v1.w / bw;
+                b2 = b2 / v2.w / bw;
+                pinfos[num_pixel_invocations++] =
+                    Pixel_Invocation_Info{.triangle_id = k,
+                                          .b_0 = b0,
+                                          .b_1 = b1,
+                                          .b_2 = b2,
+                                          .x = x * 256 + tile.x * 4 + sub_x,
+                                          .y = y * 256 + tile.y * 4 + sub_y};
+              }
+            }
           }
         }
-        //      ito(tile_count) {
-        //        uint32_t x = ((uint32_t)tiles[i].x * 4 *
-        //        rt->img->extent.width) / 256; uint32_t y =
-        //        ((uint32_t)tiles[i].y * 4 * rt->img->extent.height) / 256;
-        //        kto((4 * rt->img->extent.height + 255) / 256) {
-        //          jto((4 * rt->img->extent.width + 255) / 256) {
-        //            ((uint32_t *)rt->img
-        //                 ->get_ptr())[(y + k) * rt->img->extent.width + (x +
-        //                 j)] =
-        //                0xff0000ff;
-        //          }
-        //        }
       }
+      float4 *pixel_output = NULL;
+      // Spawn pixel shaders
+      if (num_pixel_invocations != 0) {
+        uint32_t subgroup_size = ps_symbols->subgroup_size;
+        uint32_t num_invocations =
+            (num_pixel_invocations + subgroup_size - 1) / subgroup_size;
+        // Allocate storage space for render target output
+        pixel_output = (float4 *)ts.alloc(sizeof(float4) * num_invocations *
+                                          subgroup_size);
+        // Allocate pixel shader input storage and
+        // Perform relocation of data for vs->ps
+        uint8_t *pixel_input = NULL;
+        pixel_input = (uint8_t *)ts.alloc(3 * ps_symbols->input_stride *
+                                          num_invocations * subgroup_size);
+        ito(num_pixel_invocations) {
+          Pixel_Invocation_Info info = pinfos[i];
+          jto(ps_symbols->input_item_count) {
+            // We push 3 attributes for each vertex of the triangle
+            // they're interpolated inside the pixel shader
+            kto(3) {
+              memcpy(                                                         //
+                  pixel_input +                                               //
+                      ps_symbols->input_stride * (i * 3 + k) +                //
+                      ps_symbols->input_slots[j].offset,                      //
+                  vs_output +                                                 //
+                      vs_symbols->output_slots[j].offset +                    //
+                      vs_symbols->output_stride * (info.triangle_id * 3 + k), //
+                  vki::get_format_bpp(
+                      (VkFormat)ps_symbols->input_slots[j].format));
+            }
+          }
+        }
+
+        info.work_group_size = (uint3){subgroup_size, 1, 1};
+        info.invocation_count = (uint3){num_invocations, 1, 1};
+        info.subgroup_size = (uint3){subgroup_size, 1, 1};
+        info.subgroup_x_bits = 0xff;
+        info.subgroup_x_offset = 0x0;
+        info.subgroup_y_bits = 0x0;
+        info.subgroup_y_offset = 0x0;
+        info.subgroup_z_bits = 0x0;
+        info.subgroup_z_offset = 0x0;
+        info.input = NULL;
+        info.output = NULL;
+        info.builtin_output = NULL;
+        info.push_constants = state->push_constants;
+        info.print_fn = (void *)printf;
+        ito(num_invocations) {
+          float barycentrics[0x100] = {};
+          jto(subgroup_size) {
+            Pixel_Invocation_Info pinfo = pinfos[j + i * subgroup_size];
+            barycentrics[j * 3 + 0] = pinfo.b_0;
+            barycentrics[j * 3 + 1] = pinfo.b_1;
+            barycentrics[j * 3 + 2] = pinfo.b_2;
+          }
+          info.barycentrics = barycentrics;
+          info.invocation_id = (uint3){i, 0, 0};
+          info.input =
+              pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
+          info.output = pixel_output + i * subgroup_size;
+          // Assume there's only gl_Position
+          info.builtin_output = vs_vertex_positions + i * subgroup_size;
+          ps_symbols->spv_main(&info, (~0));
+        }
+      }
+      ito(num_pixel_invocations) {
+        Pixel_Invocation_Info info = pinfos[i];
+        ((uint32_t *)
+             rt->img->get_ptr())[info.y * rt->img->extent.width + info.x] =
+            rgba32f_to_rgba8(pixel_output[i]);
+      }
+      //      ito(tile_count) {
+      //        uint32_t subtile_x = (uint32_t)tiles[i].x * 4 + x * 256;
+      //        uint32_t subtile_y = (uint32_t)tiles[i].y * 4 + y * 256;
+      //        kto(4) {
+      //          jto(4) {
+      //            uint32_t texel_y = (subtile_y + k);
+      //            uint32_t texel_x = (subtile_x + j);
+      //            if (texel_x >= rt->img->extent.width)
+      //              break;
+      //            if (texel_y >= rt->img->extent.height)
+      //              break;
+      //            ((uint32_t *)rt->img
+      //                 ->get_ptr())[texel_y * rt->img->extent.width + texel_x]
+      //                 |=
+      //                (tiles[i].mask & (1 << ((k << 2) | j))) == 0 ? 0x0 :
+      //                0xff0000ff;
+      //          }
+      //        }
+      //        //      ito(tile_count) {
+      //        //        uint32_t x = ((uint32_t)tiles[i].x * 4 *
+      //        //        rt->img->extent.width) / 256; uint32_t y =
+      //        //        ((uint32_t)tiles[i].y * 4 * rt->img->extent.height) /
+      //        256;
+      //        //        kto((4 * rt->img->extent.height + 255) / 256) {
+      //        //          jto((4 * rt->img->extent.width + 255) / 256) {
+      //        //            ((uint32_t *)rt->img
+      //        //                 ->get_ptr())[(y + k) * rt->img->extent.width
+      //        + (x +
+      //        //                 j)] =
+      //        //                0xff0000ff;
+      //        //          }
+      //        //        }
+      //      }
     }
   }
   //  ito(256) {
@@ -2673,12 +2899,6 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
   //      uint8_t r = *(uint8_t *)(void *)(((uint8_t *)image_i8) + offset);
 
   //    }
-  //  }
-  //  ito(num_pixel_invocations) {
-  //    Pixel_Invocation_Info info = pinfos[i];
-  //    ((uint32_t *)rt->img->get_ptr())[info.y * rt->img->extent.width +
-  //    info.x] =
-  //        0xffff00ff; // rgba32f_to_rgba8(pixel_output[i]);
   //  }
 
   //    ito(4) fprintf(stdout, "%f %f %f %f\n", vs_vertex_positions[i].x,
@@ -2776,6 +2996,7 @@ void main_loop() {
   static int old_mp_y = 0;
   static bool hyper_pressed = false;
   static bool skip_key = false;
+  static bool lctrl = false;
   SDL_StartTextInput();
   while (SDL_WaitEvent(&event)) {
     SDL_GetWindowSize(window, &SCREEN_WIDTH, &SCREEN_HEIGHT);
@@ -2787,18 +3008,20 @@ void main_loop() {
     case SDL_KEYUP: {
       //      fprintf(stdout, "up %i\n", event.key.keysym.scancode);
       //      fflush(stdout);
-      if (event.key.keysym.scancode == 258)
-        break;
-      if (event.key.keysym.scancode == 57) {
-        hyper_pressed = false;
-        skip_key = false;
-        break;
+      //      if (event.key.keysym.scancode == 258)
+      //        break;
+      //      if (event.key.keysym.scancode == 57) {
+      //        hyper_pressed = false;
+      //        skip_key = false;
+      //        break;
+      //      }
+      if (event.key.keysym.sym == SDLK_LCTRL) {
+        lctrl = false;
       }
       break;
     }
     case SDL_TEXTINPUT: {
       uint32_t c = event.text.text[0];
-      //                printf("%s\n", event.text.text);
       if (c >= 0x20 && c <= 0x7e) {
         c2d.console.put_char((char)c);
       }
@@ -2807,20 +3030,25 @@ void main_loop() {
       uint32_t c = event.key.keysym.sym;
       //            fprintf(stdout, "down %i\n", event.key.keysym.sym);
       //            fflush(stdout);
-      if (event.key.keysym.scancode == 258)
-        break;
-      if (event.key.keysym.scancode == 57) {
-        hyper_pressed = true;
-        skip_key = true;
-        break;
-      }
-      if (skip_key) {
-        //        skip_key = false;
-        break;
-      }
+      //      if (event.key.keysym.scancode == 258)
+      //        break;
+      //      if (event.key.keysym.scancode == 57) {
+      //        hyper_pressed = true;
+      //        skip_key = true;
+      //        break;
+      //      }
+      //      if (skip_key) {
+      //        //        skip_key = false;
+      //        break;
+      //      }
       //      if (hyper_pressed)
       //        skip_key = true;
-
+      if (lctrl && c == SDLK_s) {
+        gridbg.try_command("s");
+      }
+      if (event.key.keysym.sym == SDLK_LCTRL) {
+        lctrl = true;
+      }
       if (event.key.keysym.sym == SDLK_BACKSPACE) {
         c2d.console.backspace();
       }
@@ -2874,6 +3102,7 @@ void main_loop() {
       skip_key = false;
       hyper_pressed = false;
       ldown = false;
+      lctrl = false;
       break;
     }
     case SDL_MOUSEMOTION: {
@@ -2900,7 +3129,7 @@ void main_loop() {
           -0.5f * dz *
           (c2d.camera.window_to_screen((int2){0, (int32_t)old_mp_y}).y);
       c2d.camera.pos.z += dz;
-      c2d.camera.pos.z = clamp(c2d.camera.pos.z, 0.1f, 256.0f);
+      c2d.camera.pos.z = clamp(c2d.camera.pos.z, 0.1f, 512.0f);
     } break;
     }
     if (gridbg.run == false)
@@ -2955,27 +3184,41 @@ int main(int argc, char **argv) {
     if (graphics_thread_finished == 1)
       break;
     tile_count = 0;
-    rasterize_triangle_tiled_4x4_256x256_defer_cull(
-        // clang-format off
-            gridbg.v_x[0] / 256.0f, gridbg.v_y[0] / 256.0f, // p0
-            gridbg.v_x[1] / 256.0f, gridbg.v_y[1] / 256.0f, // p1
-            gridbg.v_x[2] / 256.0f, gridbg.v_y[2] / 256.0f, // p2
-            &tiles[0], &tile_count
-        // clang-format on
-    );
+    //    if (impl_mode == Impl_Mode_t::REF) {
+    //      rasterize_triangle_tiled_1x1_256x256_defer_ref(     //
+    //          gridbg.v_x[0] / 256.0f, gridbg.v_y[0] / 256.0f, // p0
+    //          gridbg.v_x[1] / 256.0f, gridbg.v_y[1] / 256.0f, // p1
+    //          gridbg.v_x[2] / 256.0f, gridbg.v_y[2] / 256.0f, // p2
+    //          &tiles[0], &tile_count);
+    //    } else {
+    //      rasterize_triangle_tiled_1x1_256x256_defer(         //
+    //          gridbg.v_x[0] / 256.0f, gridbg.v_y[0] / 256.0f, // p0
+    //          gridbg.v_x[1] / 256.0f, gridbg.v_y[1] / 256.0f, // p1
+    //          gridbg.v_x[2] / 256.0f, gridbg.v_y[2] / 256.0f, // p2
+    //          &tiles[0], &tile_count);
+    //    }
+
+    //    rasterize_triangle_tiled_4x4_256x256_defer_cull(
+    //        // clang-format off
+    //            gridbg.v_x[0] / 256.0f, gridbg.v_y[0] / 256.0f, // p0
+    //            gridbg.v_x[1] / 256.0f, gridbg.v_y[1] / 256.0f, // p1
+    //            gridbg.v_x[2] / 256.0f, gridbg.v_y[2] / 256.0f, // p2
+    //            &tiles[0], &tile_count
+    //        // clang-format on
+    //    );
     i++;
   }
-  PRINT_CLOCKS({
-    i8x16 *data = (i8x16 *)((size_t)image_i8 & (~0x1fULL));
-    i8x16 v_value = broadcast_i8x16(0xff);
-    ito(tile_count) {
-      uint8_t x = tiles[i].x;
-      uint8_t y = tiles[i].y;
-      uint32_t offset = tile_coord((uint32_t)x * 4, (uint32_t)y * 4, 8, 2);
-      data[offset / 16] =
-          or_si8x16(data[offset / 16], unpack_mask_i1x16(tiles[i].mask));
-    }
-  });
+  //  PRINT_CLOCKS({
+  //    i8x16 *data = (i8x16 *)((size_t)image_i8 & (~0x1fULL));
+  //    i8x16 v_value = broadcast_i8x16(0xff);
+  //    ito(tile_count) {
+  //      uint8_t x = tiles[i].x;
+  //      uint8_t y = tiles[i].y;
+  //      uint32_t offset = tile_coord((uint32_t)x * 4, (uint32_t)y * 4, 8, 2);
+  //      data[offset / 16] =
+  //          or_si8x16(data[offset / 16], unpack_mask_i1x16(tiles[i].mask));
+  //    }
+  //  });
   //  ito(1000) {
   //    rasterize_triangle_naive_4(
   //        // clang-format off
@@ -2986,7 +3229,7 @@ int main(int argc, char **argv) {
   //        // clang-format on
   //    );
   //  }
-  write_image_2d_i8_ppm_tiled("image.ppm", image_i8, width_pow, 2);
+  //  write_image_2d_i8_ppm_tiled("image.ppm", image_i8, width_pow, 2);
   window_loop.join();
   return 0;
 }

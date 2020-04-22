@@ -1,4 +1,4 @@
-## Toy SPIRV to LLVM IR translator
+## Toy software Vulkan driver
 
 ## Run tests
 ```console
@@ -7,6 +7,7 @@ python3 tests/run_all_tests.py
 ```
 
 ## Build
+### LLVM Version: commit 0d3149f43173967d6f4e4c5c904a05e1022071d4
 ### LibPFC
 ```console
 cd 3rdparty/libpfc
