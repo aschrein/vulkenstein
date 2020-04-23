@@ -93,6 +93,7 @@ target_include_directories(vk
   PRIVATE
   3rdparty/SPIRV
   3rdparty
+  ${VULKAN_SDK}/include
   ${CMAKE_SOURCE_DIR}
   ${CMAKE_BINARY_DIR}
   ${LLVM_INCLUDE_DIRS}
@@ -109,6 +110,7 @@ target_include_directories(s2l
   PRIVATE
   3rdparty/SPIRV
   3rdparty
+  ${VULKAN_SDK}/include
   ${CMAKE_SOURCE_DIR}
   ${CMAKE_BINARY_DIR}
   ${LLVM_INCLUDE_DIRS}
@@ -118,5 +120,5 @@ target_compile_definitions(vk PRIVATE ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(s2l PRIVATE "-DS2L_EXE " ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(raster PRIVATE "-DRASTER_EXE " ${LLVM_COMPILE_FLAGS})
 target_link_libraries(s2l ${LLVM_LIBRARY_LIST} pthread ncurses z dl)
-target_link_libraries(vk ${LLVM_LIBRARY_LIST} pthread ncurses z dl xcb-image X11)
+target_link_libraries(vk ${LLVM_LIBRARY_LIST} ${VULKAN_SDK}/lib/libSPIRV-Tools-shared.so SPIRV-Tools pthread ncurses z dl xcb-image X11)
 target_link_libraries(raster SDL2 OpenGL pthread)

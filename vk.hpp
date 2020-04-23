@@ -556,6 +556,7 @@ struct Shader_Symbols {
   uint32_t export_count;
   uint32_t export_items[0x10];
   uint32_t subgroup_size;
+  uint64_t code_hash;
 };
 extern "C" Shader_Symbols *get_shader_symbols(void *ptr);
 extern "C" void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,

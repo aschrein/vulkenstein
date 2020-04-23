@@ -2539,6 +2539,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     info.builtin_output = NULL;
     info.push_constants = state->push_constants;
     info.print_fn = (void *)printf_flush;
+    info.trap_fn = (void *)abort;
 
     //    descriptor_set_0[0] =
     //    state->descriptor_sets[0]->slots[0].buffer->get_ptr(); float4 *mat =
@@ -2557,6 +2558,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     //                   mat[i].w);
     //    fprintf(stdout, "#################\n");
     ito(num_invocations) {
+      info.wave_width = vs_symbols->subgroup_size;
       info.invocation_id = (uint3){i, 0, 0};
       info.input = attributes + i * subgroup_size * vs_symbols->input_stride;
       info.output = vs_output + i * subgroup_size * vs_symbols->output_stride;
@@ -2694,10 +2696,24 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
 
   uint32_t x_num_tiles = (rt->img->extent.width + 255) / 256;
   uint32_t y_num_tiles = (rt->img->extent.height + 255) / 256;
+  struct Pixel_Invocation_Info {
+    uint32_t triangle_id;
+    // Barycentric coordinates
+    float b_0, b_1, b_2;
+    uint32_t x, y;
+  };
+  uint32_t max_pixel_invocations = 256 * 256 * 4;
+  Pixel_Invocation_Info *pinfos =
+      (Pixel_Invocation_Info *)ts.alloc_page_aligned(
+          sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
+  Classified_Tile *tiles =
+      (Classified_Tile *)ts.alloc(sizeof(Classified_Tile) * (1 << 20));
+  //  float *depth_tile_buffer = (float *)ts.alloc(4 * 256 * 256);
   yto(y_num_tiles) {
     xto(x_num_tiles) {
       ts.enter_scope();
       defer(ts.exit_scope());
+      //      ito(256 * 256) depth_tile_buffer[i] = 1.0f;
       // So like we're covering the screen with 256x256 tiles and do
       // rasterization on them and then apply that to the screen
       //
@@ -2709,18 +2725,8 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       // |_____._______|
       //
       // Rastrization
-      struct Pixel_Invocation_Info {
-        uint32_t triangle_id;
-        // Barycentric coordinates
-        float b_0, b_1, b_2;
-        uint32_t x, y;
-      };
-      uint32_t max_pixel_invocations = 1 << 16;
-      Pixel_Invocation_Info *pinfos = (Pixel_Invocation_Info *)ts.alloc(
-          sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
+
       uint32_t num_pixel_invocations = 0;
-      Classified_Tile *tiles =
-          (Classified_Tile *)ts.alloc(sizeof(Classified_Tile) * (1 << 20));
 
       float tile_x = ((float)x * 256.0f) / (float)rt->img->extent.width;
       float tile_y = ((float)y * 256.0f) / (float)rt->img->extent.height;
@@ -2749,45 +2755,98 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
         float n1_y = (x2 - x1);
         float n2_x = -(y0 - y2);
         float n2_y = (x0 - x2);
+        float area = (x1 - x0) * (y1 + y0) + //
+                     (x2 - x1) * (y2 + y1) + //
+                     (x0 - x2) * (y0 + y2);
+        bool cull = pipeline->RS_state.cullMode !=
+                    VkCullModeFlagBits::VK_CULL_MODE_NONE;
+        float cull_sign =
+            pipeline->RS_state.frontFace == VkFrontFace::VK_FRONT_FACE_CLOCKWISE
+                ? -1.0f
+                : 1.0f;
+        if (pipeline->RS_state.cullMode ==
+            VkCullModeFlagBits::VK_CULL_MODE_BACK_BIT) {
+          cull_sign *= cull_sign;
+        }
+        if (cull && area * cull_sign > 0.0f) {
+          continue;
+        }
         uint32_t tile_count = 0;
-        rasterize_triangle_tiled_1x1_256x256_defer_ref( //
-            x0, y0,                                     //
-            x1, y1,                                     //
-            x2, y2,                                     //
-            n0_x, n0_y,                                 //
-            n1_x, n1_y,                                 //
-            n2_x, n2_y,                                 //
-            tiles, &tile_count);
+        if (area > 0.0f) {
+          n0_x = -n0_x;
+          n0_y = -n0_y;
+          n1_x = -n1_x;
+          n1_y = -n1_y;
+          n2_x = -n2_x;
+          n2_y = -n2_y;
+          rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+              x2, y2,                                     //
+              x1, y1,                                     //
+              x0, y0,                                     //
+              n2_x, n2_y,                                 //
+              n1_x, n1_y,                                 //
+              n0_x, n0_y,                                 //
+              tiles, &tile_count);
+        } else {
+          rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+              x0, y0,                                     //
+              x1, y1,                                     //
+              x2, y2,                                     //
+              n0_x, n0_y,                                 //
+              n1_x, n1_y,                                 //
+              n2_x, n2_y,                                 //
+              tiles, &tile_count);
+        }
         ito(tile_count) {
           Classified_Tile tile = tiles[i];
 
           for (uint32_t sub_y = 0; sub_y < 4; sub_y++) {
             for (uint32_t sub_x = 0; sub_x < 4; sub_x++) {
               if (tile.mask & (1 << (sub_x | (sub_y << 2)))) {
-                float b2 = tile.e_0 + n0_x * sub_x + n0_y * sub_y;
-                float b0 = tile.e_1 + n1_x * sub_x + n1_y * sub_y;
-                float b1 = tile.e_2 + n2_x * sub_x + n2_y * sub_y;
+                float b2;
+                float b0;
+                float b1;
+
+                b2 = tile.e_0 + n0_x * sub_x + n0_y * sub_y;
+                b0 = tile.e_1 + n1_x * sub_x + n1_y * sub_y;
+                b1 = tile.e_2 + n2_x * sub_x + n2_y * sub_y;
                 float sum = b0 + b1 + b2;
                 b0 /= sum;
                 b1 /= sum;
                 b2 /= sum;
+                if (area > 0.0f) {
+                  SWAP(b1, b2);
+                }
                 float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
                 b0 = b0 / v0.w / bw;
                 b1 = b1 / v1.w / bw;
                 b2 = b2 / v2.w / bw;
-                pinfos[num_pixel_invocations++] =
-                    Pixel_Invocation_Info{.triangle_id = k,
-                                          .b_0 = b0,
-                                          .b_1 = b1,
-                                          .b_2 = b2,
-                                          .x = x * 256 + tile.x * 4 + sub_x,
-                                          .y = y * 256 + tile.y * 4 + sub_y};
+
+                pinfos[num_pixel_invocations++] = Pixel_Invocation_Info{
+                    .triangle_id = k,
+                    .b_0 = b0,
+                    .b_1 = b1,
+                    .b_2 = b2,
+                    .x = x * 256 + (uint32_t)tile.x * 4 + sub_x,
+                    .y = y * 256 + (uint32_t)tile.y * 4 + sub_y};
               }
             }
           }
         }
       }
+      //      void *pinfos_shadow = pinfos;
+      //      pinfos = (Pixel_Invocation_Info *)ts.alloc_page_aligned(
+      //          sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
+      //      memcpy(pinfos, pinfos_shadow,
+      //             sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
+      //      unmap_pages(pinfos_shadow,
+      //      get_num_pages(sizeof(Pixel_Invocation_Info) *
+      //                                               max_pixel_invocations));
+
+      //      ts.alloc_page_aligned(1 << 20);
       float4 *pixel_output = NULL;
+      float *pixel_depth_output = NULL;
+      float4 *pixel_positions_input = NULL;
       // Spawn pixel shaders
       if (num_pixel_invocations != 0) {
         uint32_t subgroup_size = ps_symbols->subgroup_size;
@@ -2796,11 +2855,16 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
         // Allocate storage space for render target output
         pixel_output = (float4 *)ts.alloc(sizeof(float4) * num_invocations *
                                           subgroup_size);
+        pixel_positions_input = (float4 *)ts.alloc(
+            sizeof(float4) * num_invocations * subgroup_size);
+        pixel_depth_output =
+            (float *)ts.alloc(sizeof(float) * num_invocations * subgroup_size);
         // Allocate pixel shader input storage and
         // Perform relocation of data for vs->ps
         uint8_t *pixel_input = NULL;
         pixel_input = (uint8_t *)ts.alloc(3 * ps_symbols->input_stride *
                                           num_invocations * subgroup_size);
+
         ito(num_pixel_invocations) {
           Pixel_Invocation_Info info = pinfos[i];
           jto(ps_symbols->input_item_count) {
@@ -2818,6 +2882,8 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                       (VkFormat)ps_symbols->input_slots[j].format));
             }
           }
+          kto(3) pixel_positions_input[i * 3 + k] =
+              screenspace_positions[info.triangle_id * 3 + k];
         }
 
         info.work_group_size = (uint3){subgroup_size, 1, 1};
@@ -2848,16 +2914,54 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
               pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
           info.output = pixel_output + i * subgroup_size;
           // Assume there's only gl_Position
-          info.builtin_output = vs_vertex_positions + i * subgroup_size;
+          info.builtin_output = pixel_depth_output + i * subgroup_size;
+          info.pixel_positions = pixel_positions_input + i * subgroup_size * 3;
+          info.wave_width = ps_symbols->subgroup_size;
           ps_symbols->spv_main(&info, (~0));
         }
+        ito(num_pixel_invocations) {
+          Pixel_Invocation_Info info = pinfos[i];
+          uint32_t *dst = ((uint32_t *)rt->img->get_ptr());
+          if (info.x >= rt->img->extent.width)
+            continue;
+          if (info.y >= rt->img->extent.height)
+            continue;
+          float depth_value = 1.0f;
+          float2 *depth_src = (float2 *)depth->img->get_ptr() +
+                              info.y * rt->img->extent.width + info.x;
+          if (state->graphics_pipeline->DS_state.depthTestEnable == VK_TRUE) {
+            depth_value = (*depth_src).x;
+            if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                VK_COMPARE_OP_LESS) {
+              if (pixel_depth_output[i] > depth_value)
+                continue;
+            } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                       VK_COMPARE_OP_LESS_OR_EQUAL) {
+              if (pixel_depth_output[i] >= depth_value)
+                continue;
+            } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                       VK_COMPARE_OP_GREATER) {
+              if (pixel_depth_output[i] < depth_value)
+                continue;
+            } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                       VK_COMPARE_OP_GREATER_OR_EQUAL) {
+              if (pixel_depth_output[i] <= depth_value)
+                continue;
+            } else {
+              UNIMPLEMENTED;
+            }
+          }
+          if (state->graphics_pipeline->DS_state.depthWriteEnable == VK_TRUE) {
+            *depth_src = (float2){pixel_depth_output[i], 0};
+          }
+          dst[info.y * rt->img->extent.width + info.x] =
+              rgba32f_to_rgba8(pixel_output[i]);
+        }
       }
-      ito(num_pixel_invocations) {
-        Pixel_Invocation_Info info = pinfos[i];
-        ((uint32_t *)
-             rt->img->get_ptr())[info.y * rt->img->extent.width + info.x] =
-            rgba32f_to_rgba8(pixel_output[i]);
-      }
+
+      //      map_pages(pinfos_shadow,
+      //      get_num_pages(sizeof(Pixel_Invocation_Info) *
+      //                                             max_pixel_invocations));
       //      ito(tile_count) {
       //        uint32_t subtile_x = (uint32_t)tiles[i].x * 4 + x * 256;
       //        uint32_t subtile_y = (uint32_t)tiles[i].y * 4 + y * 256;

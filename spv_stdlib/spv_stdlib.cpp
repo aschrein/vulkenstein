@@ -38,15 +38,17 @@ struct Invocation_Info {
   uint32_t subgroup_z_bits, subgroup_z_offset;
   uint32_t wave_width;
   // array of (void *[])
-  void **descriptor_sets[0x10];
   void *private_data;
   void *input;
   void *builtin_output;
+  // for gl_FragCoord stuff
+  void *pixel_positions;
   void *output;
   uint8_t *push_constants;
   void *print_fn;
   void *trap_fn;
   float *barycentrics;
+  void **descriptor_sets[0x10];
 };
 
 typedef int (*printf_t)(const char *__restrict __format, ...);
@@ -96,6 +98,18 @@ FNATTR uint32_t morton(uint32_t x, uint32_t y) {
 FNATTR void unmorton(uint32_t address, uint32_t *x, uint32_t *y) {
   *x = _pext_u32(address, 0b01'01'01'01'01'01'01'01'01'01'01'01'01'01'01'01);
   *y = _pext_u32(address, 0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10);
+}
+
+FNATTR float4 get_pixel_position(Invocation_Info *state, uint32_t lane_id,
+                                 float b0, float b1, float b2) {
+  float4 v0 = ((float4 *)state->pixel_positions)[lane_id * 3 + 0];
+  float4 v1 = ((float4 *)state->pixel_positions)[lane_id * 3 + 1];
+  float4 v2 = ((float4 *)state->pixel_positions)[lane_id * 3 + 2];
+  return v0 * b0 + v1 * b1 + v2 * b2;
+}
+
+FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id, float d) {
+  ((float *)state->builtin_output)[lane_id] = d;
 }
 // For pixel shaders we follow morton curve order
 // There are a number of configurations employed in this implementation
@@ -165,8 +179,7 @@ FNATTR float4 spv_image_read_2d_float4_lod(uint64_t handle, uint2 coord,
       spv_clamp_u32(image->width >> mip_level, 1, image->width);
   uint32_t mip_height =
       spv_clamp_u32(image->height >> mip_level, 1, image->height);
-  float4 *mip_data =
-      (float4 *)(image->data + image->mip_offsets[mip_level]);
+  float4 *mip_data = (float4 *)(image->data + image->mip_offsets[mip_level]);
   uint32_t pitch = (image->pitch >> mip_level) / sizeof(float4);
   return mip_data[coord.x + coord.y * pitch];
 }
@@ -202,7 +215,7 @@ FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle,
   // pow2 has to be > 0.0 here
   //  float max_size = fmaxf((float)image->width, (float)image->height);
   float mip_level = spv_clamp_f32((float)image->mip_levels - pow2, 0.0f,
-                              (float)image->mip_levels);
+                                  (float)image->mip_levels);
   if (sampler->mipmap_mode == Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR) {
     uint32_t mip_level_0 = (uint32_t)floorf(mip_level);
     uint32_t mip_level_1 = (uint32_t)floorf(mip_level + 1.0f);
@@ -333,14 +346,11 @@ FNATTR float3 spv_cross(float3 a, float3 b) {
                   a.x * b.y - a.y * b.x};
 }
 
-FNATTR float spv_pow(float a, float b) {
-  return std::pow(a, b);
-}
+FNATTR float spv_pow(float a, float b) { return std::pow(a, b); }
 
 FNATTR float3 spv_reflect(float3 I, float3 N) {
   return I - 2.0f * spv_dot_f3(I, N) * N;
 }
-
 
 FNATTR float4 spv_matrix_times_float_4x4(float4 *matrix, float4 vector) {
   float4 out;
@@ -383,7 +393,6 @@ FNATTR void dump_float4(Invocation_Info *state, float *m) {
 }
 FNATTR void dump_string(Invocation_Info *state, char const *str) {
   ((printf_t)state->print_fn)("%s\n", str);
-  ((printf_t)state->print_fn)("________________\n");
 }
 }
 #endif

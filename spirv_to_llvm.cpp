@@ -11,10 +11,18 @@
 #include "vk.hpp"
 
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/InitializePasses.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Transforms/AggressiveInstCombine/AggressiveInstCombine.h"
+#include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Scalar/GVN.h"
+#include "llvm/Transforms/Utils.h"
+#include "llvm/Transforms/Vectorize.h"
+#include <llvm/ExecutionEngine/JITEventListener.h>
+#include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
+#include <llvm/IR/DIBuilder.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InlineAsm.h>
@@ -28,6 +36,8 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
+
+#include <spirv-tools/libspirv.h>
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -82,7 +92,7 @@ void *read_file(const char *filename, size_t *size,
 
 struct Jitted_Shader {
 
-  void init() {
+  void init(uint64_t code_hash, bool debug_info = true) {
     llvm::ExitOnError ExitOnErr;
     //    jit->getIRTransformLayer().setTransform(
     //        [&](llvm::orc::ThreadSafeModule TSM,
@@ -98,24 +108,113 @@ struct Jitted_Shader {
     //          });
     //          return TSM;
     //        });
+    static_cast<llvm::orc::RTDyldObjectLinkingLayer &>(
+        jit->getObjLinkingLayer())
+        .registerJITEventListener(
+            *llvm::JITEventListener::createGDBRegistrationListener());
     jit->getIRTransformLayer().setTransform(
         [&](llvm::orc::ThreadSafeModule TSM,
             const llvm::orc::MaterializationResponsibility &R) {
-          TSM.withModuleDo([](llvm::Module &M) {
+          TSM.withModuleDo([&](llvm::Module &M) {
             // Create a function pass manager.
-            auto FPM = std::make_unique<llvm::legacy::FunctionPassManager>(&M);
+            auto FPM = std::make_unique<llvm::legacy::PassManager>();
+            llvm::PassRegistry *registry =
+                llvm::PassRegistry::getPassRegistry();
+            llvm::initializeCore(*registry);
+            llvm::initializeScalarOpts(*registry);
+            llvm::initializeIPO(*registry);
+            llvm::initializeAnalysis(*registry);
+            llvm::initializeTransformUtils(*registry);
+            llvm::initializeInstCombine(*registry);
+            llvm::initializeInstrumentation(*registry);
+            llvm::initializeTarget(*registry);
+            if (!debug_info)
+              FPM->add(llvm::createStripDebugDeclarePass());
 
-            // Add some optimizations.
             FPM->add(llvm::createInstructionCombiningPass());
             FPM->add(llvm::createReassociatePass());
             FPM->add(llvm::createGVNPass());
             FPM->add(llvm::createCFGSimplificationPass());
-            FPM->doInitialization();
+            // FPM->add(llvm::createGlobalDCEPass());
+            FPM->add(llvm::createSROAPass());
+            FPM->add(llvm::createEarlyCSEPass());
+            FPM->add(llvm::createReassociatePass());
+            FPM->add(llvm::createConstantPropagationPass());
+            FPM->add(llvm::createDeadInstEliminationPass());
+            FPM->add(llvm::createCFGSimplificationPass());
+            FPM->add(llvm::createPromoteMemoryToRegisterPass());
+            // FPM->add(llvm::createAggressiveDCEPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createDeadInstEliminationPass());
+            FPM->add(llvm::createSROAPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createCFGSimplificationPass());
+            FPM->add(llvm::createPromoteMemoryToRegisterPass());
+            //            FPM->add(llvm::createGlobalOptimizerPass());
+            FPM->add(llvm::createReassociatePass());
+            // FPM->add(llvm::createIPConstantPropagationPass());
+            // FPM->add(llvm::createDeadArgEliminationPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createCFGSimplificationPass());
+            // FPM->add(llvm::createPruneEHPass());
+            FPM->add(llvm::createReversePostOrderFunctionAttrsPass());
+            // FPM->add(llvm::createFunctionInliningPass());
+            FPM->add(llvm::createConstantPropagationPass());
+            FPM->add(llvm::createDeadInstEliminationPass());
+            FPM->add(llvm::createCFGSimplificationPass());
+            // FPM->add(llvm::createArgumentPromotionPass());
+            // FPM->add(llvm::createAggressiveDCEPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createJumpThreadingPass());
+            FPM->add(llvm::createCFGSimplificationPass());
+            FPM->add(llvm::createSROAPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createTailCallEliminationPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createEarlyCSEPass());
+            // FPM->add(llvm::createFunctionInliningPass());
+            FPM->add(llvm::createConstantPropagationPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createIPSCCPPass());
+            // FPM->add(llvm::createDeadArgEliminationPass());
+            // FPM->add(llvm::createAggressiveDCEPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createCFGSimplificationPass());
+            // FPM->add(llvm::createFunctionInliningPass());
+            // FPM->add(llvm::createArgumentPromotionPass());
+            FPM->add(llvm::createSROAPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createCFGSimplificationPass());
+            FPM->add(llvm::createReassociatePass());
+            FPM->add(llvm::createLoopRotatePass());
+            FPM->add(llvm::createLICMPass());
+            FPM->add(llvm::createLoopUnswitchPass(false));
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createIndVarSimplifyPass());
+            FPM->add(llvm::createLoopIdiomPass());
+            FPM->add(llvm::createLoopDeletionPass());
+            FPM->add(llvm::createLoopUnrollPass());
+            FPM->add(llvm::createGVNPass());
+            FPM->add(llvm::createMemCpyOptPass());
+            FPM->add(llvm::createSCCPPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createJumpThreadingPass());
+            FPM->add(llvm::createCorrelatedValuePropagationPass());
+            FPM->add(llvm::createDeadStoreEliminationPass());
+            // FPM->add(llvm::createAggressiveDCEPass());
+            FPM->add(llvm::createCFGSimplificationPass());
+            FPM->add(llvm::createInstructionCombiningPass());
+            FPM->add(llvm::createAggressiveInstCombinerPass());
+            // FPM->add(llvm::createFunctionInliningPass());
+            // FPM->add(llvm::createAggressiveDCEPass());
+            FPM->add(llvm::createStripDeadPrototypesPass());
+            // FPM->add(llvm::createGlobalDCEPass());
+            FPM->add(llvm::createConstantMergePass());
 
             // Run the optimizations over all functions in the module being
             // added to the JIT.
-            for (auto &F : M)
-              FPM->run(F);
+
+            FPM->run(M);
             //            M.dump();
           });
           return TSM;
@@ -292,6 +391,8 @@ struct Function {
   spv::FunctionControlMask control;
   uint32_t function_type;
   std::vector<FunctionParameter> params;
+  // Debug mapping
+  uint32_t spirv_line;
 };
 enum class DeclTy {
   PrimitiveTy,
@@ -328,6 +429,7 @@ struct Spirv_Builder {
   //////////////////////
   uint32_t opt_subgroup_size = 4;
   bool opt_debug_comments = false;
+  bool opt_debug_info = true;
   //  bool opt_deinterleave_attributes = false;
 
   //////////////////////
@@ -377,6 +479,8 @@ struct Spirv_Builder {
   // Lifetime must be long enough
   uint32_t const *code;
   size_t code_size;
+  uint64_t code_hash;
+  char shader_dump_path[0x100];
   int ATTR_USED dump_spirv_module() const {
     FILE *file = fopen("shader_dump.spv", "wb");
     fwrite(code, 1, code_size * 4, file);
@@ -460,6 +564,41 @@ struct Spirv_Builder {
     };
     ASSERT_ALWAYS(module);
 
+    // Debug info builder
+    std::unique_ptr<llvm::DIBuilder> llvm_di_builder(
+        new llvm::DIBuilder(*module));
+    // those are removed along with dibuilder
+    llvm::DICompileUnit *llvm_di_cuint(llvm_di_builder->createCompileUnit(
+        llvm::dwarf::DW_LANG_C,
+        llvm_di_builder->createFile(shader_dump_path, "."), "SPRIV JIT", 0, "",
+        0));
+    llvm::DIFile *llvm_di_unit(
+        llvm_di_builder->createFile(shader_dump_path, "."));
+    //    std::map<llvm::Type *, llvm::DIType *> llvm_debug_type_table;
+    //    std::function<llvm::DIType *(llvm::Type *)> llvm_get_debug_type =
+    //        [&](llvm::Type *ty) {
+    //          if (contains(llvm_debug_type_table, ty))
+    //            return llvm_debug_type_table[ty];
+    //          if (ty->isFloatTy()) {
+    //            llvm::DIBasicType *bty = llvm_di_builder->createBasicType(
+    //                "float", 32, llvm::dwarf::DW_ATE_float);
+    //            llvm_debug_type_table[ty] = bty;
+    //            return bty;
+    //          } else if (ty->isVectorTy()) {
+    //            llvm::VectorType *vtype =
+    //            llvm::dyn_cast<llvm::VectorType>(ty); llvm::DIType *dity =
+    //            llvm_di_builder->createVectorType(
+    //                vtype->getElementCount(), vtype->getElementCount() * 4,
+    //                llvm_get_deubg_type_table(vtype->getElementType()), {});
+    //            "float", 32, llvm::dwarf::DW_ATE_float);
+    //            llvm_debug_type_table[ty] = bty;
+    //            return bty;
+    //          } else {
+    //            TRAP;
+    //          }
+    //        };
+
+    /////////////////////////////
     llvm::install_fatal_error_handler(&llvm_fatal);
     auto llvm_get_constant_i32 = [&c](uint32_t a) {
       return llvm::ConstantInt::get(llvm::IntegerType::getInt32Ty(c), a);
@@ -541,6 +680,8 @@ struct Spirv_Builder {
     LOOKUP_FN(kill);
     LOOKUP_FN(get_barycentrics);
     LOOKUP_FN(get_derivatives);
+    LOOKUP_FN(get_pixel_position);
+    LOOKUP_FN(pixel_store_depth);
     LOOKUP_FN(dump_float4x4);
     LOOKUP_FN(dump_float4);
     LOOKUP_FN(dump_string);
@@ -967,6 +1108,7 @@ struct Spirv_Builder {
       std::map<uint32_t, llvm::BasicBlock *> llvm_labels;
       ///////////////////////////////////////////////
       uint32_t func_id = item.first;
+      Function function = functions[func_id];
       bool is_entry = contains(entries, func_id);
       bool is_pixel_shader =
           is_entry && entries[func_id].execution_model ==
@@ -987,6 +1129,20 @@ struct Spirv_Builder {
       ASSERT_ALWAYS(cur_mask->getType() == mask_t);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
+      // Debug line number
+      uint32_t cur_spirv_line = function.spirv_line;
+      llvm::DIScope *di_scope = NULL;
+      if (opt_debug_info) {
+        llvm::DISubprogram *SP = llvm_di_builder->createFunction(
+            (llvm::DIScope *)llvm_di_unit, "@Function", llvm::StringRef(),
+            llvm_di_unit, cur_spirv_line,
+            llvm_di_builder->createSubroutineType({}), 0,
+            llvm::DINode::FlagPrototyped, llvm::DISubprogram::SPFlagDefinition);
+        cur_fun->setSubprogram(SP);
+        di_scope = SP;
+        llvm_builder->SetCurrentDebugLocation(
+            llvm::DebugLoc::get(cur_spirv_line, 0, di_scope));
+      }
       // TODO(aschrein) maybe do something more optimal?
       // Each lane has it's own value table(quick and dirty way but will help me
       // advance)
@@ -996,7 +1152,7 @@ struct Spirv_Builder {
       ito(opt_subgroup_size) llvm_values_per_lane[i] = copy(llvm_global_values);
       // Setup arguments
       uint32_t cur_param_id = 2;
-      Function function = functions[func_id];
+
       for (auto &param : function.params) {
         uint32_t res_type_id = param.type_id;
         uint32_t res_id = param.id;
@@ -1012,6 +1168,26 @@ struct Spirv_Builder {
           llvm_builder->CreateCall(get_output_ptr, state_ptr);
       llvm::Value *builtin_output_ptr =
           llvm_builder->CreateCall(get_builtin_output_ptr, state_ptr);
+      llvm::SmallVector<llvm::Value *, 64> barycentrics;
+      llvm::SmallVector<llvm::Value *, 64> pixel_positions;
+      if (is_pixel_shader) {
+        ito(opt_subgroup_size) {
+          llvm::Value *b = llvm_builder->CreateCall(
+              get_barycentrics, {state_ptr, llvm_get_constant_i32(i)});
+          barycentrics.push_back(b);
+          llvm::Value *b_0 = llvm_builder->CreateExtractElement(b, (uint64_t)0);
+          llvm::Value *b_1 = llvm_builder->CreateExtractElement(b, (uint64_t)1);
+          llvm::Value *b_2 = llvm_builder->CreateExtractElement(b, (uint64_t)2);
+          llvm::Value *pos = llvm_builder->CreateCall(
+              get_pixel_position,
+              {state_ptr, llvm_get_constant_i32(i), b_0, b_1, b_2});
+          pixel_positions.push_back(pos);
+          llvm::Value *depth =
+              llvm_builder->CreateExtractElement(pos, (uint64_t)2);
+          llvm_builder->CreateCall(
+              pixel_store_depth, {state_ptr, llvm_get_constant_i32(i), depth});
+        }
+      }
       // @llvm/local_variables
       auto &locals = local_variables[func_id];
       for (auto &var_id : locals) {
@@ -1234,14 +1410,12 @@ struct Spirv_Builder {
           ito(opt_subgroup_size) {
             // For pixel shader we need to interpolate pipeline inputs
             if (is_pixel_shader) {
-              llvm::Value *barycentrics = llvm_builder->CreateCall(
-                  get_barycentrics, {state_ptr, llvm_get_constant_i32(i)});
-              llvm::Value *b_0 =
-                  llvm_builder->CreateExtractElement(barycentrics, (uint64_t)0);
-              llvm::Value *b_1 =
-                  llvm_builder->CreateExtractElement(barycentrics, (uint64_t)1);
-              llvm::Value *b_2 =
-                  llvm_builder->CreateExtractElement(barycentrics, (uint64_t)2);
+              llvm::Value *b_0 = llvm_builder->CreateExtractElement(
+                  barycentrics[i], (uint64_t)0);
+              llvm::Value *b_1 = llvm_builder->CreateExtractElement(
+                  barycentrics[i], (uint64_t)1);
+              llvm::Value *b_2 = llvm_builder->CreateExtractElement(
+                  barycentrics[i], (uint64_t)2);
               llvm::Value *gep_0 = llvm_builder->CreateGEP(
                   input_ptr,
                   llvm_get_constant_i32(input_storage_size * (i * 3 + 0) +
@@ -1312,7 +1486,6 @@ struct Spirv_Builder {
           UNIMPLEMENTED;
         }
       }
-
       for (uint32_t const *pCode : item.second) {
         uint16_t WordCount = pCode[0] >> spv::WordCountShift;
         spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
@@ -1338,18 +1511,24 @@ struct Spirv_Builder {
                                                      llvm::InlineAsm::AD_ATT);
           llvm::CallInst::Create(IA, AsmArgs, "", cur_bb);
         }
-        if (is_pixel_shader) {
-          static char str_buf[0x100];
-          std::vector<llvm::Type *> AsmArgTypes;
-          std::vector<llvm::Value *> AsmArgs;
-          snprintf(str_buf, sizeof(str_buf), "%s: word1: %i word2: %i",
-                   get_cstr((spv::Op)opcode), word1, word2);
-          llvm::CallInst::Create(dump_string,
-                                 {state_ptr, llvm_builder->CreateBitCast(
-                                                 lookup_string(str_buf),
-                                                 llvm::Type::getInt8PtrTy(c))},
-                                 "", cur_bb);
+        //          static char str_buf[0x100];
+        //          std::vector<llvm::Type *> AsmArgTypes;
+        //          std::vector<llvm::Value *> AsmArgs;
+        //          snprintf(str_buf, sizeof(str_buf), "%s: word1: %i word2:
+        //          %i",
+        //                   get_cstr((spv::Op)opcode), word1, word2);
+        //          llvm::CallInst::Create(dump_string,
+        //                                 {state_ptr,
+        //                                 llvm_builder->CreateBitCast(
+        //                                                 lookup_string(str_buf),
+        //                                                 llvm::Type::getInt8PtrTy(c))},
+        //                                 "", cur_bb);
+        cur_spirv_line++;
+        if (opt_debug_info) {
+          llvm_builder->SetCurrentDebugLocation(
+              llvm::DebugLoc::get(cur_spirv_line, 0, di_scope));
         }
+
         switch (opcode) {
         case spv::Op::OpLabel: {
           uint32_t id = word1;
@@ -3538,6 +3717,23 @@ struct Spirv_Builder {
         }
       }
     }
+    if (opt_debug_info) {
+      TMP_STORAGE_SCOPE;
+      char buf[0x100];
+      // Print llvm dumps
+      {
+        std::string str;
+        llvm::raw_string_ostream os(str);
+        module->print(os, NULL);
+        os.flush();
+        string_ref dir = stref_s("shader_dumps/llvm/");
+        make_dir_recursive(dir);
+        snprintf(buf, sizeof(buf), "%lx.ll", code_hash);
+        string_ref final_path = stref_concat(dir, stref_s(buf));
+        dump_file(stref_to_tmp_cstr(final_path), str.c_str(), str.length());
+      }
+    }
+    llvm_di_builder->finalize();
     std::string str;
     llvm::raw_string_ostream os(str);
     if (verifyModule(*module, &os)) {
@@ -3552,6 +3748,32 @@ struct Spirv_Builder {
   void parse_meta(const uint32_t *pCode, size_t codeSize) {
     this->code = pCode;
     this->code_size = codeSize;
+    code_hash = hash_of(string_ref{(char const *)pCode, (size_t)codeSize * 4});
+    if (opt_debug_info) {
+      TMP_STORAGE_SCOPE;
+      char buf[0x100];
+
+      // Print spirv dumps
+      {
+        string_ref dir = stref_s("shader_dumps/spirv/");
+        make_dir_recursive(dir);
+        snprintf(buf, sizeof(buf), "%lx.spirv", code_hash);
+        string_ref final_path = stref_concat(dir, stref_s(buf));
+        snprintf(shader_dump_path, sizeof(shader_dump_path), "%.*s",
+                 (int)final_path.len, final_path.ptr);
+        spv_context context = spvContextCreate(SPV_ENV_VULKAN_1_2);
+        uint32_t options = SPV_BINARY_TO_TEXT_OPTION_NONE;
+        options |= SPV_BINARY_TO_TEXT_OPTION_NO_HEADER;
+        options |= SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES;
+        spv_text text;
+        spv_diagnostic diagnostic = nullptr;
+        spv_result_t error = spvBinaryToText(context, pCode, code_size, options,
+                                             &text, &diagnostic);
+        spvContextDestroy(context);
+        dump_file(stref_to_tmp_cstr(final_path), text->str, text->length);
+        spvTextDestroy(text);
+      }
+    }
     ASSERT_ALWAYS(pCode[0] == spv::MagicNumber);
     ASSERT_ALWAYS(pCode[1] <= spv::Version);
 
@@ -3565,9 +3787,11 @@ struct Spirv_Builder {
     pCode = opStart;
     uint32_t cur_function = 0;
 #define CLASSIFY(id, TYPE) decl_types.push_back({id, TYPE});
+    uint32_t spirv_line = 0;
     // First pass
     // Parse Meta data: types, decorations etc
     while (pCode < opEnd) {
+      spirv_line++;
       uint16_t WordCount = pCode[0] >> spv::WordCountShift;
       spv::Op opcode = spv::Op(pCode[0] & spv::OpCodeMask);
       uint32_t word1 = pCode[1];
@@ -3833,6 +4057,7 @@ struct Spirv_Builder {
         fun.id = word2;
         fun.result_type = word1;
         fun.function_type = word4;
+        fun.spirv_line = spirv_line;
         fun.control = (spv::FunctionControlMask)word2;
         cur_function = word2;
         functions[word2] = fun;
@@ -4745,7 +4970,7 @@ void *compile_spirv(uint32_t const *pCode, size_t code_size) {
   ExitOnErr(J->addIRModule(std::move(bundle)));
   Jitted_Shader *jitted_shader = new Jitted_Shader();
   jitted_shader->jit = std::move(J);
-  jitted_shader->init();
+  jitted_shader->init(builder.code_hash, builder.opt_debug_info);
   return (void *)jitted_shader;
 }
 

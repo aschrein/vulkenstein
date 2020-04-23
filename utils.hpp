@@ -6,6 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+// UNIX heasders
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define ASSERT_ALWAYS(x)                                                       \
   {                                                                            \
@@ -65,19 +70,67 @@ template <typename F> __Defer__<F> defer_func(F f) { return __Defer__<F>(f); }
 #define PERF_ENTER(name)
 #define PERF_EXIT(name)
 #define OK_FALLTHROUGH (void)0;
+#define TMP_STORAGE_SCOPE                                                      \
+  tl_alloc_tmp_enter();                                                        \
+  defer(tl_alloc_tmp_exit(););
+#define SWAP(x, y)                                                             \
+  {                                                                            \
+    auto tmp = x;                                                              \
+    x = y;                                                                     \
+    y = tmp;                                                                   \
+  }
 
-template<typename T = uint8_t>
-struct Temporary_Storage {
+static size_t get_page_size() { return sysconf(_SC_PAGE_SIZE); }
+
+static void protect_pages(void *ptr, size_t num_pages) {
+  mprotect(ptr, num_pages * get_page_size(), PROT_NONE);
+}
+
+static size_t page_align_up(size_t n) {
+  return (n - get_page_size() - 1) & (~(get_page_size() - 1));
+}
+
+static size_t page_align_down(size_t n) {
+  return (n) & (~(get_page_size() - 1));
+}
+
+static size_t get_num_pages(size_t size) {
+  return page_align_up(size) / get_page_size();
+}
+
+static void unprotect_pages(void *ptr, size_t num_pages, bool exec = false) {
+  mprotect(ptr, num_pages * get_page_size(),
+           PROT_WRITE | PROT_READ | (exec ? PROT_EXEC : 0));
+}
+
+static void unmap_pages(void *ptr, size_t num_pages) {
+  int err = munmap(ptr, num_pages * get_page_size());
+  ASSERT_ALWAYS(err == 0);
+}
+
+static void map_pages(void *ptr, size_t num_pages) {
+  void *new_ptr = mmap(ptr, num_pages * get_page_size(), PROT_READ | PROT_WRITE,
+                       MAP_ANON | MAP_PRIVATE, -1, 0);
+  ASSERT_ALWAYS((size_t)new_ptr == (size_t)ptr);
+}
+
+template <typename T = uint8_t> struct Temporary_Storage {
   uint8_t *ptr;
   size_t cursor;
   size_t capacity;
+  size_t mem_length;
   size_t stack_capacity;
   size_t stack_cursor;
   static Temporary_Storage create(size_t capacity) {
     ASSERT_DEBUG(capacity > 0);
     Temporary_Storage out;
     size_t STACK_CAPACITY = 0x100 * sizeof(size_t);
-    out.ptr = (uint8_t *)malloc(STACK_CAPACITY + capacity * sizeof(T));
+    out.mem_length = get_num_pages(STACK_CAPACITY + capacity * sizeof(T)) * get_page_size();
+    out.ptr = (uint8_t *)mmap(
+        NULL,
+        out.mem_length,
+        PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    ;
     out.capacity = capacity;
     out.cursor = 0;
     out.stack_capacity = STACK_CAPACITY;
@@ -86,7 +139,7 @@ struct Temporary_Storage {
   }
 
   void release() {
-    free(this->ptr);
+    munmap(this->ptr, mem_length);
     memset(this, 0, sizeof(Temporary_Storage));
   }
 
@@ -95,9 +148,7 @@ struct Temporary_Storage {
     memcpy(ptr, &v, sizeof(T));
   }
 
-  bool has_items() {
-    return this->cursor > 0;
-  }
+  bool has_items() { return this->cursor > 0; }
 
   T *at(uint32_t i) {
     return (T *)(this->ptr + this->stack_capacity + i * sizeof(T));
@@ -109,6 +160,17 @@ struct Temporary_Storage {
     this->cursor += size;
     ASSERT_DEBUG(this->cursor < this->capacity);
     return ptr;
+  }
+
+  T *alloc_page_aligned(size_t size) {
+    ASSERT_DEBUG(size != 0);
+    size = page_align_up(size) + get_page_size();
+    T *ptr = (T *)(this->ptr + this->stack_capacity + this->cursor * sizeof(T));
+    T *aligned_ptr =
+        (T *)(void *)page_align_down((size_t)ptr + get_page_size());
+    this->cursor += size;
+    ASSERT_DEBUG(this->cursor < this->capacity);
+    return aligned_ptr;
   }
 
   void enter_scope() {
@@ -155,6 +217,9 @@ void tl_alloc_tmp_exit();
 struct string_ref {
   const char *ptr;
   size_t len;
+  string_ref substr(size_t offset, size_t new_len) {
+    return string_ref{ptr + offset, new_len};
+  }
 };
 
 static bool operator==(string_ref a, string_ref b) {
@@ -248,6 +313,17 @@ static string_ref stref_tmp(char const *tmp_string) {
   return out;
 }
 
+static string_ref stref_concat(string_ref a, string_ref b) {
+  string_ref out;
+  out.len = a.len + b.len;
+  ASSERT_DEBUG(out.len != 0);
+  char *ptr = (char *)tl_alloc_tmp(out.len);
+  memcpy(ptr, a.ptr, a.len);
+  memcpy(ptr + a.len, b.ptr, b.len);
+  out.ptr = (char const *)ptr;
+  return out;
+}
+
 static char const *stref_to_tmp_cstr(string_ref a) {
   ASSERT_DEBUG(a.ptr != NULL);
   char *ptr = (char *)tl_alloc_tmp(a.len + 1);
@@ -262,12 +338,42 @@ static int32_t stref_find(string_ref a, string_ref b, size_t start = 0) {
     if (a.ptr[i] == b.ptr[cursor]) {
       cursor += 1;
     } else {
+      i -= cursor;
       cursor = 0;
     }
     if (cursor == b.len)
-      return (int32_t)(i - cursor);
+      return (int32_t)(i - (cursor - 1));
   }
   return -1;
+}
+
+static int32_t stref_find_last(string_ref a, string_ref b, size_t start = 0) {
+  int32_t last_pos = -1;
+  int32_t cursor = stref_find(a, b, start);
+  while (cursor >= 0) {
+    last_pos = cursor;
+    if ((size_t)cursor + 1 < a.len)
+      cursor = stref_find_last(a, b, (size_t)(cursor + 1));
+  }
+  return last_pos;
+}
+
+static void make_dir_recursive(string_ref path) {
+  TMP_STORAGE_SCOPE;
+  if (path.ptr[path.len - 1] == '/')
+    path.len -= 1;
+  int32_t sep = stref_find_last(path, stref_s("/"));
+  if (sep >= 0) {
+    make_dir_recursive(path.substr(0, sep));
+  }
+  mkdir(stref_to_tmp_cstr(path), 0777);
+}
+
+static void dump_file(char const *path, void const *data, size_t size) {
+  FILE *file = fopen(path, "wb");
+  ASSERT_ALWAYS(file);
+  fwrite(data, 1, size, file);
+  fclose(file);
 }
 
 struct Allocator {
