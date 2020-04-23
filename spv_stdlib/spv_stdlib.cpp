@@ -108,7 +108,8 @@ FNATTR float4 get_pixel_position(Invocation_Info *state, uint32_t lane_id,
   return v0 * b0 + v1 * b1 + v2 * b2;
 }
 
-FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id, float d) {
+FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id,
+                              float d) {
   ((float *)state->builtin_output)[lane_id] = d;
 }
 // For pixel shaders we follow morton curve order
@@ -187,7 +188,7 @@ FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle,
                                          uint64_t sampler_handle, float coordx,
                                          float coordy, float dudx, float dudy,
                                          float dvdx, float dvdy) {
-  return (float4){1.0f, 0.5f, 0.0f, 1.0f};
+  return (float4){0.0f, 0.5f, 0.0f, 1.0f};
   Image *image = (Image *)(void *)(size_t)image_handle;
   Sampler *sampler = (Sampler *)(void *)(size_t)sampler_handle;
   return spv_image_read_2d_float4_lod(image_handle, (uint2){0, 0}, 0);
@@ -328,6 +329,17 @@ FNATTR float spv_length_f4(float4 a) { return spv_sqrt(spv_dot_f4(a, a)); }
 FNATTR float spv_length_f3(float3 a) { return spv_sqrt(spv_dot_f3(a, a)); }
 FNATTR float spv_length_f2(float2 a) { return spv_sqrt(spv_dot_f2(a, a)); }
 
+FNATTR float4 spv_fabs_f4(float4 a) {
+  return (float4){std::abs(a.x), std::abs(a.y), std::abs(a.z), std::abs(a.z)};
+}
+FNATTR float3 spv_fabs_f3(float3 a) {
+  return (float3){std::abs(a.x), std::abs(a.y), std::abs(a.z)};
+}
+FNATTR float2 spv_fabs_f2(float2 a) {
+  return (float2){std::abs(a.x), std::abs(a.y)};
+}
+FNATTR float spv_fabs_f1(float a) { return std::abs(a); }
+
 FNATTR float2 normalize_f2(float2 in) {
   float len = spv_length_f2(in);
   return (float2){in.x / len, in.y / len};
@@ -389,7 +401,15 @@ FNATTR void dump_float4x4(Invocation_Info *state, float *m) {
 }
 FNATTR void dump_float4(Invocation_Info *state, float *m) {
   ((printf_t)state->print_fn)("<%f %f %f %f>\n", m[0], m[1], m[2], m[3]);
-  ((printf_t)state->print_fn)("________________\n");
+}
+FNATTR void dump_float3(Invocation_Info *state, float *m) {
+  ((printf_t)state->print_fn)("<%f %f %f>\n", m[0], m[1], m[2]);
+}
+FNATTR void dump_float2(Invocation_Info *state, float *m) {
+  ((printf_t)state->print_fn)("<%f %f>\n", m[0], m[1]);
+}
+FNATTR void dump_float(Invocation_Info *state, float m) {
+  ((printf_t)state->print_fn)("<%f>\n", m);
 }
 FNATTR void dump_string(Invocation_Info *state, char const *str) {
   ((printf_t)state->print_fn)("%s\n", str);

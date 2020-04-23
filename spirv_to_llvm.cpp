@@ -108,6 +108,7 @@ struct Jitted_Shader {
     //          });
     //          return TSM;
     //        });
+
     static_cast<llvm::orc::RTDyldObjectLinkingLayer &>(
         jit->getObjLinkingLayer())
         .registerJITEventListener(
@@ -116,6 +117,23 @@ struct Jitted_Shader {
         [&](llvm::orc::ThreadSafeModule TSM,
             const llvm::orc::MaterializationResponsibility &R) {
           TSM.withModuleDo([&](llvm::Module &M) {
+            if (debug_info) {
+              TMP_STORAGE_SCOPE;
+              char buf[0x100];
+              // Print llvm dumps
+              {
+                std::string str;
+                llvm::raw_string_ostream os(str);
+                M.print(os, NULL);
+                os.flush();
+                string_ref dir = stref_s("shader_dumps/llvm/");
+                make_dir_recursive(dir);
+                snprintf(buf, sizeof(buf), "%lx.ll", code_hash);
+                string_ref final_path = stref_concat(dir, stref_s(buf));
+                dump_file(stref_to_tmp_cstr(final_path), str.c_str(),
+                          str.length());
+              }
+            }
             // Create a function pass manager.
             auto FPM = std::make_unique<llvm::legacy::PassManager>();
             llvm::PassRegistry *registry =
@@ -211,11 +229,24 @@ struct Jitted_Shader {
             // FPM->add(llvm::createGlobalDCEPass());
             FPM->add(llvm::createConstantMergePass());
 
-            // Run the optimizations over all functions in the module being
-            // added to the JIT.
-
             FPM->run(M);
-            //            M.dump();
+            if (debug_info) {
+              TMP_STORAGE_SCOPE;
+              char buf[0x100];
+              // Print llvm dumps
+              {
+                std::string str;
+                llvm::raw_string_ostream os(str);
+                M.print(os, NULL);
+                os.flush();
+                string_ref dir = stref_s("shader_dumps/llvm/");
+                make_dir_recursive(dir);
+                snprintf(buf, sizeof(buf), "%lx.opt.ll", code_hash);
+                string_ref final_path = stref_concat(dir, stref_s(buf));
+                dump_file(stref_to_tmp_cstr(final_path), str.c_str(),
+                          str.length());
+              }
+            }
           });
           return TSM;
         });
@@ -247,7 +278,7 @@ struct Jitted_Shader {
     symbols.private_storage_size = symbols.get_private_size();
     symbols.export_count = symbols.get_export_count();
     symbols.get_export_items(&symbols.export_items[0]);
-
+    symbols.code_hash = code_hash;
     //    std::string str;
     //    llvm::raw_string_ostream os(str);
     //    jit->getMainJITDylib().dump(os);
@@ -684,6 +715,9 @@ struct Spirv_Builder {
     LOOKUP_FN(pixel_store_depth);
     LOOKUP_FN(dump_float4x4);
     LOOKUP_FN(dump_float4);
+    LOOKUP_FN(dump_float3);
+    LOOKUP_FN(dump_float2);
+    LOOKUP_FN(dump_float);
     LOOKUP_FN(dump_string);
     LOOKUP_FN(normalize_f2);
     LOOKUP_FN(normalize_f3);
@@ -694,6 +728,10 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_length_f2);
     LOOKUP_FN(spv_length_f3);
     LOOKUP_FN(spv_length_f4);
+    LOOKUP_FN(spv_fabs_f1);
+    LOOKUP_FN(spv_fabs_f2);
+    LOOKUP_FN(spv_fabs_f3);
+    LOOKUP_FN(spv_fabs_f4);
     LOOKUP_FN(spv_cross);
     LOOKUP_FN(spv_reflect);
     LOOKUP_FN(spv_pow);
@@ -1330,21 +1368,26 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(location >= 0);
             ASSERT_ALWAYS(llvm_type->isPointerTy());
 
-            llvm::ArrayType *array_type = llvm::ArrayType::get(
-                llvm_type->getPointerElementType(), opt_subgroup_size);
-            llvm::Value *alloca = llvm_builder->CreateAlloca(array_type);
-            DeferredStore ds;
-            ds.dst_ptr = llvm_builder->CreateGEP(
-                output_ptr, llvm_get_constant_i32(output_offsets[location] *
-                                                  opt_subgroup_size));
-            ds.value_ptr = alloca;
-            deferred_stores.push_back(ds);
-            ito(opt_subgroup_size) {
-              llvm::Value *offset = llvm_builder->CreateGEP(
-                  alloca, {llvm_get_constant_i32(0), llvm_get_constant_i32(i)},
-                  get_spv_name(var.id));
+            //            llvm::ArrayType *array_type = llvm::ArrayType::get(
+            //                llvm_type->getPointerElementType(),
+            //                opt_subgroup_size);
+            //            llvm::Value *alloca =
+            //            llvm_builder->CreateAlloca(array_type);
 
-              llvm_values_per_lane[i][var.id] = offset;
+            ito(opt_subgroup_size) {
+              //              llvm::Value *offset = llvm_builder->CreateGEP(
+              //                  alloca, {llvm_get_constant_i32(0),
+              //                  llvm_get_constant_i32(i)},
+              //                  get_spv_name(var.id));
+              llvm::Value *alloca = llvm_builder->CreateAlloca(
+                  llvm_type->getPointerElementType());
+              DeferredStore ds;
+              ds.dst_ptr = llvm_builder->CreateGEP(
+                  output_ptr, llvm_get_constant_i32(output_offsets[location] +
+                                                    output_storage_size * i));
+              ds.value_ptr = alloca;
+              deferred_stores.push_back(ds);
+              llvm_values_per_lane[i][var.id] = alloca;
             }
           }
           break;
@@ -1437,6 +1480,25 @@ struct Spirv_Builder {
               llvm::Value *val_0 = llvm_builder->CreateLoad(bitcast_0);
               llvm::Value *val_1 = llvm_builder->CreateLoad(bitcast_1);
               llvm::Value *val_2 = llvm_builder->CreateLoad(bitcast_2);
+              // Debug
+              if (0) {
+                {
+                  llvm_builder->CreateCall(dump_float, {state_ptr, b_0});
+                  llvm_builder->CreateCall(dump_float, {state_ptr, b_1});
+                  llvm_builder->CreateCall(dump_float, {state_ptr, b_2});
+                }
+                if (val_0->getType()->isVectorTy()) {
+                  uint32_t num_elems = llvm_vec_num_elems(val_0->getType());
+                  if
+
+                      (num_elems == 3) {
+                    llvm::Value *reinterpret = llvm_builder->CreateBitCast(
+                        bitcast_0, llvm::Type::getFloatPtrTy(c));
+                    llvm_builder->CreateCall(dump_float3,
+                                             {state_ptr, reinterpret});
+                  }
+                }
+              }
               // TODO: handle more types/flat interpolation later
               ASSERT_ALWAYS(val_0->getType()->isVectorTy() ||
                             val_0->getType()->isFloatTy());
@@ -1454,7 +1516,11 @@ struct Spirv_Builder {
               llvm::Value *final_val = llvm_builder->CreateFAdd(
                   val_0, llvm_builder->CreateFAdd(val_1, val_2));
               llvm::Value *alloca =
-                  llvm_builder->CreateAlloca(final_val->getType());
+                  llvm_builder->CreateAlloca(val_0->getType());
+//              llvm::Value *b_vec = llvm::UndefValue::get(val_0->getType());
+//              b_vec = llvm_builder->CreateInsertElement(b_vec, b_0, (uint64_t)0);
+//              b_vec = llvm_builder->CreateInsertElement(b_vec, b_1, (uint64_t)1);
+//              b_vec = llvm_builder->CreateInsertElement(b_vec, b_2, (uint64_t)2);
               llvm_builder->CreateStore(final_val, alloca);
               llvm_values_per_lane[i][var.id] = alloca;
             } else { // Just load raw input
@@ -2524,6 +2590,43 @@ struct Spirv_Builder {
               NOTNULL(max);
               llvm_values_per_lane[k][result_id] =
                   llvm_builder->CreateCall(spv_clamp_f32, {x, min, max});
+            }
+            break;
+          }
+          case spv::GLSLstd450::GLSLstd450FAbs: {
+            ASSERT_ALWAYS(WordCount == 6);
+            kto(opt_subgroup_size) {
+              llvm::Value *arg = llvm_values_per_lane[k][word5];
+              NOTNULL(arg);
+              llvm::Value *result = NULL;
+              if (arg->getType()->isVectorTy()) {
+                llvm::VectorType *vtype =
+                    llvm::dyn_cast<llvm::VectorType>(arg->getType());
+                ASSERT_ALWAYS(vtype != NULL);
+                uint32_t width = llvm_vec_num_elems(vtype);
+                switch (width) {
+                case 2:
+                  llvm_values_per_lane[k][result_id] =
+                      llvm_builder->CreateCall(spv_fabs_f2, {arg});
+                  break;
+                case 3:
+                  llvm_values_per_lane[k][result_id] =
+                      llvm_builder->CreateCall(spv_fabs_f3, {arg});
+                  break;
+                case 4:
+                  llvm_values_per_lane[k][result_id] =
+                      llvm_builder->CreateCall(spv_fabs_f4, {arg});
+                  break;
+                default:
+                  UNIMPLEMENTED;
+                }
+              } else if (arg->getType()->isFloatTy()) {
+                llvm_values_per_lane[k][result_id] =
+                    llvm_builder->CreateCall(spv_fabs_f1, {arg});
+
+              } else {
+                UNIMPLEMENTED;
+              }
             }
             break;
           }
@@ -3715,22 +3818,6 @@ struct Spirv_Builder {
             }
           }
         }
-      }
-    }
-    if (opt_debug_info) {
-      TMP_STORAGE_SCOPE;
-      char buf[0x100];
-      // Print llvm dumps
-      {
-        std::string str;
-        llvm::raw_string_ostream os(str);
-        module->print(os, NULL);
-        os.flush();
-        string_ref dir = stref_s("shader_dumps/llvm/");
-        make_dir_recursive(dir);
-        snprintf(buf, sizeof(buf), "%lx.ll", code_hash);
-        string_ref final_path = stref_concat(dir, stref_s(buf));
-        dump_file(stref_to_tmp_cstr(final_path), str.c_str(), str.length());
       }
     }
     llvm_di_builder->finalize();
