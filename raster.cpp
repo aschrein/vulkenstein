@@ -12,7 +12,7 @@ void printf_flush(char const *fmt, ...) {
 #define SPV_STDLIB_JUST_TYPES
 #include "spv_stdlib/spv_stdlib.cpp"
 enum class Impl_Mode_t { NONE = 0, REF, OPT };
-Impl_Mode_t impl_mode = Impl_Mode_t::REF;
+Impl_Mode_t                impl_mode = Impl_Mode_t::REF;
 static Temporary_Storage<> ts = Temporary_Storage<>::create(64 * (1 << 20));
 
 #ifdef RASTER_EXE
@@ -42,9 +42,9 @@ double my_clock() {
              .count();
 }
 
-SDL_Window *window = NULL;
+SDL_Window *  window = NULL;
 SDL_GLContext glc;
-int SCREEN_WIDTH, SCREEN_HEIGHT;
+int           SCREEN_WIDTH, SCREEN_HEIGHT;
 
 #include "3rdparty/libpfc/include/libpfc.h"
 
@@ -59,13 +59,13 @@ int SCREEN_WIDTH, SCREEN_HEIGHT;
   }
 
 template <typename T> uint64_t measure_fn(T t, uint64_t N = 1) {
-  uint64_t sum = 0u;
+  uint64_t sum     = 0u;
   uint64_t counter = 0u;
-  PFC_CFG cfg[7] = {7, 7, 7, 0, 0, 0, 0};
-  PFC_CNT cnt[7] = {0, 0, 0, 0, 0, 0, 0};
-  cfg[3] = pfcParseCfg("cpu_clk_unhalted.ref_xclk:auk");
-  cfg[4] = pfcParseCfg("cpu_clk_unhalted.core_clk");
-  cfg[5] = pfcParseCfg("*cpl_cycles.ring0>=1:uk");
+  PFC_CFG  cfg[7]  = {7, 7, 7, 0, 0, 0, 0};
+  PFC_CNT  cnt[7]  = {0, 0, 0, 0, 0, 0, 0};
+  cfg[3]           = pfcParseCfg("cpu_clk_unhalted.ref_xclk:auk");
+  cfg[4]           = pfcParseCfg("cpu_clk_unhalted.core_clk");
+  cfg[5]           = pfcParseCfg("*cpl_cycles.ring0>=1:uk");
   call_pfc(pfcWrCfgs(0, 7, cfg));
   call_pfc(pfcWrCnts(0, 7, cnt));
   for (uint64_t i = 0; i < N; i++) {
@@ -78,7 +78,7 @@ template <typename T> uint64_t measure_fn(T t, uint64_t N = 1) {
     PFCEND(cnt);
     _mm_lfence();
     uint64_t diff = 0u;
-    diff = (uint64_t)cnt[4];
+    diff          = (uint64_t)cnt[4];
     sum += diff;
     counter++;
   }
@@ -152,7 +152,7 @@ void write_image_2d_i8_ppm_zcurve(const char *file_name, void *data,
   ito(size) {
     jto(size) {
       uint32_t offset = morton(j, i);
-      uint8_t r = *(uint8_t *)(void *)(((uint8_t *)data) + offset);
+      uint8_t  r      = *(uint8_t *)(void *)(((uint8_t *)data) + offset);
       //       fputc(((offset >> 0) & 0xff), file);
       //       fputc(((offset >> 8) & 0xff), file);
       //       fputc(((offset >> 16) & 0xff), file);
@@ -165,8 +165,8 @@ void write_image_2d_i8_ppm_zcurve(const char *file_name, void *data,
 }
 uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
                     uint32_t tile_pow);
-void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
-                                 uint32_t size_pow, uint32_t tile_pow) {
+void     write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
+                                     uint32_t size_pow, uint32_t tile_pow) {
   FILE *file = fopen(file_name, "wb");
   ASSERT_ALWAYS(file);
   fprintf(file, "P6\n");
@@ -176,8 +176,8 @@ void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
   uint32_t mask = size - 1;
   ito(size) {
     jto(size) {
-      uint32_t x = j;
-      uint32_t y = i;
+      uint32_t x      = j;
+      uint32_t y      = i;
       uint32_t offset = tile_coord(x, size - y - 1, size_pow, tile_pow);
       //      untile_coord(offset, &x, &y, size_pow, tile_pow);
       //      ASSERT_ALWAYS(x == j && y == i);
@@ -198,36 +198,36 @@ void write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
 
 struct Context2D {
   struct Oth_Camera {
-    float3 pos;
-    float4 proj[4];
-    float height_over_width;
-    float width_over_heigth;
+    float3   pos;
+    float4   proj[4];
+    float    height_over_width;
+    float    width_over_heigth;
     uint32_t viewport_width;
     uint32_t viewport_height;
-    float world_min_x;
-    float world_min_y;
-    float world_max_x;
-    float world_max_y;
-    float mouse_world_x;
-    float mouse_world_y;
-    float mouse_screen_x;
-    float mouse_screen_y;
-    float glyphs_world_height;
-    float glyphs_screen_height;
-    float glyphs_world_width;
-    float glyphs_screen_width;
-    float pixel_screen_width;
-    float pixel_screen_height;
-    float fovy, fovx;
+    float    world_min_x;
+    float    world_min_y;
+    float    world_max_x;
+    float    world_max_y;
+    float    mouse_world_x;
+    float    mouse_world_y;
+    float    mouse_screen_x;
+    float    mouse_screen_y;
+    float    glyphs_world_height;
+    float    glyphs_screen_height;
+    float    glyphs_world_width;
+    float    glyphs_screen_width;
+    float    pixel_screen_width;
+    float    pixel_screen_height;
+    float    fovy, fovx;
     uint32_t glyph_scale = 1;
-    void update(float viewport_width, float viewport_height) {
-      this->viewport_width = viewport_width;
+    void     update(float viewport_width, float viewport_height) {
+      this->viewport_width  = viewport_width;
       this->viewport_height = viewport_height;
-      height_over_width = ((float)viewport_height / viewport_width);
-      width_over_heigth = ((float)viewport_width / viewport_height);
-      float e = (float)2.4e-7f;
-      fovy = 2.0f;
-      fovx = 2.0f * height_over_width;
+      height_over_width     = ((float)viewport_height / viewport_width);
+      width_over_heigth     = ((float)viewport_width / viewport_height);
+      float e               = (float)2.4e-7f;
+      fovy                  = 2.0f;
+      fovx                  = 2.0f * height_over_width;
       // clang-format off
       float4 proj[4] = {
         {fovx/pos.z,   0.0f,          0.0f,      -fovx * pos.x/pos.z},
@@ -238,19 +238,19 @@ struct Context2D {
       // clang-format on
       memcpy(&this->proj[0], &proj[0], sizeof(proj));
       float2 mwp = screen_to_world((float2){mouse_screen_x, mouse_screen_y});
-      mouse_world_x = mwp.x;
-      mouse_world_y = mwp.y;
-      world_min_x = screen_to_world((float2){-1.0f, -1.0f}).x;
-      world_min_y = screen_to_world((float2){-1.0f, -1.0f}).y;
-      world_max_x = screen_to_world((float2){1.0f, 1.0f}).x;
-      world_max_y = screen_to_world((float2){1.0f, 1.0f}).y;
+      mouse_world_x       = mwp.x;
+      mouse_world_y       = mwp.y;
+      world_min_x         = screen_to_world((float2){-1.0f, -1.0f}).x;
+      world_min_y         = screen_to_world((float2){-1.0f, -1.0f}).y;
+      world_max_x         = screen_to_world((float2){1.0f, 1.0f}).x;
+      world_max_y         = screen_to_world((float2){1.0f, 1.0f}).y;
       glyphs_world_height = glyph_scale *
                             (float)(simplefont_bitmap_glyphs_height) /
                             viewport_height * pos.z;
       glyphs_world_width = glyph_scale *
                            (float)(simplefont_bitmap_glyphs_width) /
                            viewport_width * pos.z;
-      pixel_screen_width = 2.0f / viewport_width;
+      pixel_screen_width  = 2.0f / viewport_width;
       pixel_screen_height = 2.0f / viewport_height;
       glyphs_screen_width = 2.0f * glyph_scale *
                             (float)(simplefont_bitmap_glyphs_width) /
@@ -260,10 +260,10 @@ struct Context2D {
                              viewport_height;
     }
     float2 world_to_screen(float2 p) {
-      float x0 = spv_dot_f4(proj[0], (float4){p.x, p.y, 0.0f, 1.0f});
-      float x1 = spv_dot_f4(proj[1], (float4){p.x, p.y, 0.0f, 1.0f});
-      float x2 = spv_dot_f4(proj[2], (float4){p.x, p.y, 0.0f, 1.0f});
-      float x3 = spv_dot_f4(proj[3], (float4){p.x, p.y, 0.0f, 1.0f});
+      float  x0  = spv_dot_f4(proj[0], (float4){p.x, p.y, 0.0f, 1.0f});
+      float  x1  = spv_dot_f4(proj[1], (float4){p.x, p.y, 0.0f, 1.0f});
+      float  x2  = spv_dot_f4(proj[2], (float4){p.x, p.y, 0.0f, 1.0f});
+      float  x3  = spv_dot_f4(proj[3], (float4){p.x, p.y, 0.0f, 1.0f});
       float2 pos = (float2){x0, x1} / x3;
       return pos;
     }
@@ -319,49 +319,48 @@ struct Context2D {
   struct Rect2D {
     float x, y, z, width, height;
     Color color;
-    bool world_space = true;
+    bool  world_space = true;
   };
   struct Line2D {
     float x0, y0, x1, y1, z;
     Color color;
-    bool world_space = true;
+    bool  world_space = true;
   };
   struct String2D {
     char const *c_str;
-    float x, y, z;
-    Color color;
-    bool world_space = true;
+    float       x, y, z;
+    Color       color;
+    bool        world_space = true;
   };
   struct _String2D {
-    char *c_str;
+    char *   c_str;
     uint32_t len;
-    float x, y, z;
-    Color color;
-    bool world_space;
+    float    x, y, z;
+    Color    color;
+    bool     world_space;
   };
   void draw_rect(Rect2D p) { quad_storage.push(p); }
   void draw_line(Line2D l) { line_storage.push(l); }
   void draw_string(String2D s) {
     size_t len = strlen(s.c_str);
-    if (len == 0)
-      return;
+    if (len == 0) return;
     char *dst = char_storage.alloc(len + 1);
     memcpy(dst, s.c_str, len);
     dst[len] = '\0';
     _String2D internal_string;
-    internal_string.color = s.color;
-    internal_string.c_str = dst;
-    internal_string.len = (uint32_t)len;
-    internal_string.x = s.x;
-    internal_string.y = s.y;
-    internal_string.z = s.z;
+    internal_string.color       = s.color;
+    internal_string.c_str       = dst;
+    internal_string.len         = (uint32_t)len;
+    internal_string.x           = s.x;
+    internal_string.y           = s.y;
+    internal_string.z           = s.z;
     internal_string.world_space = s.world_space;
 
     string_storage.push(internal_string);
   }
   void frame_start(float viewport_width, float viewport_height) {
     this->viewport_height = viewport_height;
-    this->viewport_width = viewport_width;
+    this->viewport_width  = viewport_width;
     camera.update(viewport_width, viewport_height);
     line_storage.enter_scope();
     quad_storage.enter_scope();
@@ -387,10 +386,10 @@ struct Context2D {
       Temporary_Storage<char>::create(1 * (1 << 20));
   uint32_t viewport_width;
   uint32_t viewport_height;
-  bool force_update = false;
+  bool     force_update = false;
   struct Console {
-    char buffer[0x100][0x100];
-    uint32_t column = 0;
+    char     buffer[0x100][0x100];
+    uint32_t column    = 0;
     uint32_t scroll_id = 0;
     Console() { memset(this, 0, sizeof(*this)); }
     void unscroll() {
@@ -418,13 +417,11 @@ struct Context2D {
     }
     void cursor_right() {
       unscroll();
-      if (buffer[0][column] != '\0')
-        column++;
+      if (buffer[0][column] != '\0') column++;
     }
     void cursor_left() {
       unscroll();
-      if (column > 0)
-        column--;
+      if (column > 0) column--;
     }
     void put_line(char const *str) {
       unscroll();
@@ -435,7 +432,7 @@ struct Context2D {
       newline();
     }
     void put_fmt(char const *fmt, ...) {
-      char buffer[0x100];
+      char    buffer[0x100];
       va_list args;
       va_start(args, fmt);
       vsnprintf(buffer, sizeof(buffer), fmt, args);
@@ -466,50 +463,50 @@ struct Context2D {
   } console;
   bool console_mode = false;
   void draw_console() {
-    float CONSOLE_TEXT_LAYER = 102.0f / 256.0f;
-    float CONSOLE_CURSOR_LAYER = 101.0f / 256.0f;
+    float CONSOLE_TEXT_LAYER       = 102.0f / 256.0f;
+    float CONSOLE_CURSOR_LAYER     = 101.0f / 256.0f;
     float CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
     float GLYPH_HEIGHT = camera.glyph_scale * simplefont_bitmap_glyphs_height;
-    float GLYPH_WIDTH = camera.glyph_scale * simplefont_bitmap_glyphs_width;
-    uint32_t console_lines = 8;
-    float console_bottom = (GLYPH_HEIGHT + 1) * console_lines;
+    float GLYPH_WIDTH  = camera.glyph_scale * simplefont_bitmap_glyphs_width;
+    uint32_t console_lines  = 8;
+    float    console_bottom = (GLYPH_HEIGHT + 1) * console_lines;
     ito(console_lines - 1) {
-      draw_string({.c_str = console.buffer[console_lines - 1 - i],
-                   .x = 0,
-                   .y = (GLYPH_HEIGHT + 1) * (i + 1),
-                   .z = CONSOLE_TEXT_LAYER,
-                   .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+      draw_string({.c_str       = console.buffer[console_lines - 1 - i],
+                   .x           = 0,
+                   .y           = (GLYPH_HEIGHT + 1) * (i + 1),
+                   .z           = CONSOLE_TEXT_LAYER,
+                   .color       = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
                    .world_space = false});
     }
-    draw_string({.c_str = console.buffer[console.scroll_id],
-                 .x = 0.0f,
-                 .y = console_bottom,
-                 .z = CONSOLE_TEXT_LAYER,
-                 .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+    draw_string({.c_str       = console.buffer[console.scroll_id],
+                 .x           = 0.0f,
+                 .y           = console_bottom,
+                 .z           = CONSOLE_TEXT_LAYER,
+                 .color       = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
                  .world_space = false});
     draw_rect({//
-               .x = 0.0f,
-               .y = 0.0f,
-               .z = CONSOLE_BACKGROUND_LAYER,
-               .width = (float)camera.viewport_width,
-               .height = console_bottom + 1.0f,
-               .color = {.r = 0.8f, .g = 0.8f, .b = 0.8f},
+               .x           = 0.0f,
+               .y           = 0.0f,
+               .z           = CONSOLE_BACKGROUND_LAYER,
+               .width       = (float)camera.viewport_width,
+               .height      = console_bottom + 1.0f,
+               .color       = {.r = 0.8f, .g = 0.8f, .b = 0.8f},
                .world_space = false});
     draw_line({//
-               .x0 = 0.0f,
-               .y0 = console_bottom + 2.0f,
-               .x1 = (float)camera.viewport_width,
-               .y1 = console_bottom + 2.0f,
-               .z = CONSOLE_CURSOR_LAYER,
-               .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
+               .x0          = 0.0f,
+               .y0          = console_bottom + 2.0f,
+               .x1          = (float)camera.viewport_width,
+               .y1          = console_bottom + 2.0f,
+               .z           = CONSOLE_CURSOR_LAYER,
+               .color       = {.r = 0.0f, .g = 0.0f, .b = 0.0f},
                .world_space = false});
     draw_rect({//
-               .x = console.column * (GLYPH_WIDTH + 1.0f),
-               .y = console_bottom,
-               .z = CONSOLE_CURSOR_LAYER,
-               .width = GLYPH_WIDTH,
-               .height = -GLYPH_HEIGHT,
-               .color = {.r = 1.0f, .g = 1.0f, .b = 1.0f},
+               .x           = console.column * (GLYPH_WIDTH + 1.0f),
+               .y           = console_bottom,
+               .z           = CONSOLE_CURSOR_LAYER,
+               .width       = GLYPH_WIDTH,
+               .height      = -GLYPH_HEIGHT,
+               .color       = {.r = 1.0f, .g = 1.0f, .b = 1.0f},
                .world_space = false});
   }
 } c2d;
@@ -532,62 +529,42 @@ struct Dbg_Command {
     UNKNOWN
   };
   Command_t type;
-  int32_t iarg0;
-  int32_t iarg1;
-  int32_t iarg2;
-  int32_t iarg3;
-  float farg0;
-  float farg1;
-  float farg2;
-  float farg3;
-  char c[0x20];
-  bool cmp(char const *str) { return token_match(c, str, strlen(c)); }
-  void copy_tkn(char const *tkn, size_t tkn_len) {
+  int32_t   iarg0;
+  int32_t   iarg1;
+  int32_t   iarg2;
+  int32_t   iarg3;
+  float     farg0;
+  float     farg1;
+  float     farg2;
+  float     farg3;
+  char      c[0x20];
+  bool      cmp(char const *str) { return token_match(c, str, strlen(c)); }
+  void      copy_tkn(char const *tkn, size_t tkn_len) {
     memcpy(c, tkn, MIN(sizeof(c), tkn_len));
     c[MIN(sizeof(c) - 1, tkn_len)] = '\0';
   }
   bool parse_decimal_int(char const *str, size_t len, int32_t *result) {
-    int32_t final = 0;
-    int32_t pow = 1;
-    int32_t sign = 1;
-    uint32_t i = 0;
+    int32_t  final = 0;
+    int32_t  pow   = 1;
+    int32_t  sign  = 1;
+    uint32_t i     = 0;
     if (str[0] == '-') {
       sign = -1;
-      i = 1;
+      i    = 1;
     }
     for (; i < len; ++i) {
       switch (str[len - 1 - i]) {
-      case '0':
-        break;
-      case '1':
-        final += 1 * pow;
-        break;
-      case '2':
-        final += 2 * pow;
-        break;
-      case '3':
-        final += 3 * pow;
-        break;
-      case '4':
-        final += 4 * pow;
-        break;
-      case '5':
-        final += 5 * pow;
-        break;
-      case '6':
-        final += 6 * pow;
-        break;
-      case '7':
-        final += 7 * pow;
-        break;
-      case '8':
-        final += 8 * pow;
-        break;
-      case '9':
-        final += 9 * pow;
-        break;
-      default:
-        return false;
+      case '0': break;
+      case '1': final += 1 * pow; break;
+      case '2': final += 2 * pow; break;
+      case '3': final += 3 * pow; break;
+      case '4': final += 4 * pow; break;
+      case '5': final += 5 * pow; break;
+      case '6': final += 6 * pow; break;
+      case '7': final += 7 * pow; break;
+      case '8': final += 8 * pow; break;
+      case '9': final += 9 * pow; break;
+      default: return false;
       }
       pow *= 10;
     }
@@ -595,86 +572,44 @@ struct Dbg_Command {
     return true;
   }
   bool parse_float(char const *str, size_t len, float *result) {
-    float final = 0.0f;
-    uint32_t i = 0;
-    float sign = 1.0f;
+    float    final = 0.0f;
+    uint32_t i     = 0;
+    float    sign  = 1.0f;
     if (str[0] == '-') {
       sign = -1.0f;
-      i = 1;
+      i    = 1;
     }
     for (; i < len; ++i) {
-      if (str[i] == '.')
-        break;
+      if (str[i] == '.') break;
       switch (str[i]) {
-      case '0':
-        final = final * 10.0f;
-        break;
-      case '1':
-        final = final * 10.0f + 1.0f;
-        break;
-      case '2':
-        final = final * 10.0f + 2.0f;
-        break;
-      case '3':
-        final = final * 10.0f + 3.0f;
-        break;
-      case '4':
-        final = final * 10.0f + 4.0f;
-        break;
-      case '5':
-        final = final * 10.0f + 5.0f;
-        break;
-      case '6':
-        final = final * 10.0f + 6.0f;
-        break;
-      case '7':
-        final = final * 10.0f + 7.0f;
-        break;
-      case '8':
-        final = final * 10.0f + 8.0f;
-        break;
-      case '9':
-        final = final * 10.0f + 9.0f;
-        break;
-      default:
-        return false;
+      case '0': final = final * 10.0f; break;
+      case '1': final = final * 10.0f + 1.0f; break;
+      case '2': final = final * 10.0f + 2.0f; break;
+      case '3': final = final * 10.0f + 3.0f; break;
+      case '4': final = final * 10.0f + 4.0f; break;
+      case '5': final = final * 10.0f + 5.0f; break;
+      case '6': final = final * 10.0f + 6.0f; break;
+      case '7': final = final * 10.0f + 7.0f; break;
+      case '8': final = final * 10.0f + 8.0f; break;
+      case '9': final = final * 10.0f + 9.0f; break;
+      default: return false;
       }
     }
     i++;
     float pow = 1.0e-1f;
     for (; i < len; ++i) {
       switch (str[i]) {
-      case '0':
-        break;
-      case '1':
-        final += 1.0f * pow;
-        break;
-      case '2':
-        final += 2.0f * pow;
-        break;
-      case '3':
-        final += 3.0f * pow;
-        break;
-      case '4':
-        final += 4.0f * pow;
-        break;
-      case '5':
-        final += 5.0f * pow;
-        break;
-      case '6':
-        final += 6.0f * pow;
-        break;
-      case '7':
-        final += 7.0f * pow;
-        break;
-      case '8':
-        final += 8.0f * pow;
-        break;
-      case '9':
-        final += 9.0f * pow;
-        break;
-      default:
-        return false;
+      case '0': break;
+      case '1': final += 1.0f * pow; break;
+      case '2': final += 2.0f * pow; break;
+      case '3': final += 3.0f * pow; break;
+      case '4': final += 4.0f * pow; break;
+      case '5': final += 5.0f * pow; break;
+      case '6': final += 6.0f * pow; break;
+      case '7': final += 7.0f * pow; break;
+      case '8': final += 8.0f * pow; break;
+      case '9': final += 9.0f * pow; break;
+      default: return false;
       }
       pow *= 1.0e-1f;
     }
@@ -683,11 +618,9 @@ struct Dbg_Command {
   }
   bool token_match(char const *tkn, char const *str, size_t tkn_len) {
     size_t str_len = strlen(str);
-    if (str_len != tkn_len)
-      return false;
+    if (str_len != tkn_len) return false;
     ito(MIN(str_len, tkn_len)) {
-      if (tkn[i] != str[i])
-        return false;
+      if (tkn[i] != str[i]) return false;
     }
     return true;
   }
@@ -698,12 +631,12 @@ struct Dbg_Command {
     char const *cur_tkn_start = str;
     struct Token {
       char const *start;
-      size_t len;
+      size_t      len;
     };
-    const uint32_t max_tokens = 0x100;
-    uint32_t num_tokens = 0;
-    Token *tkns = (Token *)ts.alloc(sizeof(Token) * max_tokens);
-    uint32_t loop_counter = 0;
+    const uint32_t max_tokens   = 0x100;
+    uint32_t       num_tokens   = 0;
+    Token *        tkns         = (Token *)ts.alloc(sizeof(Token) * max_tokens);
+    uint32_t       loop_counter = 0;
     do {
       loop_counter++;
       if (loop_counter > 10000) {
@@ -713,10 +646,9 @@ struct Dbg_Command {
         if (cur_tkn_start != str) {
           tkns[num_tokens++] = {
               .start = cur_tkn_start,
-              .len = (size_t)((intptr_t)str - (intptr_t)cur_tkn_start)};
+              .len   = (size_t)((intptr_t)str - (intptr_t)cur_tkn_start)};
         }
-        if (str[0] == '\0')
-          break;
+        if (str[0] == '\0') break;
         cur_tkn_start = str + 1;
         str++;
         continue;
@@ -731,8 +663,7 @@ struct Dbg_Command {
     return true;                                                               \
   }
       if (token_match(tkns[0].start, "goto", tkns[0].len)) {
-        if (num_tokens != 3)
-          return false;
+        if (num_tokens != 3) return false;
         if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0))
           return false;
         if (!parse_decimal_int(tkns[2].start, tkns[2].len, &iarg1))
@@ -741,45 +672,35 @@ struct Dbg_Command {
         return true;
       }
       if (token_match(tkns[0].start, "selv", tkns[0].len)) {
-        if (num_tokens != 2)
-          return false;
+        if (num_tokens != 2) return false;
         if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0))
           return false;
         type = Command_t::SELECT_VERTEX;
         return true;
       }
       if (token_match(tkns[0].start, "mov", tkns[0].len)) {
-        if (num_tokens != 3)
-          return false;
-        if (!parse_float(tkns[1].start, tkns[1].len, &farg0))
-          return false;
-        if (!parse_float(tkns[2].start, tkns[2].len, &farg1))
-          return false;
+        if (num_tokens != 3) return false;
+        if (!parse_float(tkns[1].start, tkns[1].len, &farg0)) return false;
+        if (!parse_float(tkns[2].start, tkns[2].len, &farg1)) return false;
         type = Command_t::MOVE_VERTEX;
         return true;
       }
       if (token_match(tkns[0].start, "movc", tkns[0].len)) {
-        if (num_tokens != 4)
-          return false;
-        if (!parse_float(tkns[1].start, tkns[1].len, &farg0))
-          return false;
-        if (!parse_float(tkns[2].start, tkns[2].len, &farg1))
-          return false;
-        if (!parse_float(tkns[3].start, tkns[3].len, &farg2))
-          return false;
+        if (num_tokens != 4) return false;
+        if (!parse_float(tkns[1].start, tkns[1].len, &farg0)) return false;
+        if (!parse_float(tkns[2].start, tkns[2].len, &farg1)) return false;
+        if (!parse_float(tkns[3].start, tkns[3].len, &farg2)) return false;
         type = Command_t::MOVE_CAMERA;
         return true;
       }
       if (token_match(tkns[0].start, "setm", tkns[0].len)) {
-        if (num_tokens != 2)
-          return false;
+        if (num_tokens != 2) return false;
         copy_tkn(tkns[1].start, tkns[1].len);
         type = Command_t::SET_MODE;
         return true;
       }
       if (token_match(tkns[0].start, "clear", tkns[0].len)) {
-        if (num_tokens != 2)
-          return false;
+        if (num_tokens != 2) return false;
         copy_tkn(tkns[1].start, tkns[1].len);
         type = Command_t::CLEAR;
         return true;
@@ -800,10 +721,10 @@ struct Dbg_Command {
   }
 };
 struct CV_Wrapper {
-  std::mutex cv_mutex;
-  std::atomic<bool> cv_predicate;
+  std::mutex              cv_mutex;
+  std::atomic<bool>       cv_predicate;
   std::condition_variable cv;
-  void wait() {
+  void                    wait() {
     std::unique_lock<std::mutex> lk(cv_mutex);
     cv.wait(lk, [this] { return cv_predicate.load(); });
     cv_predicate = false;
@@ -833,23 +754,23 @@ float3 parse_color(char const *str) {
 enum class Selection_t { NONE = 0, CELL, VERTEX };
 template <uint32_t H, uint32_t W, typename Cell_t> //
 struct Gridbg {
-  Cell_t *grid;
-  std::mutex grid_mutex;
-  CV_Wrapper break_cv;
-  CV_Wrapper pause_cv;
-  std::atomic<bool> run;
-  std::atomic<bool> log_all;
+  Cell_t *            grid;
+  std::mutex          grid_mutex;
+  CV_Wrapper          break_cv;
+  CV_Wrapper          pause_cv;
+  std::atomic<bool>   run;
+  std::atomic<bool>   log_all;
   std::atomic<size_t> current_grid;
-  std::atomic<bool> break_requested;
-  std::atomic<bool> hard_break_requested;
-  std::atomic<bool> clear_on_start;
-  uint32_t cur_i;
-  uint32_t cur_j;
+  std::atomic<bool>   break_requested;
+  std::atomic<bool>   hard_break_requested;
+  std::atomic<bool>   clear_on_start;
+  uint32_t            cur_i;
+  uint32_t            cur_j;
 
   // Debug triangle
-  float v_x[3];
-  float v_y[3];
-  uint32_t cur_v;
+  float       v_x[3];
+  float       v_y[3];
+  uint32_t    cur_v;
   Selection_t selection_type;
 
   bool select_clicked = false;
@@ -889,7 +810,7 @@ struct Gridbg {
         long fsize = ftell(save);
         fseek(save, 0, SEEK_SET);
         size_t size = (size_t)fsize;
-        char *data = (char *)ts.alloc((size_t)fsize);
+        char * data = (char *)ts.alloc((size_t)fsize);
         fread(data, 1, (size_t)fsize, save);
         fclose(save);
         ito((uint32_t)size) {
@@ -924,30 +845,30 @@ struct Gridbg {
       selection_type = Selection_t::CELL;
       select_clicked = false;
     }
-    float dx = 1.0f;
-    float dy = 1.0f;
-    float size_x = 256.0f;
-    float size_y = 256.0f;
+    float dx         = 1.0f;
+    float dy         = 1.0f;
+    float size_x     = 256.0f;
+    float size_y     = 256.0f;
     float QUAD_LAYER = 1.0f / 256.0f;
     float GRID_LAYER = 2.0f / 256.0f;
     float TEXT_LAYER = 3.0f / 256.0f;
     if (c2d.camera.pos.z < 80.0f) {
       ito(W + 1) {
         c2d.draw_line({//
-                       .x0 = dx * (float)(i),
-                       .y0 = 0.0f,
-                       .x1 = dx * (float)(i),
-                       .y1 = size_y,
-                       .z = GRID_LAYER,
+                       .x0    = dx * (float)(i),
+                       .y0    = 0.0f,
+                       .x1    = dx * (float)(i),
+                       .y1    = size_y,
+                       .z     = GRID_LAYER,
                        .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
       }
       ito(H + 1) {
         c2d.draw_line({//
-                       .x0 = 0.0f,
-                       .y0 = dy * (float)(i),
-                       .x1 = size_x,
-                       .y1 = dy * (float)(i),
-                       .z = GRID_LAYER,
+                       .x0    = 0.0f,
+                       .y0    = dy * (float)(i),
+                       .x1    = size_x,
+                       .y1    = dy * (float)(i),
+                       .z     = GRID_LAYER,
                        .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
       }
     }
@@ -958,62 +879,62 @@ struct Gridbg {
     // Draw the debugged triangle
     {
       ito(3) c2d.draw_string({.c_str = &("v0\0v1\0v2\n"[i * 3]),
-                              .x = v_x[i],
-                              .y = v_y[i],
-                              .z = TEXT_LAYER,
+                              .x     = v_x[i],
+                              .y     = v_y[i],
+                              .z     = TEXT_LAYER,
                               .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
       c2d.draw_line({//
-                     .x0 = v_x[0],
-                     .y0 = v_y[0],
-                     .x1 = v_x[1],
-                     .y1 = v_y[1],
-                     .z = TEXT_LAYER,
+                     .x0    = v_x[0],
+                     .y0    = v_y[0],
+                     .x1    = v_x[1],
+                     .y1    = v_y[1],
+                     .z     = TEXT_LAYER,
                      .color = {.r = 1.0f, .g = 0.0f, .b = 0.0f}});
       c2d.draw_line({//
-                     .x0 = v_x[0],
-                     .y0 = v_y[0],
-                     .x1 = v_x[2],
-                     .y1 = v_y[2],
-                     .z = TEXT_LAYER,
+                     .x0    = v_x[0],
+                     .y0    = v_y[0],
+                     .x1    = v_x[2],
+                     .y1    = v_y[2],
+                     .z     = TEXT_LAYER,
                      .color = {.r = 1.0f, .g = 0.0f, .b = 0.0f}});
       c2d.draw_line({//
-                     .x0 = v_x[2],
-                     .y0 = v_y[2],
-                     .x1 = v_x[1],
-                     .y1 = v_y[1],
-                     .z = TEXT_LAYER,
+                     .x0    = v_x[2],
+                     .y0    = v_y[2],
+                     .x1    = v_x[1],
+                     .y1    = v_y[1],
+                     .z     = TEXT_LAYER,
                      .color = {.r = 1.0f, .g = 0.0f, .b = 0.0f}});
     }
     auto draw_frame = [&](uint32_t i, uint32_t j, float r, float g, float b) {
       float thickness = 0.01f * c2d.camera.pos.z;
       c2d.draw_rect({//
-                     .x = dx * j - thickness,
-                     .y = dy * i - thickness,
-                     .z = TEXT_LAYER,
-                     .width = thickness,
+                     .x      = dx * j - thickness,
+                     .y      = dy * i - thickness,
+                     .z      = TEXT_LAYER,
+                     .width  = thickness,
                      .height = 1.0f + 2.0f * thickness,
-                     .color = {.r = r, .g = g, .b = b}});
+                     .color  = {.r = r, .g = g, .b = b}});
       c2d.draw_rect({//
-                     .x = dx * (j + 1.0f),
-                     .y = dy * i - thickness,
-                     .z = TEXT_LAYER,
-                     .width = thickness,
+                     .x      = dx * (j + 1.0f),
+                     .y      = dy * i - thickness,
+                     .z      = TEXT_LAYER,
+                     .width  = thickness,
                      .height = 1.0f + 2.0f * thickness,
-                     .color = {.r = r, .g = g, .b = b}});
+                     .color  = {.r = r, .g = g, .b = b}});
       c2d.draw_rect({//
-                     .x = dx * j - thickness,
-                     .y = dy * (i + 1),
-                     .z = TEXT_LAYER,
-                     .width = 1.0f + 2.0f * thickness,
+                     .x      = dx * j - thickness,
+                     .y      = dy * (i + 1),
+                     .z      = TEXT_LAYER,
+                     .width  = 1.0f + 2.0f * thickness,
                      .height = thickness,
-                     .color = {.r = r, .g = g, .b = b}});
+                     .color  = {.r = r, .g = g, .b = b}});
       c2d.draw_rect({//
-                     .x = dx * j - thickness,
-                     .y = dy * i - thickness,
-                     .z = TEXT_LAYER,
-                     .width = 1.0f + 2.0f * thickness,
+                     .x      = dx * j - thickness,
+                     .y      = dy * i - thickness,
+                     .z      = TEXT_LAYER,
+                     .width  = 1.0f + 2.0f * thickness,
                      .height = thickness,
-                     .color = {.r = r, .g = g, .b = b}});
+                     .color  = {.r = r, .g = g, .b = b}});
     };
     if (selection_type == Selection_t::CELL) {
       uint32_t i = cur_i;
@@ -1026,7 +947,7 @@ struct Gridbg {
         if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
           continue;
         Cell_t *cell = get_cell(i, j);
-        float3 rand_color =
+        float3  rand_color =
             parse_color(g_random_colors[cell->hits * 8 + cell->misses]);
         float r = rand_color.r; // vki::clamp(cell->r, 0.0f, 1.0f);
         float g = rand_color.g; // vki::clamp(cell->g, 0.0f, 1.0f);
@@ -1036,61 +957,61 @@ struct Gridbg {
             c2d.camera.mouse_world_y > dy * i &&
             c2d.camera.mouse_world_y < dy * (i + 1)) {
           if (select_clicked && selection_type == Selection_t::CELL) {
-            cur_i = i;
-            cur_j = j;
+            cur_i          = i;
+            cur_j          = j;
             select_clicked = false;
           }
           draw_frame(i, j, 1.0f, 0.0f, 0.0f);
         }
         //        if (c2d.camera.pos.z < 200.0f) {
         c2d.draw_rect({//
-                       .x = dx * j,
-                       .y = dy * i,
-                       .z = QUAD_LAYER,
-                       .width = 1.0f,
+                       .x      = dx * j,
+                       .y      = dy * i,
+                       .z      = QUAD_LAYER,
+                       .width  = 1.0f,
                        .height = 1.0f,
-                       .color = {.r = r, .g = g, .b = b}});
+                       .color  = {.r = r, .g = g, .b = b}});
         //        }
         if (c2d.camera.pos.z < 60.0f) {
           float point_size = 2.0e-3f * c2d.camera.pos.z;
           c2d.draw_rect({//
-                         .x = dx * (j + 0.5f) - point_size,
-                         .y = dy * (i + 0.5f) - point_size,
-                         .z = TEXT_LAYER,
-                         .width = point_size,
+                         .x      = dx * (j + 0.5f) - point_size,
+                         .y      = dy * (i + 0.5f) - point_size,
+                         .z      = TEXT_LAYER,
+                         .width  = point_size,
                          .height = point_size,
-                         .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
+                         .color  = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
         }
       }
     }
     if (c2d.camera.pos.z > 160.0f) {
       c2d.draw_line({//
-                     .x0 = 0.0f,
-                     .y0 = 0.0f,
-                     .x1 = size_x,
-                     .y1 = 0.0f,
-                     .z = QUAD_LAYER,
+                     .x0    = 0.0f,
+                     .y0    = 0.0f,
+                     .x1    = size_x,
+                     .y1    = 0.0f,
+                     .z     = QUAD_LAYER,
                      .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
       c2d.draw_line({//
-                     .x0 = 0.0f,
-                     .y0 = 0.0f,
-                     .x1 = 0.0f,
-                     .y1 = size_y,
-                     .z = QUAD_LAYER,
+                     .x0    = 0.0f,
+                     .y0    = 0.0f,
+                     .x1    = 0.0f,
+                     .y1    = size_y,
+                     .z     = QUAD_LAYER,
                      .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
       c2d.draw_line({//
-                     .x0 = size_x,
-                     .y0 = size_y,
-                     .x1 = 0.0f,
-                     .y1 = size_y,
-                     .z = QUAD_LAYER,
+                     .x0    = size_x,
+                     .y0    = size_y,
+                     .x1    = 0.0f,
+                     .y1    = size_y,
+                     .z     = QUAD_LAYER,
                      .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
       c2d.draw_line({//
-                     .x0 = size_x,
-                     .y0 = size_y,
-                     .x1 = size_x,
-                     .y1 = 0.0f,
-                     .z = QUAD_LAYER,
+                     .x0    = size_x,
+                     .y0    = size_y,
+                     .x1    = size_x,
+                     .y1    = 0.0f,
+                     .z     = QUAD_LAYER,
                      .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
     }
     c2d.draw_console();
@@ -1099,9 +1020,9 @@ struct Gridbg {
       auto alloc_str = [&](char const *fmt, int16_t v, float x, float y) {
         snprintf(tmp_buf, sizeof(tmp_buf), fmt, v);
         c2d.draw_string({.c_str = tmp_buf,
-                         .x = x,
-                         .y = y,
-                         .z = TEXT_LAYER,
+                         .x     = x,
+                         .y     = y,
+                         .z     = TEXT_LAYER,
                          .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
       };
 
@@ -1112,7 +1033,7 @@ struct Gridbg {
             continue;
           snprintf(tmp_buf, sizeof(tmp_buf), "(%i, %i)", j, i);
           c2d.draw_string({.c_str = tmp_buf,
-                           .x = dx * j,
+                           .x     = dx * j,
                            .y = dy * (i + 1) - c2d.camera.glyphs_world_height,
                            .z = TEXT_LAYER,
                            .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
@@ -1148,10 +1069,10 @@ struct Gridbg {
     if (cmd.parse(str)) {
       switch (cmd.type) {
       case Dbg_Command::Command_t::GOTO: {
-        int32_t x = cmd.iarg0;
-        int32_t y = cmd.iarg1;
-        cur_i = y;
-        cur_j = x;
+        int32_t x      = cmd.iarg0;
+        int32_t y      = cmd.iarg1;
+        cur_i          = y;
+        cur_j          = x;
         selection_type = Selection_t::CELL;
         if (x >= 0 && x < 256 && y >= 0 && y < 256) {
           c2d.camera.pos.x = (float)x;
@@ -1213,13 +1134,12 @@ struct Gridbg {
       }
       case Dbg_Command::Command_t::SELECT_VERTEX: {
         selection_type = Selection_t::VERTEX;
-        cur_v = cmd.iarg0;
+        cur_v          = cmd.iarg0;
         break;
       }
       case Dbg_Command::Command_t::START: {
         run = true;
-        if (clear_on_start)
-          clear_all();
+        if (clear_on_start) clear_all();
         global_resume();
         break;
       }
@@ -1229,8 +1149,8 @@ struct Gridbg {
       }
       case Dbg_Command::Command_t::MOVE_VERTEX: {
         if (selection_type == Selection_t::VERTEX) {
-          v_x[cur_v] = cmd.farg0;
-          v_y[cur_v] = cmd.farg1;
+          v_x[cur_v]     = cmd.farg0;
+          v_y[cur_v]     = cmd.farg1;
           selection_type = Selection_t::NONE;
         } else {
           c2d.console.put_line("[ERROR] No vertex is selected!");
@@ -1243,8 +1163,7 @@ struct Gridbg {
         c2d.camera.pos.z = cmd.farg2;
         break;
       }
-      default:
-        UNIMPLEMENTED;
+      default: UNIMPLEMENTED;
       }
     } else {
       c2d.console.put_line("[ERROR] Unknown command!");
@@ -1265,16 +1184,16 @@ struct Gridbg {
     break_requested = false;
     next();
   }
-  void set_break() { break_requested = true; }
+  void    set_break() { break_requested = true; }
   Cell_t *get_cell(uint32_t i, uint32_t j) { return &grid[i * W + j]; }
-  void global_resume() { pause_cv.notify_one(); }
+  void    global_resume() { pause_cv.notify_one(); }
 
   // client functions
   void put_line(uint32_t i, uint32_t j, char const *fmt, ...) {
     if (log_all || i == cur_i && j == cur_j) {
       std::lock_guard<std::mutex> lock(grid_mutex);
-      char buffer[0x100];
-      va_list args;
+      char                        buffer[0x100];
+      va_list                     args;
       va_start(args, fmt);
       vsnprintf(buffer, sizeof(buffer), fmt, args);
       va_end(args);
@@ -1316,24 +1235,23 @@ struct Gridbg {
 struct Raster_Cell {
   static const size_t LOG_SIZE = 0x30;
   // Need to use long lived allocations
-  char *log[LOG_SIZE];
-  float r, g, b;
+  char *   log[LOG_SIZE];
+  float    r, g, b;
   uint32_t hits;
   uint32_t misses;
-  void release() {
+  void     release() {
     clear_logs();
     memset(this, 0, sizeof(*this));
   }
   void put_line(char const *str) {
     // shift the log up
-    if (log[LOG_SIZE - 1] != NULL)
-      free(log[LOG_SIZE - 1]);
+    if (log[LOG_SIZE - 1] != NULL) free(log[LOG_SIZE - 1]);
     ito(LOG_SIZE - 1) { log[LOG_SIZE - i - 1] = log[LOG_SIZE - i - 2]; }
-    size_t len = strlen(str);
-    char *new_str = (char *)malloc(len + 1);
+    size_t len     = strlen(str);
+    char * new_str = (char *)malloc(len + 1);
     memcpy(new_str, str, len);
     new_str[len] = '\0';
-    log[0] = new_str;
+    log[0]       = new_str;
   }
   void set_color(float r, float g, float b) {
     this->r = r;
@@ -1356,8 +1274,7 @@ struct Raster_Cell {
   void clear_logs() {
 
     ito(LOG_SIZE) {
-      if (log[i] != NULL)
-        free((void *)log[i]);
+      if (log[i] != NULL) free((void *)log[i]);
       log[i] = NULL;
     }
   }
@@ -1395,8 +1312,8 @@ Gridbg<256, 256, Raster_Cell> gridbg;
 uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
                     uint32_t tile_pow) {
   uint32_t tile_mask = (1 << tile_pow) - 1;
-  uint32_t tile_x = (x >> tile_pow);
-  uint32_t tile_y = (y >> tile_pow);
+  uint32_t tile_x    = (x >> tile_pow);
+  uint32_t tile_y    = (y >> tile_pow);
   return                                                   //
       (x & tile_mask) |                                    //
       ((y & tile_mask) << tile_pow) |                      //
@@ -1409,9 +1326,9 @@ void untile_coord(uint32_t offset, uint32_t *x, uint32_t *y, uint32_t size_pow,
                   uint32_t tile_pow) {
   uint32_t tile_mask = (1 << tile_pow) - 1;
   uint32_t size_mask = ((1 << size_pow) - 1) >> tile_pow;
-  uint32_t local_x = ((offset >> 0) & tile_mask);
-  uint32_t local_y = ((offset >> tile_pow) & tile_mask);
-  uint32_t tile_x = ((offset >> (tile_pow * 2)) & size_mask);
+  uint32_t local_x   = ((offset >> 0) & tile_mask);
+  uint32_t local_y   = ((offset >> tile_pow) & tile_mask);
+  uint32_t tile_x    = ((offset >> (tile_pow * 2)) & size_mask);
   uint32_t tile_y =
       ((offset >> (tile_pow * 2 + (size_pow - tile_pow))) & size_mask);
   *x = (tile_x << tile_pow) | local_x;
@@ -1465,10 +1382,10 @@ uint32_t rgba32f_to_srgba8_unorm(float r, float g, float b, float a) {
 }
 
 extern "C" void clear_attachment(vki::VkImageView_Impl *attachment,
-                                 VkClearValue val) {
+                                 VkClearValue           val) {
   switch (attachment->format) {
   case VkFormat::VK_FORMAT_D32_SFLOAT_S8_UINT: {
-    float *data_f32 = (float *)attachment->img->get_ptr();
+    float *   data_f32 = (float *)attachment->img->get_ptr();
     uint32_t *data_u32 = (uint32_t *)attachment->img->get_ptr();
     ito(attachment->img->extent.height) {
       jto(attachment->img->extent.width) {
@@ -1482,7 +1399,7 @@ extern "C" void clear_attachment(vki::VkImageView_Impl *attachment,
   }
   case VkFormat::VK_FORMAT_R8G8B8A8_SRGB: {
     uint32_t *data = (uint32_t *)attachment->img->get_ptr();
-    uint32_t tval =
+    uint32_t  tval =
         rgba32f_to_rgba8_unorm(val.color.float32[0], val.color.float32[1],
                                val.color.float32[2], val.color.float32[3]);
     ito(attachment->img->extent.height) {
@@ -1492,8 +1409,7 @@ extern "C" void clear_attachment(vki::VkImageView_Impl *attachment,
     }
     break;
   }
-  default:
-    UNIMPLEMENTED;
+  default: UNIMPLEMENTED;
   }
 }
 
@@ -1537,8 +1453,8 @@ void rasterize_triangle_naive_0(float x0, float y0, float x1, float y1,
   float n2_y = (x0 - x2);
   ito(height) {
     jto(width) {
-      float x = (((float)j) + 0.5f) / (float)width;
-      float y = (((float)i) + 0.5f) / (float)height;
+      float x  = (((float)j) + 0.5f) / (float)width;
+      float y  = (((float)i) + 0.5f) / (float)height;
       float e0 = n0_x * (x - x0) + n0_y * (y - y0);
       float e1 = n1_x * (x - x1) + n1_y * (y - y1);
       float e2 = n2_x * (x - x2) + n2_y * (y - y2);
@@ -1549,18 +1465,18 @@ void rasterize_triangle_naive_0(float x0, float y0, float x1, float y1,
   }
 }
 
-using i32x8 = __m256i;
-using i64x4 = __m256i;
+using i32x8  = __m256i;
+using i64x4  = __m256i;
 using i16x16 = __m256i;
-using i8x32 = __m256i;
-using i8x16 = __m128i;
+using i8x32  = __m256i;
+using i8x16  = __m128i;
 // Result is wrapped around! the carry is ignored
-inline i32x8 add_i32x8(i32x8 a, i32x8 b) { return _mm256_add_epi32(a, b); }
-inline i8x32 add_i8x32(i8x32 a, i8x32 b) { return _mm256_add_epi8(a, b); }
-inline i8x16 add_i8x16(i8x16 a, i8x16 b) { return _mm_add_epi8(a, b); }
-inline i8x16 or_si8x16(i8x16 a, i8x16 b) { return _mm_or_ps(a, b); }
+inline i32x8  add_i32x8(i32x8 a, i32x8 b) { return _mm256_add_epi32(a, b); }
+inline i8x32  add_i8x32(i8x32 a, i8x32 b) { return _mm256_add_epi8(a, b); }
+inline i8x16  add_i8x16(i8x16 a, i8x16 b) { return _mm_add_epi8(a, b); }
+inline i8x16  or_si8x16(i8x16 a, i8x16 b) { return _mm_or_ps(a, b); }
 inline i16x16 add_i16x16(i16x16 a, i16x16 b) { return _mm256_add_epi16(a, b); }
-inline i8x32 cmpeq_i8x32(i8x32 a, i8x32 b) { return _mm256_cmpeq_epi8(a, b); }
+inline i8x32  cmpeq_i8x32(i8x32 a, i8x32 b) { return _mm256_cmpeq_epi8(a, b); }
 #define init_i32x8 _mm256_setr_epi32
 #define init_i8x32 _mm256_setr_epi8
 #define init_i16x16 _mm256_setr_epi16
@@ -1574,7 +1490,7 @@ inline int32_t extract_sign_i32x8(i32x8 v) {
 // two bits for each lane with total of 32 bits per 16 lanes
 inline uint16_t extract_sign_i16x16(i16x16 v) {
   uint32_t mask_i8 = (uint32_t)_mm256_movemask_epi8(v);
-  mask_i8 = _pext_u32(
+  mask_i8          = _pext_u32(
       mask_i8, (uint32_t)0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10u);
   return (uint16_t)mask_i8;
 }
@@ -1600,7 +1516,7 @@ inline i64x4 broadcast_i64x4(int64_t v) {
 }
 
 inline i8x16 unpack_mask_i1x16(uint16_t mask) {
-  uint64_t low = 0;
+  uint64_t low  = 0;
   uint64_t high = 0;
   ito(8) low |= ((0xff * (((uint64_t)mask >> i) & 1ull)) << (8 * i));
   mask >>= 8;
@@ -1608,12 +1524,12 @@ inline i8x16 unpack_mask_i1x16(uint16_t mask) {
   return _mm_set_epi64(*(__m64 *)&high, *(__m64 *)&low);
 }
 __m256i get_mask3(const uint32_t mask) {
-  i32x8 vmask = broadcast_i32x8((int32_t)mask);
-  i64x4 shuffle = init_i64x4(0x0000000000000000, 0x0101010101010101,
+  i32x8 vmask    = broadcast_i32x8((int32_t)mask);
+  i64x4 shuffle  = init_i64x4(0x0000000000000000, 0x0101010101010101,
                              0x0202020202020202, 0x0303030303030303);
-  vmask = shuffle_i8x32(vmask, shuffle);
+  vmask          = shuffle_i8x32(vmask, shuffle);
   i64x4 bit_mask = broadcast_i64x4(0x7fbfdfeff7fbfdfe);
-  vmask = ymm_or(vmask, bit_mask);
+  vmask          = ymm_or(vmask, bit_mask);
   return cmpeq_i8x32(vmask, broadcast_i64x4(~0));
 }
 
@@ -1652,10 +1568,10 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
                           0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
                           0x70, 0x70, 0x70, 0x70, 0x70);
   // move within 128 bit lanes
-  __m256i local_mask = add_i8x32(shuffle, K0);
+  __m256i local_mask    = add_i8x32(shuffle, K0);
   __m256i local_shuffle = shuffle_i8x32(value, local_mask);
   // swap low and high 128 bit lanes
-  __m256i lowhigh = _mm256_permute4x64_epi64(value, 0x4E);
+  __m256i lowhigh  = _mm256_permute4x64_epi64(value, 0x4E);
   __m256i far_mask = add_i8x32(shuffle, K1);
   __m256i far_pass = shuffle_i8x32(lowhigh, far_mask);
   return ymm_or(local_shuffle, far_pass);
@@ -1663,9 +1579,9 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
 
 #pragma pack(push, 1)
 struct Classified_Tile {
-  uint8_t x;
-  uint8_t y;
-  float e_0, e_1, e_2;
+  uint8_t  x;
+  uint8_t  y;
+  float    e_0, e_1, e_2;
   uint16_t mask;
 };
 #pragma pack(pop)
@@ -1718,9 +1634,9 @@ void rasterize_triangle_tiled_1x1_256x256_defer_ref(
     float e2_1 = e2_0;
     for (uint8_t x = min_x_tile; x < max_x_tile; x += 1) {
       uint16_t mask = 0;
-      float e0_2 = e0_1;
-      float e1_2 = e1_1;
-      float e2_2 = e2_1;
+      float    e0_2 = e0_1;
+      float    e1_2 = e1_1;
+      float    e2_2 = e2_1;
       ito(4) {
         float e0_3 = e0_2;
         float e1_3 = e1_2;
@@ -1753,7 +1669,7 @@ void rasterize_triangle_tiled_1x1_256x256_defer_ref(
       }
       if (mask != 0xffff) {
         tile_buffer[_tile_count] = {x, y, e0_2, e1_2, e2_2, (uint16_t)~mask};
-        _tile_count = _tile_count + 1;
+        _tile_count              = _tile_count + 1;
       }
       e0_1 += n0_x * 4;
       e1_1 += n1_x * 4;
@@ -2328,6 +2244,30 @@ uint32_t rgba32f_to_rgba8(float4 in) {
          ((uint32_t)a << 24);
 }
 
+// struct Draw_Call {
+//  // State
+//  vki::cmd::GPU_State *state;
+//  uint32_t indexCount;
+//  uint32_t instanceCount;
+//  uint32_t firstIndex;
+//  int32_t vertexOffset;
+//  uint32_t firstInstance;
+//  // Helper methods
+//  void vs_stage() {}
+//  void begin_draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
+//                          uint32_t instanceCount, uint32_t firstIndex,
+//                          int32_t vertexOffset, uint32_t firstInstance) {
+//    this->state         = state;
+//    this->indexCount    = indexCount;
+//    this->instanceCount = instanceCount;
+//    this->firstIndex    = firstIndex;
+//    this->vertexOffset  = vertexOffset;
+//    this->firstInstance = firstInstance;
+//    ts.enter_scope();
+//  }
+//  void end_draw() { ts.exit_scope(); }
+//};
+
 void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                   uint32_t instanceCount, uint32_t firstIndex,
                   int32_t vertexOffset, uint32_t firstInstance) {
@@ -2340,14 +2280,13 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
   NOTNULL(vs_symbols);
   NOTNULL(ps_symbols);
 
-  Invocation_Info info = {};
-  void **descriptor_sets[0x10] = {};
+  Invocation_Info info                  = {};
+  void **         descriptor_sets[0x10] = {};
   defer(ito(0x10) {
-    if (descriptor_sets[i] != NULL)
-      free(descriptor_sets[i]);
+    if (descriptor_sets[i] != NULL) free(descriptor_sets[i]);
   });
 #define TMP_POOL(type, name)                                                   \
-  type name[0x100];                                                            \
+  type     name[0x100];                                                        \
   uint32_t num_##name = 0;
 #define ALLOC_TMP(name)                                                        \
   &name[num_##name++];                                                         \
@@ -2373,12 +2312,12 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
         }
         case VkDescriptorType::VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
           ASSERT_ALWAYS(num_combined_images < 0x100);
-          Combined_Image *ci = ALLOC_TMP(combined_images);
-          Image *img = ALLOC_TMP(images2d);
-          Sampler *s = ALLOC_TMP(samplers);
-          s->address_mode = Sampler::Address_Mode::ADDRESS_MODE_REPEAT;
-          s->filter = Sampler::Filter::NEAREST;
-          s->mipmap_mode = Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR;
+          Combined_Image *ci  = ALLOC_TMP(combined_images);
+          Image *         img = ALLOC_TMP(images2d);
+          Sampler *       s   = ALLOC_TMP(samplers);
+          s->address_mode     = Sampler::Address_Mode::ADDRESS_MODE_REPEAT;
+          s->filter           = Sampler::Filter::NEAREST;
+          s->mipmap_mode      = Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR;
 
           vki::VkImageView_Impl *image_view =
               state->descriptor_sets[i]->slots[j].image_view;
@@ -2389,25 +2328,24 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
           vki::VkImage_Impl *image = image_view->img;
           NOTNULL(image);
           img->array_layers = image->arrayLayers;
-          img->bpp = vki::get_format_bpp(image_view->format);
-          img->data = image->get_ptr(0, 0);
-          img->width = image->extent.width;
-          img->height = image->extent.height;
-          img->depth = image->extent.depth;
-          img->mip_levels = image->mipLevels;
-          img->pitch = image->extent.width * img->bpp;
+          img->bpp          = vki::get_format_bpp(image_view->format);
+          img->data         = image->get_ptr(0, 0);
+          img->width        = image->extent.width;
+          img->height       = image->extent.height;
+          img->depth        = image->extent.depth;
+          img->mip_levels   = image->mipLevels;
+          img->pitch        = image->extent.width * img->bpp;
           kto(img->array_layers) img->array_offsets[k] =
               image->array_offsets[k];
           kto(img->mip_levels) img->mip_offsets[k] = image->mip_offsets[k];
-          ci->image_handle = (uint64_t)img;
-          ci->sampler_handle = (uint64_t)s;
-          uint64_t *slot = ALLOC_TMP(handle_slots);
-          *slot = (uint64_t)ci;
-          descriptor_sets[i][j] = slot;
+          ci->image_handle                         = (uint64_t)img;
+          ci->sampler_handle                       = (uint64_t)s;
+          uint64_t *slot                           = ALLOC_TMP(handle_slots);
+          *slot                                    = (uint64_t)ci;
+          descriptor_sets[i][j]                    = slot;
           break;
         }
-        default:
-          UNIMPLEMENTED;
+        default: UNIMPLEMENTED;
         }
       }
     }
@@ -2417,20 +2355,20 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
 #undef TMP_POOL
 
   // Vertex shading
-  uint8_t *vs_output = NULL;
-  size_t sizeof_vs_output = 0;
-  float4 *vs_vertex_positions = NULL;
-  vki::VkPipeline_Impl *pipeline = state->graphics_pipeline;
+  uint8_t *             vs_output           = NULL;
+  size_t                sizeof_vs_output    = 0;
+  float4 *              vs_vertex_positions = NULL;
+  vki::VkPipeline_Impl *pipeline            = state->graphics_pipeline;
   {
     struct Attribute_Desc {
       uint8_t *src;
       uint32_t src_stride;
       uint32_t size;
       VkFormat format;
-      bool per_vertex_rate;
+      bool     per_vertex_rate;
     };
     VkVertexInputBindingDescription vertex_bindings[0x10] = {};
-    Attribute_Desc attribute_descs[0x10] = {};
+    Attribute_Desc                  attribute_descs[0x10] = {};
 
     ASSERT_ALWAYS(pipeline->IA_bindings.vertexBindingDescriptionCount < 0x10);
     ASSERT_ALWAYS(pipeline->IA_bindings.vertexAttributeDescriptionCount < 0x10);
@@ -2442,7 +2380,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     ito(pipeline->IA_bindings.vertexAttributeDescriptionCount) {
       VkVertexInputAttributeDescription desc =
           pipeline->IA_bindings.pVertexAttributeDescriptions[i];
-      Attribute_Desc attribute_desc;
+      Attribute_Desc                  attribute_desc;
       VkVertexInputBindingDescription binding_desc =
           vertex_bindings[desc.binding];
       attribute_desc.format = desc.format;
@@ -2452,18 +2390,18 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       attribute_desc.per_vertex_rate =
           binding_desc.inputRate ==
           VkVertexInputRate::VK_VERTEX_INPUT_RATE_VERTEX;
-      attribute_desc.size = vki::get_format_bpp(desc.format);
+      attribute_desc.size            = vki::get_format_bpp(desc.format);
       attribute_descs[desc.location] = attribute_desc;
     }
     ASSERT_ALWAYS(pipeline->IA_topology ==
                   VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    uint32_t subgroup_size = vs_symbols->subgroup_size;
+    uint32_t subgroup_size   = vs_symbols->subgroup_size;
     uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
     uint32_t total_data_units_needed = num_invocations * subgroup_size;
     uint8_t *attributes =
         (uint8_t *)ts.alloc(total_data_units_needed * vs_symbols->input_stride);
-    sizeof_vs_output = total_data_units_needed * vs_symbols->output_stride;
-    vs_output = (uint8_t *)ts.alloc(sizeof_vs_output);
+    sizeof_vs_output    = total_data_units_needed * vs_symbols->output_stride;
+    vs_output           = (uint8_t *)ts.alloc(sizeof_vs_output);
     vs_vertex_positions = (float4 *)ts.alloc(total_data_units_needed * 16);
     uint32_t *index_src_i32 =
         (uint32_t *)(((size_t)state->index_buffer->get_ptr() +
@@ -2477,12 +2415,9 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     //    VkIndexType::VK_INDEX_TYPE_UINT32);
     auto get_index = [&](uint32_t i) {
       switch (state->index_type) {
-      case VkIndexType::VK_INDEX_TYPE_UINT16:
-        return (size_t)index_src_i16[i];
-      case VkIndexType::VK_INDEX_TYPE_UINT32:
-        return (size_t)index_src_i32[i];
-      default:
-        UNIMPLEMENTED;
+      case VkIndexType::VK_INDEX_TYPE_UINT16: return (size_t)index_src_i16[i];
+      case VkIndexType::VK_INDEX_TYPE_UINT32: return (size_t)index_src_i32[i];
+      default: UNIMPLEMENTED;
       }
       UNIMPLEMENTED;
     };
@@ -2490,7 +2425,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       uint32_t index =
           (uint32_t)((int32_t)get_index(k + firstIndex) + vertexOffset);
       ito(vs_symbols->input_item_count) {
-        auto item = vs_symbols->input_slots[i];
+        auto           item           = vs_symbols->input_slots[i];
         Attribute_Desc attribute_desc = attribute_descs[item.location];
         ASSERT_ALWAYS(attribute_desc.per_vertex_rate);
 
@@ -2506,7 +2441,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                        VkFormat::VK_FORMAT_R32G32B32A32_SFLOAT &&
                    attribute_desc.format ==
                        VkFormat::VK_FORMAT_R8G8B8A8_UNORM) {
-          float4 tmp = (float4){1.0f, 1.0f, 1.0f, 1.0f};
+          float4   tmp = (float4){1.0f, 1.0f, 1.0f, 1.0f};
           uint32_t unorm;
           memcpy(&unorm, attribute_desc.src + attribute_desc.src_stride * index,
                  4);
@@ -2529,21 +2464,21 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       }
     }
 
-    info.work_group_size = (uint3){subgroup_size, 1, 1};
-    info.invocation_count = (uint3){num_invocations, 1, 1};
-    info.subgroup_size = (uint3){subgroup_size, 1, 1};
-    info.subgroup_x_bits = 0xff;
+    info.work_group_size   = (uint3){subgroup_size, 1, 1};
+    info.invocation_count  = (uint3){num_invocations, 1, 1};
+    info.subgroup_size     = (uint3){subgroup_size, 1, 1};
+    info.subgroup_x_bits   = 0xff;
     info.subgroup_x_offset = 0x0;
-    info.subgroup_y_bits = 0x0;
+    info.subgroup_y_bits   = 0x0;
     info.subgroup_y_offset = 0x0;
-    info.subgroup_z_bits = 0x0;
+    info.subgroup_z_bits   = 0x0;
     info.subgroup_z_offset = 0x0;
-    info.input = NULL;
-    info.output = NULL;
-    info.builtin_output = NULL;
-    info.push_constants = state->push_constants;
-    info.print_fn = (void *)printf_flush;
-    info.trap_fn = (void *)abort;
+    info.input             = NULL;
+    info.output            = NULL;
+    info.builtin_output    = NULL;
+    info.push_constants    = state->push_constants;
+    info.print_fn          = (void *)printf_flush;
+    info.trap_fn           = (void *)abort;
 
     if (0) {
       ito(indexCount) {
@@ -2590,9 +2525,9 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     }
 
     ito(num_invocations) {
-      info.wave_width = vs_symbols->subgroup_size;
+      info.wave_width    = vs_symbols->subgroup_size;
       info.invocation_id = (uint3){i, 0, 0};
-      info.input = attributes + i * subgroup_size * vs_symbols->input_stride;
+      info.input  = attributes + i * subgroup_size * vs_symbols->input_stride;
       info.output = vs_output + i * subgroup_size * vs_symbols->output_stride;
       // Assume there's only gl_Position
       info.builtin_output = vs_vertex_positions + i * subgroup_size;
@@ -2631,8 +2566,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                     attrib.z, attrib.w);
             break;
           }
-          default:
-            TRAP;
+          default: TRAP;
           }
         }
 
@@ -2662,8 +2596,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                     attrib.z, attrib.w);
             break;
           }
-          default:
-            TRAP;
+          default: TRAP;
           }
         }
       }
@@ -2684,9 +2617,9 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     float4 v1 = vs_vertex_positions[i * 3 + 1];
     float4 v2 = vs_vertex_positions[i * 3 + 2];
     // TODO: culling
-    v0.xyz = v0.xyz / v0.w;
-    v1.xyz = v1.xyz / v1.w;
-    v2.xyz = v2.xyz / v2.w;
+    v0.xyz                           = v0.xyz / v0.w;
+    v1.xyz                           = v1.xyz / v1.w;
+    v2.xyz                           = v2.xyz / v2.w;
     screenspace_positions[i * 3 + 0] = v0;
     screenspace_positions[i * 3 + 1] = v1;
     screenspace_positions[i * 3 + 2] = v2;
@@ -2694,7 +2627,7 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
   }
   // Pixel shading
   ASSERT_ALWAYS(state->framebuffer->attachmentCount == 2);
-  vki::VkImageView_Impl *rt = NULL;    // state->framebuffer->pAttachments[0];
+  vki::VkImageView_Impl *rt    = NULL; // state->framebuffer->pAttachments[0];
   vki::VkImageView_Impl *depth = NULL; // state->framebuffer->pAttachments[0];
   ASSERT_ALWAYS(state->render_pass->subpassCount == 1);
   uint32_t num_color_attachments = 0;
@@ -2718,24 +2651,24 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
   struct Pixel_Invocation_Info {
     uint32_t triangle_id;
     // Barycentric coordinates
-    float b_0, b_1, b_2;
+    float    b_0, b_1, b_2;
     uint32_t x, y;
   };
-  uint32_t max_pixel_invocations = 256 * 256 * 4;
+  uint32_t               max_pixel_invocations = 256 * 256 * 4;
   Pixel_Invocation_Info *pinfos =
       (Pixel_Invocation_Info *)ts.alloc_page_aligned(
           sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
   Classified_Tile *tiles =
       (Classified_Tile *)ts.alloc(sizeof(Classified_Tile) * (1 << 20));
 
-//                    void *vs_output_shadow = vs_output;
-//                  vs_output = ts.alloc_page_aligned(
-//                      sizeof_vs_output);
-//                  memcpy(vs_output, vs_output_shadow,
-//                         sizeof_vs_output);
-//                  unmap_pages(pinfos_shadow,
-//                  get_num_pages(sizeof(Pixel_Invocation_Info) *
-//                                                           max_pixel_invocations));
+  //                    void *vs_output_shadow = vs_output;
+  //                  vs_output = ts.alloc_page_aligned(
+  //                      sizeof_vs_output);
+  //                  memcpy(vs_output, vs_output_shadow,
+  //                         sizeof_vs_output);
+  //                  unmap_pages(pinfos_shadow,
+  //                  get_num_pages(sizeof(Pixel_Invocation_Info) *
+  //                                                           max_pixel_invocations));
 
   //  float *depth_tile_buffer = (float *)ts.alloc(4 * 256 * 256);
   yto(y_num_tiles) {
@@ -2755,28 +2688,28 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       //
       // Rastrization
 
-      float tile_x = ((float)x * 256.0f) / (float)rt->img->extent.width;
-      float tile_y = ((float)y * 256.0f) / (float)rt->img->extent.height;
-      float tile_size_x = 256.0f / (float)rt->img->extent.width;
-      float tile_size_y = 256.0f / (float)rt->img->extent.height;
-       uint32_t num_pixel_invocations = 0;
+      float    tile_x = ((float)x * 256.0f) / (float)rt->img->extent.width;
+      float    tile_y = ((float)y * 256.0f) / (float)rt->img->extent.height;
+      float    tile_size_x           = 256.0f / (float)rt->img->extent.width;
+      float    tile_size_y           = 256.0f / (float)rt->img->extent.height;
+      uint32_t num_pixel_invocations = 0;
       // Run the rasterizer
       kto(rasterizer_triangles_count) {
-        float4 v0 = screenspace_positions[k * 3 + 0];
-        float4 v1 = screenspace_positions[k * 3 + 1];
-        float4 v2 = screenspace_positions[k * 3 + 2];
-        float x0 = (v0.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-        float y0 = (v0.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-        float x1 = (v1.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-        float y1 = (v1.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-        float x2 = (v2.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-        float y2 = (v2.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-        x0 = x0 * 256.0f;
-        y0 = y0 * 256.0f;
-        x1 = x1 * 256.0f;
-        y1 = y1 * 256.0f;
-        x2 = x2 * 256.0f;
-        y2 = y2 * 256.0f;
+        float4 v0  = screenspace_positions[k * 3 + 0];
+        float4 v1  = screenspace_positions[k * 3 + 1];
+        float4 v2  = screenspace_positions[k * 3 + 2];
+        float  x0  = (v0.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+        float  y0  = (v0.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+        float  x1  = (v1.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+        float  y1  = (v1.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+        float  x2  = (v2.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+        float  y2  = (v2.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+        x0         = x0 * 256.0f;
+        y0         = y0 * 256.0f;
+        x1         = x1 * 256.0f;
+        y1         = y1 * 256.0f;
+        x2         = x2 * 256.0f;
+        y2         = y2 * 256.0f;
         float n0_x = -(y1 - y0);
         float n0_y = (x1 - x0);
         float n1_x = -(y2 - y1);
@@ -2842,9 +2775,9 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                 //                if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f)
                 //                  TRAP;
                 // TODO: fixe the precision issues
-                b0 = b0 < 0.0f ? 0.0f : b0;
-                b1 = b1 < 0.0f ? 0.0f : b1;
-                b2 = b2 < 0.0f ? 0.0f : b2;
+                b0        = b0 < 0.0f ? 0.0f : b0;
+                b1        = b1 < 0.0f ? 0.0f : b1;
+                b2        = b2 < 0.0f ? 0.0f : b2;
                 float sum = b0 + b1 + b2;
                 b0 /= sum;
                 b1 /= sum;
@@ -2854,27 +2787,26 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                 }
 
                 float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
-                b0 = b0 / v0.w / bw;
-                b1 = b1 / v1.w / bw;
-                b2 = b2 / v2.w / bw;
+                b0       = b0 / v0.w / bw;
+                b1       = b1 / v1.w / bw;
+                b2       = b2 / v2.w / bw;
 
                 pinfos[num_pixel_invocations++] = Pixel_Invocation_Info{
                     .triangle_id = k,
-                    .b_0 = b0,
-                    .b_1 = b1,
-                    .b_2 = b2,
-                    .x = x * 256 + (uint32_t)tile.x * 4 + sub_x,
-                    .y = y * 256 + (uint32_t)tile.y * 4 + sub_y};
+                    .b_0         = b0,
+                    .b_1         = b1,
+                    .b_2         = b2,
+                    .x           = x * 256 + (uint32_t)tile.x * 4 + sub_x,
+                    .y           = y * 256 + (uint32_t)tile.y * 4 + sub_y};
               }
             }
           }
         }
       }
 
-
       //      ts.alloc_page_aligned(1 << 20);
-      float4 *pixel_output = NULL;
-      float *pixel_depth_output = NULL;
+      float4 *pixel_output          = NULL;
+      float * pixel_depth_output    = NULL;
       float4 *pixel_positions_input = NULL;
       // Spawn pixel shaders
       if (num_pixel_invocations != 0) {
@@ -2929,14 +2861,14 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
                       vs_symbols->output_stride * (info.triangle_id * 3 + k), //
                   slot_size);
             }
-//            kto(1) {
-//              float3 tmp = (float3){k / 3.0f, 0.5f, 0.0f};
-//              memcpy(                                          //
-//                  pixel_input +                                //
-//                      ps_symbols->input_stride * (i * 3 + k) + //
-//                      input_slot.offset,                       //
-//                  &tmp, slot_size);
-//            }
+            //            kto(1) {
+            //              float3 tmp = (float3){k / 3.0f, 0.5f, 0.0f};
+            //              memcpy(                                          //
+            //                  pixel_input +                                //
+            //                      ps_symbols->input_stride * (i * 3 + k) + //
+            //                      input_slot.offset,                       //
+            //                  &tmp, slot_size);
+            //            }
           }
           kto(3) pixel_positions_input[i * 3 + k] =
               screenspace_positions[info.triangle_id * 3 + k];
@@ -2997,67 +2929,61 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
           }
         }
 
-        info.work_group_size = (uint3){subgroup_size, 1, 1};
-        info.invocation_count = (uint3){num_invocations, 1, 1};
-        info.subgroup_size = (uint3){subgroup_size, 1, 1};
-        info.subgroup_x_bits = 0xff;
+        info.work_group_size   = (uint3){subgroup_size, 1, 1};
+        info.invocation_count  = (uint3){num_invocations, 1, 1};
+        info.subgroup_size     = (uint3){subgroup_size, 1, 1};
+        info.subgroup_x_bits   = 0xff;
         info.subgroup_x_offset = 0x0;
-        info.subgroup_y_bits = 0x0;
+        info.subgroup_y_bits   = 0x0;
         info.subgroup_y_offset = 0x0;
-        info.subgroup_z_bits = 0x0;
+        info.subgroup_z_bits   = 0x0;
         info.subgroup_z_offset = 0x0;
-        info.input = NULL;
-        info.output = NULL;
-        info.builtin_output = NULL;
-        info.push_constants = state->push_constants;
-        info.print_fn = (void *)printf;
+        info.input             = NULL;
+        info.output            = NULL;
+        info.builtin_output    = NULL;
+        info.push_constants    = state->push_constants;
+        info.print_fn          = (void *)printf;
         ito(num_invocations) {
           float barycentrics[0x100] = {};
           jto(subgroup_size) {
             Pixel_Invocation_Info pinfo = pinfos[j + i * subgroup_size];
-            barycentrics[j * 3 + 0] = pinfo.b_0;
-            barycentrics[j * 3 + 1] = pinfo.b_1;
-            barycentrics[j * 3 + 2] = pinfo.b_2;
+            barycentrics[j * 3 + 0]     = pinfo.b_0;
+            barycentrics[j * 3 + 1]     = pinfo.b_1;
+            barycentrics[j * 3 + 2]     = pinfo.b_2;
           }
-          info.barycentrics = barycentrics;
+          info.barycentrics  = barycentrics;
           info.invocation_id = (uint3){i, 0, 0};
-          info.input = pixel_input + i * subgroup_size *
-                                     ps_symbols->input_stride * 3;
+          info.input =
+              pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
           info.output = pixel_output + i * subgroup_size;
           // Assume there's only gl_Position
-          info.builtin_output = pixel_depth_output + i * subgroup_size;
+          info.builtin_output  = pixel_depth_output + i * subgroup_size;
           info.pixel_positions = pixel_positions_input + i * subgroup_size * 3;
-          info.wave_width = ps_symbols->subgroup_size;
+          info.wave_width      = ps_symbols->subgroup_size;
           ps_symbols->spv_main(&info, (~0));
         }
         ito(num_pixel_invocations) {
           Pixel_Invocation_Info info = pinfos[i];
-          uint32_t *dst = ((uint32_t *)rt->img->get_ptr());
-          if (info.x >= rt->img->extent.width)
-            continue;
-          if (info.y >= rt->img->extent.height)
-            continue;
-          float depth_value = 1.0f;
-          float2 *depth_src = (float2 *)depth->img->get_ptr() +
+          uint32_t *            dst  = ((uint32_t *)rt->img->get_ptr());
+          if (info.x >= rt->img->extent.width) continue;
+          if (info.y >= rt->img->extent.height) continue;
+          float   depth_value = 1.0f;
+          float2 *depth_src   = (float2 *)depth->img->get_ptr() +
                               info.y * rt->img->extent.width + info.x;
           if (state->graphics_pipeline->DS_state.depthTestEnable == VK_TRUE) {
             depth_value = (*depth_src).x;
             if (state->graphics_pipeline->DS_state.depthCompareOp ==
                 VK_COMPARE_OP_LESS) {
-              if (pixel_depth_output[i] > depth_value)
-                continue;
+              if (pixel_depth_output[i] > depth_value) continue;
             } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
                        VK_COMPARE_OP_LESS_OR_EQUAL) {
-              if (pixel_depth_output[i] >= depth_value)
-                continue;
+              if (pixel_depth_output[i] >= depth_value) continue;
             } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
                        VK_COMPARE_OP_GREATER) {
-              if (pixel_depth_output[i] < depth_value)
-                continue;
+              if (pixel_depth_output[i] < depth_value) continue;
             } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
                        VK_COMPARE_OP_GREATER_OR_EQUAL) {
-              if (pixel_depth_output[i] <= depth_value)
-                continue;
+              if (pixel_depth_output[i] <= depth_value) continue;
             } else {
               UNIMPLEMENTED;
             }
@@ -3182,9 +3108,9 @@ void render() {
 
   // Update delta time
   double last_time = my_clock();
-  double cur_time = my_clock();
-  double dt = cur_time - last_time;
-  last_time = cur_time;
+  double cur_time  = my_clock();
+  double dt        = cur_time - last_time;
+  last_time        = cur_time;
 
   // Scoped temporary allocator
 
@@ -3205,13 +3131,13 @@ void main_loop() {
   glDebugMessageCallback(MessageCallback, 0);
   SDL_Event event;
 
-  float camera_speed = 1.0f;
-  static bool ldown = false;
-  static int old_mp_x = 0;
-  static int old_mp_y = 0;
+  float       camera_speed  = 1.0f;
+  static bool ldown         = false;
+  static int  old_mp_x      = 0;
+  static int  old_mp_y      = 0;
   static bool hyper_pressed = false;
-  static bool skip_key = false;
-  static bool lctrl = false;
+  static bool skip_key      = false;
+  static bool lctrl         = false;
   SDL_StartTextInput();
   while (SDL_WaitEvent(&event)) {
     SDL_GetWindowSize(window, &SCREEN_WIDTH, &SCREEN_HEIGHT);
@@ -3309,15 +3235,14 @@ void main_loop() {
     }
     case SDL_MOUSEBUTTONUP: {
       SDL_MouseButtonEvent *m = (SDL_MouseButtonEvent *)&event;
-      if (m->button == 1)
-        ldown = false;
+      if (m->button == 1) ldown = false;
       break;
     }
     case SDL_WINDOWEVENT_FOCUS_LOST: {
-      skip_key = false;
+      skip_key      = false;
       hyper_pressed = false;
-      ldown = false;
-      lctrl = false;
+      ldown         = false;
+      lctrl         = false;
       break;
     }
     case SDL_MOUSEMOTION: {
@@ -3330,8 +3255,8 @@ void main_loop() {
         c2d.camera.pos.y += c2d.camera.pos.z * (float)dy / SCREEN_HEIGHT;
       }
 
-      old_mp_x = m->x;
-      old_mp_y = m->y;
+      old_mp_x                  = m->x;
+      old_mp_y                  = m->y;
       c2d.camera.mouse_screen_x = 2.0f * (float)m->x / SCREEN_WIDTH - 1.0f;
       c2d.camera.mouse_screen_y = -2.0f * (float)m->y / SCREEN_HEIGHT + 1.0f;
     } break;
@@ -3347,8 +3272,7 @@ void main_loop() {
       c2d.camera.pos.z = clamp(c2d.camera.pos.z, 0.1f, 512.0f);
     } break;
     }
-    if (gridbg.run == false)
-      break;
+    if (gridbg.run == false) break;
     render();
     SDL_UpdateWindowSurface(window);
   }
@@ -3380,12 +3304,12 @@ int main(int argc, char **argv) {
 
   call_pfc(pfcInit());
   call_pfc(pfcPinThread(3));
-  uint32_t width_pow = 8;
-  uint32_t width = 1 << width_pow;
+  uint32_t width_pow  = 8;
+  uint32_t width      = 1 << width_pow;
   uint32_t height_pow = 8;
-  uint32_t height = 1 << height_pow;
+  uint32_t height     = 1 << height_pow;
   uint8_t *_image_i8 = (uint8_t *)malloc(sizeof(uint8_t) * width * height + 32);
-  uint8_t *image_i8 = (uint8_t *)(((size_t)_image_i8 + 0x1f) & (~0x1FULL));
+  uint8_t *image_i8  = (uint8_t *)(((size_t)_image_i8 + 0x1f) & (~0x1FULL));
   clear_image_2d_i8(image_i8, width * 1, width, height, 0x00);
   defer(free(_image_i8));
   float dp = 1.0f / (float)width;
@@ -3393,11 +3317,10 @@ int main(int argc, char **argv) {
 
   // ~5k cycles
   Classified_Tile tiles[0x1000];
-  uint32_t tile_count = 0;
-  uint32_t i = 0;
+  uint32_t        tile_count = 0;
+  uint32_t        i          = 0;
   while (GRIDBG_PAUSE()) {
-    if (graphics_thread_finished == 1)
-      break;
+    if (graphics_thread_finished == 1) break;
     tile_count = 0;
     //    if (impl_mode == Impl_Mode_t::REF) {
     //      rasterize_triangle_tiled_1x1_256x256_defer_ref(     //
@@ -3509,7 +3432,7 @@ void Context2D::render_stuff() {
     static GLuint quad_vao;
     static GLuint quad_vbo;
     static GLuint quad_instance_vbo;
-    static int init_va0 = [&] {
+    static int    init_va0 = [&] {
       glGenVertexArrays(1, &line_vao);
       glBindVertexArray(line_vao);
       glGenBuffers(1, &line_vbo);
@@ -3557,7 +3480,7 @@ void Context2D::render_stuff() {
       static_assert(sizeof(Rect_Instance_GL) == 36, "");
       //      uint32_t max_num_quads = width * height;
       uint32_t max_num_quads = quad_storage.cursor;
-      uint32_t num_quads = 0;
+      uint32_t num_quads     = 0;
       ts.enter_scope();
       defer(ts.exit_scope());
       Rect_Instance_GL *qinstances = (Rect_Instance_GL *)ts.alloc(
@@ -3570,28 +3493,27 @@ void Context2D::render_stuff() {
           continue;
         Rect_Instance_GL quadgl;
         if (quad2d.world_space) {
-          quadgl.x = quad2d.x;
-          quadgl.y = quad2d.y;
-          quadgl.z = quad2d.z;
-          quadgl.w = 1.0f;
-          quadgl.width = quad2d.width;
+          quadgl.x      = quad2d.x;
+          quadgl.y      = quad2d.y;
+          quadgl.z      = quad2d.z;
+          quadgl.w      = 1.0f;
+          quadgl.width  = quad2d.width;
           quadgl.height = quad2d.height;
         } else {
-          quadgl.x = 2.0f * quad2d.x / viewport_width - 1.0f;
-          quadgl.y = -2.0f * quad2d.y / viewport_height + 1.0f;
-          quadgl.z = quad2d.z;
-          quadgl.w = 0.0f;
-          quadgl.width = 2.0f * quad2d.width / viewport_width;
+          quadgl.x      = 2.0f * quad2d.x / viewport_width - 1.0f;
+          quadgl.y      = -2.0f * quad2d.y / viewport_height + 1.0f;
+          quadgl.z      = quad2d.z;
+          quadgl.w      = 0.0f;
+          quadgl.width  = 2.0f * quad2d.width / viewport_width;
           quadgl.height = -2.0f * quad2d.height / viewport_height;
         }
 
-        quadgl.r = quad2d.color.r;
-        quadgl.g = quad2d.color.g;
-        quadgl.b = quad2d.color.b;
+        quadgl.r                = quad2d.color.r;
+        quadgl.g                = quad2d.color.g;
+        quadgl.b                = quad2d.color.b;
         qinstances[num_quads++] = quadgl;
       }
-      if (num_quads == 0)
-        goto skip_quads;
+      if (num_quads == 0) goto skip_quads;
       glBufferData(GL_ARRAY_BUFFER, sizeof(Rect_Instance_GL) * num_quads,
                    qinstances, GL_DYNAMIC_DRAW);
 
@@ -3636,7 +3558,7 @@ void Context2D::render_stuff() {
       defer(ts.exit_scope());
       Line_GL *lines = (Line_GL *)ts.alloc(sizeof(Line_GL) * num_lines);
       ito(num_lines) {
-        Line2D l = *line_storage.at(i);
+        Line2D  l = *line_storage.at(i);
         Line_GL lgl;
         if (l.world_space) {
           lgl.x0 = l.x0;
@@ -3664,9 +3586,9 @@ void Context2D::render_stuff() {
           lgl.w1 = 0.0f;
         }
 
-        lgl.r1 = l.color.r;
-        lgl.g1 = l.color.g;
-        lgl.b1 = l.color.b;
+        lgl.r1   = l.color.r;
+        lgl.g1   = l.color.g;
+        lgl.b1   = l.color.b;
         lines[i] = lgl;
       }
       glBindVertexArray(line_vao);
@@ -3731,7 +3653,7 @@ void Context2D::render_stuff() {
     else
       discard;
   })";
-      static GLuint program = create_program(vsrc, fsrc);
+      static GLuint program      = create_program(vsrc, fsrc);
       static GLuint font_texture = [&] {
         GLuint tex;
         glGenTextures(1, &tex);
@@ -3745,7 +3667,7 @@ void Context2D::render_stuff() {
         defer(free(r8_data));
         ito(simplefont_bitmap_height) {
           jto(simplefont_bitmap_width) {
-            char c = simplefont_bitmap[i][j];
+            char c                                   = simplefont_bitmap[i][j];
             r8_data[(i)*simplefont_bitmap_width + j] = c == ' ' ? 0 : 0xff;
           }
         }
@@ -3757,7 +3679,7 @@ void Context2D::render_stuff() {
       static GLuint vao;
       static GLuint vbo;
       static GLuint instance_vbo;
-      static int glyph_vao = [&] {
+      static int    glyph_vao = [&] {
         glGenVertexArrays(1, &vao);
         glBindVertexArray(vao);
         float pos[] = {
@@ -3784,15 +3706,15 @@ void Context2D::render_stuff() {
       };
       static_assert(sizeof(Glyph_Instance_GL) == 32, "");
       uint32_t glyph_scale = 2;
-      float glyph_uv_width =
+      float    glyph_uv_width =
           (float)simplefont_bitmap_glyphs_width / simplefont_bitmap_width;
       float glyph_uv_height =
           (float)simplefont_bitmap_glyphs_height / simplefont_bitmap_height;
 
-      float glyph_pad_ss = 2.0f / viewport_width;
-      uint32_t max_num_glyphs = 0;
-      uint32_t num_strings = string_storage.cursor;
-      _String2D *strings = string_storage.at(0);
+      float      glyph_pad_ss   = 2.0f / viewport_width;
+      uint32_t   max_num_glyphs = 0;
+      uint32_t   num_strings    = string_storage.cursor;
+      _String2D *strings        = string_storage.at(0);
       kto(num_strings) { max_num_glyphs += (uint32_t)strings[k].len; }
       ts.enter_scope();
       defer(ts.exit_scope());
@@ -3802,8 +3724,7 @@ void Context2D::render_stuff() {
 
       kto(num_strings) {
         _String2D string = strings[k];
-        if (string.len == 0)
-          continue;
+        if (string.len == 0) continue;
         float2 ss = (float2){string.x, string.y};
         if (string.world_space) {
           ss = camera.world_to_screen(ss);
@@ -3823,10 +3744,10 @@ void Context2D::render_stuff() {
           uint32_t c = (uint32_t)string.c_str[i];
 
           // Printable characters only
-          c = clamp(c, 0x20, 0x7e);
+          c            = clamp(c, 0x20, 0x7e);
           uint32_t row = (c - 0x20) / simplefont_bitmap_glyphs_per_row;
           uint32_t col = (c - 0x20) % simplefont_bitmap_glyphs_per_row;
-          float v0 = ((float)row * (simplefont_bitmap_glyphs_height +
+          float    v0  = ((float)row * (simplefont_bitmap_glyphs_height +
                                     simplefont_bitmap_glyphs_pad_y * 2) +
                       simplefont_bitmap_glyphs_pad_y) /
                      simplefont_bitmap_height;
@@ -3846,8 +3767,7 @@ void Context2D::render_stuff() {
           glyphs_gl[num_glyphs++] = glyph;
         }
       }
-      if (num_glyphs == 0)
-        goto skip_strings;
+      if (num_glyphs == 0) goto skip_strings;
       glBindVertexArray(vao);
       glBindBuffer(GL_ARRAY_BUFFER, vbo);
       glEnableVertexAttribArray(0);
