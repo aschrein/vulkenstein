@@ -1568,7 +1568,7 @@ void rasterize_triangle_tiled_1x1_256x256_defer_ref(float x0, float y0, float x1
         e2_2 += n2_y;
       }
       if (mask != 0xffff) {
-        tile_buffer[_tile_count] = {x, y, e0_2, e1_2, e2_2, (uint16_t)~mask};
+        tile_buffer[_tile_count] = {x, y, e0_1, e1_1, e2_1, (uint16_t)~mask};
         _tile_count              = _tile_count + 1;
       }
       e0_1 += n0_x * 4;
@@ -2542,12 +2542,17 @@ struct Draw_Call {
               b2 = tile.e_0 + n0_x * sub_x + n0_y * sub_y;
               b0 = tile.e_1 + n1_x * sub_x + n1_y * sub_y;
               b1 = tile.e_2 + n2_x * sub_x + n2_y * sub_y;
-              //                if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f)
-              //                  TRAP;
-              // TODO: fixe the precision issues
-              b0        = b0 < 0.0f ? 0.0f : b0;
-              b1        = b1 < 0.0f ? 0.0f : b1;
-              b2        = b2 < 0.0f ? 0.0f : b2;
+              if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f) {
+                b0 = 1.0f;
+                b1 = 0.0f;
+                b2 = 0.0f;
+
+                //                  TRAP;
+                // TODO: fixe the precision issues
+                //                b0 = b0 < 0.0f ? 0.0f : b0;
+                //                b1 = b1 < 0.0f ? 0.0f : b1;
+                //                b2 = b2 < 0.0f ? 0.0f : b2;
+              }
               float sum = b0 + b1 + b2;
               b0 /= sum;
               b1 /= sum;
@@ -2589,8 +2594,8 @@ struct Draw_Call {
       // Allocate pixel shader input storage and
       // Perform relocation of data for vs->ps
 
-      cur_tile.pixel_input =
-          (uint8_t *)ts.alloc(3 * ps_symbols->input_stride * num_invocations * subgroup_size);
+      cur_tile.pixel_input = (uint8_t *)ts.alloc_align(
+          3 * ps_symbols->input_stride * num_invocations * subgroup_size, 32);
       ito(cur_tile.num_pixel_invocations) {
         Pixel_Invocation_Info info = cur_tile.pinfos[i];
 
@@ -2624,6 +2629,42 @@ struct Draw_Call {
       }
     }
   }
+  ATTR_USED
+  void dump_pixel_input_current_tile() {
+    ito(cur_tile.num_pixel_invocations) {
+      Pixel_Invocation_Info info = cur_tile.pinfos[i];
+      fprintf(stdout, "frag %i\n", i);
+      jto(ps_symbols->input_item_count) {
+        Shader_Symbols::Varying_Slot input = ps_symbols->input_slots[j];
+        fprintf(stdout, "  in attrib: %i\n", j);
+        kto(3) {
+          fprintf(stdout, "    v: %i\n", k);
+          switch ((VkFormat)input.format) {
+          case VK_FORMAT_R32G32_SFLOAT: {
+            float2 attrib = *(float2 *)(cur_tile.pixel_input +
+                                        (i * 3 + k) * ps_symbols->input_stride + input.offset);
+            fprintf(stdout, "      <%f, %f>\n", attrib.x, attrib.y);
+            break;
+          }
+          case VK_FORMAT_R32G32B32_SFLOAT: {
+            float3 attrib = *(float3 *)(cur_tile.pixel_input +
+                                        (i * 3 + k) * ps_symbols->input_stride + input.offset);
+            fprintf(stdout, "      <%f, %f, %f>\n", attrib.x, attrib.y, attrib.z);
+            break;
+          }
+          case VK_FORMAT_R32G32B32A32_SFLOAT: {
+            float4 attrib = *(float4 *)(cur_tile.pixel_input +
+                                        (i * 3 + k) * ps_symbols->input_stride + input.offset);
+            fprintf(stdout, "      <%f, %f, %f, %f>\n", attrib.x, attrib.y, attrib.z, attrib.w);
+            break;
+          }
+          default: TRAP;
+          }
+        }
+      }
+    }
+  }
+
   void shade_current_tile() {
     if (cur_tile.num_pixel_invocations != 0) {
       uint32_t subgroup_size = ps_symbols->subgroup_size;
@@ -2716,6 +2757,7 @@ struct Draw_Call {
             float4 src_val = cur_tile.pixel_output[i];
             dst_val.xyz    = dst_val.xyz * (1.0f - src_val.w) + src_val.xyz * src_val.w;
             dst_val.w      = (src_val.w) * (1.0f - src_val.w);
+            //            dump_pixel_input_current_tile();
             dst[info.y * cur_tile.rts[j]->img->extent.width + info.x] =
                 rgba32f_to_rgba8unorm(dst_val);
           } else {
@@ -2762,7 +2804,7 @@ struct Draw_Call {
     ito(0x10) {
       if (state->descriptor_sets[i] != NULL) {
         descriptor_sets[i] =
-            (void **)ts.alloc(sizeof(void *) * state->descriptor_sets[i]->slot_count);
+            (void **)ts.alloc_align(sizeof(void *) * state->descriptor_sets[i]->slot_count, 32);
         jto(state->descriptor_sets[i]->slot_count) {
           switch (state->descriptor_sets[i]->slots[j].type) {
           case VkDescriptorType::VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
@@ -3105,19 +3147,34 @@ int main(int argc, char **argv) {
   while (GRIDBG_PAUSE()) {
     if (graphics_thread_finished == 1) break;
     tile_count = 0;
-    //    if (impl_mode == Impl_Mode_t::REF) {
-    //      rasterize_triangle_tiled_1x1_256x256_defer_ref(     //
-    //          gridbg.v_x[0] / 256.0f, gridbg.v_y[0] / 256.0f, // p0
-    //          gridbg.v_x[1] / 256.0f, gridbg.v_y[1] / 256.0f, // p1
-    //          gridbg.v_x[2] / 256.0f, gridbg.v_y[2] / 256.0f, // p2
-    //          &tiles[0], &tile_count);
-    //    } else {
-    //      rasterize_triangle_tiled_1x1_256x256_defer(         //
-    //          gridbg.v_x[0] / 256.0f, gridbg.v_y[0] / 256.0f, // p0
-    //          gridbg.v_x[1] / 256.0f, gridbg.v_y[1] / 256.0f, // p1
-    //          gridbg.v_x[2] / 256.0f, gridbg.v_y[2] / 256.0f, // p2
-    //          &tiles[0], &tile_count);
-    //    }
+    float x0   = gridbg.v_x[0];
+    float y0   = gridbg.v_y[0];
+    float x1   = gridbg.v_x[1];
+    float y1   = gridbg.v_y[1];
+    float x2   = gridbg.v_x[2];
+    float y2   = gridbg.v_y[2];
+    float n0_x = -(y1 - y0);
+    float n0_y = (x1 - x0);
+    float n1_x = -(y2 - y1);
+    float n1_y = (x2 - x1);
+    float n2_x = -(y0 - y2);
+    float n2_y = (x0 - x2);
+    if (impl_mode == Impl_Mode_t::REF) {
+      rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+          x0, y0,                                     //
+          x1, y1,                                     //
+          x2, y2,                                     //
+          n0_x, n0_y,                                 //
+          n1_x, n1_y,                                 //
+          n2_x, n2_y,                                 //
+          &tiles[0], &tile_count);
+    } else {
+      //          rasterize_triangle_tiled_1x1_256x256_defer(         //
+      //              gridbg.v_x[0] / 256.0f, gridbg.v_y[0] / 256.0f, // p0
+      //              gridbg.v_x[1] / 256.0f, gridbg.v_y[1] / 256.0f, // p1
+      //              gridbg.v_x[2] / 256.0f, gridbg.v_y[2] / 256.0f, // p2
+      //              &tiles[0], &tile_count);
+    }
 
     //    rasterize_triangle_tiled_4x4_256x256_defer_cull(
     //        // clang-format off

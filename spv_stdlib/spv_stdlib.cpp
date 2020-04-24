@@ -183,83 +183,6 @@ FNATTR uint64_t get_combined_sampler(uint64_t combined_handle) {
   Combined_Image *image = (Combined_Image *)(void *)(size_t)combined_handle;
   return image->sampler_handle;
 }
-FNATTR float4 spv_image_read_2d_rgba32f_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
-  Image *  image      = (Image *)(void *)(size_t)handle;
-  uint32_t mip_width  = spv_clamp_u32(image->width >> mip_level, 1, image->width);
-  uint32_t mip_height = spv_clamp_u32(image->height >> mip_level, 1, image->height);
-  float4 * mip_data   = (float4 *)(image->data + image->mip_offsets[mip_level]);
-  uint32_t pitch      = spv_clamp_u32(image->pitch >> mip_level, 1, image->pitch);
-  float4 * row        = (float4 *)(image->data + image->mip_offsets[mip_level] + pitch * coord.y);
-  return row[coord.x];
-}
-FNATTR float4 spv_image_read_2d_rgba8unorm_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
-  Image *   image      = (Image *)(void *)(size_t)handle;
-  uint32_t  mip_width  = spv_clamp_u32(image->width >> mip_level, 1, image->width);
-  uint32_t  mip_height = spv_clamp_u32(image->height >> mip_level, 1, image->height);
-  uint32_t *mip_data   = (uint32_t *)(image->data + image->mip_offsets[mip_level]);
-  uint32_t  pitch      = spv_clamp_u32(image->pitch >> mip_level, 1, image->pitch);
-  uint32_t *row = (uint32_t *)(image->data + image->mip_offsets[mip_level] + pitch * coord.y);
-  return rgba8unorm_to_rgba32f(row[coord.x]);
-}
-FNATTR float4 spv_image_read_2d_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
-  Image *image = (Image *)(void *)(size_t)handle;
-  switch (image->format) {
-  case Image::Format::R8G8B8A8_UNORM: {
-    return spv_image_read_2d_rgba8unorm_lod(handle, coord, mip_level);
-  }
-  case Image::Format::R32G32B32A32_FLOAT: {
-    return spv_image_read_2d_rgba32f_lod(handle, coord, mip_level);
-  }
-  default:
-    // TODO: proper traping
-    __builtin_unreachable();
-  }
-}
-FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle, uint64_t sampler_handle,
-                                         float coordx, float coordy, float dudx, float dudy,
-                                         float dvdx, float dvdy) {
-  //    return (float4){coordx, coordy, 0.0f, 1.0f};
-  Image *  image   = (Image *)(void *)(size_t)image_handle;
-  Sampler *sampler = (Sampler *)(void *)(size_t)sampler_handle;
-  return spv_image_read_2d_lod(
-      image_handle,
-      (uint2){(uint32_t)(0.5f + image->width * spv_clamp_f32(coordx, 0.0f, 1.0f)),
-              (uint32_t)(0.5f + image->height * spv_clamp_f32(coordy, 0.0f, 1.0f))},
-      0);
-  //_______________
-  //|    |    |   |
-  //|  i | j  | k |
-  //|____|____|___|
-  //| du | du | 0 |
-  //| dx | dy |   |
-  //|____|____|___|
-  //| dv | dv | 0 |
-  //| dx | dy |   |
-  //|____|____|___|
-  float area             = spv_clamp_f32(fabsf(dudx * dvdy - dudy * dvdx), 0.0f, 1.0f);
-  float texels_per_unit  = (float)(image->width * image->height);
-  float texels_per_pixel = area * texels_per_unit;
-  // Magnification
-  if (texels_per_pixel <= 1.0f) {
-  }
-  // texels_per_row = sqrt(texels_per_pixel)
-  // mip_level = log2(sqrt(texels_per_pixel)) == 1/2 * log2(texels_per_pixel)
-  float pow2 = log2f(texels_per_pixel) * 0.5;
-  // log2(x)          = 0, 1, 2, 3, ...  N
-  // x                = 1, 2, 4, 8, ... (1 << N)
-  // pow2 has to be > 0.0 here
-  //  float max_size = fmaxf((float)image->width, (float)image->height);
-  float mip_level = spv_clamp_f32((float)image->mip_levels - pow2, 0.0f, (float)image->mip_levels);
-  if (sampler->mipmap_mode == Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR) {
-    uint32_t mip_level_0 = (uint32_t)floorf(mip_level);
-    uint32_t mip_level_1 = (uint32_t)floorf(mip_level + 1.0f);
-    if (sampler->filter == Sampler::Filter::NEAREST) {
-    }
-  } else {
-    // unreachable
-    return (float4){777.0f, 777.0f, 777.0f, 777.0f};
-  }
-}
 FNATTR float3 get_barycentrics(Invocation_Info *state, uint32_t lane_id) {
   return (float3){state->barycentrics[lane_id * 3], state->barycentrics[lane_id * 3 + 1],
                   state->barycentrics[lane_id * 3 + 2]};
@@ -407,6 +330,123 @@ FNATTR uint64_t spv_lsb_i64(uint64_t num) {
   return arr[((num & (~num + 1)) * debruijn) >> 58];
 }
 
+FNATTR float4 spv_image_read_2d_rgba32f_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
+  Image *  image      = (Image *)(void *)(size_t)handle;
+  uint32_t mip_width  = spv_clamp_u32(image->width >> mip_level, 1, image->width);
+  uint32_t mip_height = spv_clamp_u32(image->height >> mip_level, 1, image->height);
+  float4 * mip_data   = (float4 *)(image->data + image->mip_offsets[mip_level]);
+  uint32_t pitch      = spv_clamp_u32(image->pitch >> mip_level, 1, image->pitch);
+  float4 * row        = (float4 *)(image->data + image->mip_offsets[mip_level] + pitch * coord.y);
+  return row[coord.x];
+}
+FNATTR float4 spv_image_read_2d_rgba8unorm_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
+  Image *   image      = (Image *)(void *)(size_t)handle;
+  uint32_t  mip_width  = spv_clamp_u32(image->width >> mip_level, 1, image->width);
+  uint32_t  mip_height = spv_clamp_u32(image->height >> mip_level, 1, image->height);
+  uint32_t *mip_data   = (uint32_t *)(image->data + image->mip_offsets[mip_level]);
+  uint32_t  pitch      = spv_clamp_u32(image->pitch >> mip_level, 1, image->pitch);
+  uint32_t *row = (uint32_t *)(image->data + image->mip_offsets[mip_level] + pitch * coord.y);
+  return rgba8unorm_to_rgba32f(row[coord.x]);
+}
+FNATTR float4 spv_image_read_2d_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
+  Image *image = (Image *)(void *)(size_t)handle;
+  switch (image->format) {
+  case Image::Format::R8G8B8A8_UNORM: {
+    return spv_image_read_2d_rgba8unorm_lod(handle, coord, mip_level);
+  }
+  case Image::Format::R32G32B32A32_FLOAT: {
+    return spv_image_read_2d_rgba32f_lod(handle, coord, mip_level);
+  }
+  default:
+    // TODO: proper traping
+    __builtin_unreachable();
+  }
+}
+
+FNATTR float spv_fract(float x) {
+  // TODO: more robust version
+  return x - (int)x;
+}
+
+FNATTR float spv_lerp(float a, float b, float t) {
+  // TODO: a better version?
+  return a * (1.0f - t) + b * t;
+}
+
+FNATTR float4 spv_lerp_f4(float4 a, float4 b, float t) {
+  // TODO: a better version?
+  return a * (1.0f - t) + b * t;
+}
+
+FNATTR float spv_wraparound(float a) {
+  return a - floor(a);
+}
+
+FNATTR float4 spv_image_sample_2d_lod(uint64_t handle, float coordx, float coordy, uint32_t mip_level) {
+  Image *image = (Image *)(void *)(size_t)handle;
+  float u = image->width * spv_wraparound(spv_fract(coordx));
+  float v = image->height * spv_wraparound(spv_fract(coordy));
+  uint32_t x0 = (uint32_t)(u);
+  uint32_t y0 = (uint32_t)(v);
+  uint32_t x1 = (uint32_t)(u + 1.0f);
+  uint32_t y1 = (uint32_t)(v + 1.0f);
+  float4 s00 = spv_image_read_2d_lod(handle, (uint2){x0, y0}, mip_level);
+  float4 s01 = spv_image_read_2d_lod(handle, (uint2){x1, y0}, mip_level);
+  float4 s10 = spv_image_read_2d_lod(handle, (uint2){x0, y1}, mip_level);
+  float4 s11 = spv_image_read_2d_lod(handle, (uint2){x1, y1}, mip_level);
+  float l0 = spv_fract(u);
+  float l1 = spv_fract(v);
+  return spv_lerp_f4(spv_lerp_f4(s00, s01, l0), spv_lerp_f4(s10, s11, l0), l1);
+}
+FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle, uint64_t sampler_handle,
+                                         float coordx, float coordy, float dudx, float dudy,
+                                         float dvdx, float dvdy) {
+//      return (float4){coordx, coordy, 0.0f, 1.0f};
+  Image *  image   = (Image *)(void *)(size_t)image_handle;
+  Sampler *sampler = (Sampler *)(void *)(size_t)sampler_handle;
+//  return spv_image_sample_2d_lod(
+//      image_handle,
+//      coordx, coordy,
+//      0);
+  float u = image->width * spv_wraparound(spv_fract(coordx));
+  float v = image->height * spv_wraparound(spv_fract(coordy));
+  uint32_t x = (uint32_t)(u );
+  uint32_t y = (uint32_t)(v);
+  return spv_image_read_2d_lod(image_handle, (uint2){x, y}, 0);
+  //_______________
+  //|    |    |   |
+  //|  i | j  | k |
+  //|____|____|___|
+  //| du | du | 0 |
+  //| dx | dy |   |
+  //|____|____|___|
+  //| dv | dv | 0 |
+  //| dx | dy |   |
+  //|____|____|___|
+  float area             = spv_clamp_f32(fabsf(dudx * dvdy - dudy * dvdx), 0.0f, 1.0f);
+  float texels_per_unit  = (float)(image->width * image->height);
+  float texels_per_pixel = area * texels_per_unit;
+  // Magnification
+  if (texels_per_pixel <= 1.0f) {
+  }
+  // texels_per_row = sqrt(texels_per_pixel)
+  // mip_level = log2(sqrt(texels_per_pixel)) == 1/2 * log2(texels_per_pixel)
+  float pow2 = log2f(texels_per_pixel) * 0.5;
+  // log2(x)          = 0, 1, 2, 3, ...  N
+  // x                = 1, 2, 4, 8, ... (1 << N)
+  // pow2 has to be > 0.0 here
+  //  float max_size = fmaxf((float)image->width, (float)image->height);
+  float mip_level = spv_clamp_f32((float)image->mip_levels - pow2, 0.0f, (float)image->mip_levels);
+  if (sampler->mipmap_mode == Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR) {
+    uint32_t mip_level_0 = (uint32_t)floorf(mip_level);
+    uint32_t mip_level_1 = (uint32_t)floorf(mip_level + 1.0f);
+    if (sampler->filter == Sampler::Filter::NEAREST) {
+    }
+  } else {
+    // unreachable
+    return (float4){777.0f, 777.0f, 777.0f, 777.0f};
+  }
+}
 FNATTR void dump_float4x4(Invocation_Info *state, float *m) {
   ((printf_t)state->print_fn)("[%f %f %f %f]\n", m[0], m[1], m[2], m[3]);
   ((printf_t)state->print_fn)("[%f %f %f %f]\n", m[4], m[5], m[6], m[7]);
@@ -429,5 +469,6 @@ FNATTR void dump_float(Invocation_Info *state, float m) {
 FNATTR void dump_string(Invocation_Info *state, char const *str) {
   ((printf_t)state->print_fn)("%s\n", str);
 }
+
 }
 #endif
