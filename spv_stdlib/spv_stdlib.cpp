@@ -8,24 +8,15 @@
 
 extern "C" {
 
-typedef float float4 __attribute__((ext_vector_type(4)))
-__attribute__((aligned(16)));
-typedef float float3 __attribute__((ext_vector_type(3)))
-__attribute__((aligned(4)));
-typedef float float2 __attribute__((ext_vector_type(2)))
-__attribute__((aligned(4)));
-typedef int32_t int4 __attribute__((ext_vector_type(4)))
-__attribute__((aligned(16)));
-typedef int32_t int3 __attribute__((ext_vector_type(3)))
-__attribute__((aligned(4)));
-typedef int32_t int2 __attribute__((ext_vector_type(2)))
-__attribute__((aligned(4)));
-typedef uint32_t uint4 __attribute__((ext_vector_type(4)))
-__attribute__((aligned(16)));
-typedef uint32_t uint3 __attribute__((ext_vector_type(3)))
-__attribute__((aligned(4)));
-typedef uint32_t uint2 __attribute__((ext_vector_type(2)))
-__attribute__((aligned(4)));
+typedef float    float4 __attribute__((ext_vector_type(4))) __attribute__((aligned(16)));
+typedef float    float3 __attribute__((ext_vector_type(3))) __attribute__((aligned(4)));
+typedef float    float2 __attribute__((ext_vector_type(2))) __attribute__((aligned(4)));
+typedef int32_t  int4 __attribute__((ext_vector_type(4))) __attribute__((aligned(16)));
+typedef int32_t  int3 __attribute__((ext_vector_type(3))) __attribute__((aligned(4)));
+typedef int32_t  int2 __attribute__((ext_vector_type(2))) __attribute__((aligned(4)));
+typedef uint32_t uint4 __attribute__((ext_vector_type(4))) __attribute__((aligned(16)));
+typedef uint32_t uint3 __attribute__((ext_vector_type(3))) __attribute__((aligned(4)));
+typedef uint32_t uint2 __attribute__((ext_vector_type(2))) __attribute__((aligned(4)));
 
 struct Invocation_Info {
   uint3 work_group_size;
@@ -42,13 +33,13 @@ struct Invocation_Info {
   void *input;
   void *builtin_output;
   // for gl_FragCoord stuff
-  void *pixel_positions;
-  void *output;
+  void *   pixel_positions;
+  void *   output;
   uint8_t *push_constants;
-  void *print_fn;
-  void *trap_fn;
-  float *barycentrics;
-  void **descriptor_sets[0x10];
+  void *   print_fn;
+  void *   trap_fn;
+  float *  barycentrics;
+  void **  descriptor_sets[0x10];
 };
 
 typedef int (*printf_t)(const char *__restrict __format, ...);
@@ -63,13 +54,19 @@ struct Sampler {
   };
   enum class Filter { NEAREST = 0 };
   Address_Mode address_mode;
-  Mipmap_Mode mipmap_mode;
-  Filter filter;
+  Mipmap_Mode  mipmap_mode;
+  Filter       filter;
 };
 
 struct Image {
   uint8_t *data;
   uint32_t bpp, pitch, width, height, depth, mip_levels, array_layers;
+  enum class Format {
+    UNKNOWN = 0,
+    R8G8B8A8_UNORM,
+    R32G32B32A32_FLOAT,
+  };
+  Format format;
   // textures are up to (1 << 16) in size
   // max bpp is 16 for rgbaf32
   // max size is (1 << 16)*(1 << 16)*(1 << 4) == (1 << 36) for 2d image
@@ -88,10 +85,8 @@ struct Combined_Image {
 #define FNATTR
 #endif
 FNATTR uint32_t morton(uint32_t x, uint32_t y) {
-  uint32_t x_dep =
-      _pdep_u32(x, 0b01'01'01'01'01'01'01'01'01'01'01'01'01'01'01'01);
-  uint32_t y_dep =
-      _pdep_u32(y, 0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10);
+  uint32_t x_dep = _pdep_u32(x, 0b01'01'01'01'01'01'01'01'01'01'01'01'01'01'01'01);
+  uint32_t y_dep = _pdep_u32(y, 0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10);
   return x_dep | y_dep;
 }
 
@@ -100,16 +95,15 @@ FNATTR void unmorton(uint32_t address, uint32_t *x, uint32_t *y) {
   *y = _pext_u32(address, 0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10);
 }
 
-FNATTR float4 get_pixel_position(Invocation_Info *state, uint32_t lane_id,
-                                 float b0, float b1, float b2) {
+FNATTR float4 get_pixel_position(Invocation_Info *state, uint32_t lane_id, float b0, float b1,
+                                 float b2) {
   float4 v0 = ((float4 *)state->pixel_positions)[lane_id * 3 + 0];
   float4 v1 = ((float4 *)state->pixel_positions)[lane_id * 3 + 1];
   float4 v2 = ((float4 *)state->pixel_positions)[lane_id * 3 + 2];
   return v0 * b0 + v1 * b1 + v2 * b2;
 }
 
-FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id,
-                              float d) {
+FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id, float d) {
   ((float *)state->builtin_output)[lane_id] = d;
 }
 // For pixel shaders we follow morton curve order
@@ -133,8 +127,7 @@ FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id,
 //   42 43 46 47 58 59 62 63
 // _________________________
 // So that any consecutive 4 aligned 4 lane gang makes up a derivative group
-FNATTR void get_derivatives(Invocation_Info *state, float *in_values,
-                            float2 *out_derivs) {
+FNATTR void get_derivatives(Invocation_Info *state, float *in_values, float2 *out_derivs) {
   uint32_t num_of_quads = state->wave_width / 4;
   if (state->wave_width == 4) {         // 2x2
   } else if (state->wave_width == 8) {  // 2x4
@@ -143,12 +136,12 @@ FNATTR void get_derivatives(Invocation_Info *state, float *in_values,
     ((trap_t)state->trap_fn)();
   }
   for (uint32_t quad_id = 0; quad_id < num_of_quads; quad_id++) {
-    float v_00 = in_values[quad_id * 4 + 0];
-    float v_01 = in_values[quad_id * 4 + 1];
-    float v_10 = in_values[quad_id * 4 + 2];
-    float v_11 = in_values[quad_id * 4 + 3];
-    float dfdx = (v_01 - v_00);
-    float dfdy = (v_10 - v_00);
+    float  v_00  = in_values[quad_id * 4 + 0];
+    float  v_01  = in_values[quad_id * 4 + 1];
+    float  v_10  = in_values[quad_id * 4 + 2];
+    float  v_11  = in_values[quad_id * 4 + 3];
+    float  dfdx  = (v_01 - v_00);
+    float  dfdy  = (v_10 - v_00);
     float2 deriv = (float2){dfdx, dfdy};
     // Broadcast the derivative to all lanes within this quad
     out_derivs[quad_id * 4 + 0] = deriv;
@@ -157,6 +150,25 @@ FNATTR void get_derivatives(Invocation_Info *state, float *in_values,
     out_derivs[quad_id * 4 + 3] = deriv;
   }
 }
+
+FNATTR float clamp(float x, float min, float max) { return x > max ? max : x < min ? min : x; }
+
+FNATTR uint32_t rgba32f_to_rgba8unorm(float4 in) {
+  uint8_t r = (uint8_t)clamp(255.0f * in.x, 0.0f, 255.0f);
+  uint8_t g = (uint8_t)clamp(255.0f * in.y, 0.0f, 255.0f);
+  uint8_t b = (uint8_t)clamp(255.0f * in.z, 0.0f, 255.0f);
+  uint8_t a = (uint8_t)clamp(255.0f * in.w, 0.0f, 255.0f);
+  return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
+}
+
+FNATTR float4 rgba8unorm_to_rgba32f(uint32_t in) {
+  float4 out;
+  out.x = ((in >> 0) & 0xff) / 255.0f;
+  out.y = ((in >> 8) & 0xff) / 255.0f;
+  out.z = ((in >> 16) & 0xff) / 255.0f;
+  out.w = ((in >> 24) & 0xff) / 255.0f;
+  return out;
+}
 FNATTR float spv_clamp_f32(float x, float min, float max) {
   return x > max ? max : x < min ? min : x;
 }
@@ -164,34 +176,56 @@ FNATTR float spv_clamp_u32(uint32_t x, uint32_t min, uint32_t max) {
   return x > max ? max : x < min ? min : x;
 }
 FNATTR uint64_t get_combined_image(uint64_t combined_handle) {
-  return 0;
   Combined_Image *image = (Combined_Image *)(void *)(size_t)combined_handle;
   return image->image_handle;
 }
 FNATTR uint64_t get_combined_sampler(uint64_t combined_handle) {
-  return 0;
   Combined_Image *image = (Combined_Image *)(void *)(size_t)combined_handle;
   return image->sampler_handle;
 }
-FNATTR float4 spv_image_read_2d_float4_lod(uint64_t handle, uint2 coord,
-                                           uint32_t mip_level) {
-  Image *image = (Image *)(void *)(size_t)handle;
-  uint32_t mip_width =
-      spv_clamp_u32(image->width >> mip_level, 1, image->width);
-  uint32_t mip_height =
-      spv_clamp_u32(image->height >> mip_level, 1, image->height);
-  float4 *mip_data = (float4 *)(image->data + image->mip_offsets[mip_level]);
-  uint32_t pitch = (image->pitch >> mip_level) / sizeof(float4);
-  return mip_data[coord.x + coord.y * pitch];
+FNATTR float4 spv_image_read_2d_rgba32f_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
+  Image *  image      = (Image *)(void *)(size_t)handle;
+  uint32_t mip_width  = spv_clamp_u32(image->width >> mip_level, 1, image->width);
+  uint32_t mip_height = spv_clamp_u32(image->height >> mip_level, 1, image->height);
+  float4 * mip_data   = (float4 *)(image->data + image->mip_offsets[mip_level]);
+  uint32_t pitch      = spv_clamp_u32(image->pitch >> mip_level, 1, image->pitch);
+  float4 * row        = (float4 *)(image->data + image->mip_offsets[mip_level] + pitch * coord.y);
+  return row[coord.x];
 }
-FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle,
-                                         uint64_t sampler_handle, float coordx,
-                                         float coordy, float dudx, float dudy,
+FNATTR float4 spv_image_read_2d_rgba8unorm_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
+  Image *   image      = (Image *)(void *)(size_t)handle;
+  uint32_t  mip_width  = spv_clamp_u32(image->width >> mip_level, 1, image->width);
+  uint32_t  mip_height = spv_clamp_u32(image->height >> mip_level, 1, image->height);
+  uint32_t *mip_data   = (uint32_t *)(image->data + image->mip_offsets[mip_level]);
+  uint32_t  pitch      = spv_clamp_u32(image->pitch >> mip_level, 1, image->pitch);
+  uint32_t *row = (uint32_t *)(image->data + image->mip_offsets[mip_level] + pitch * coord.y);
+  return rgba8unorm_to_rgba32f(row[coord.x]);
+}
+FNATTR float4 spv_image_read_2d_lod(uint64_t handle, uint2 coord, uint32_t mip_level) {
+  Image *image = (Image *)(void *)(size_t)handle;
+  switch (image->format) {
+  case Image::Format::R8G8B8A8_UNORM: {
+    return spv_image_read_2d_rgba8unorm_lod(handle, coord, mip_level);
+  }
+  case Image::Format::R32G32B32A32_FLOAT: {
+    return spv_image_read_2d_rgba32f_lod(handle, coord, mip_level);
+  }
+  default:
+    // TODO: proper traping
+    __builtin_unreachable();
+  }
+}
+FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle, uint64_t sampler_handle,
+                                         float coordx, float coordy, float dudx, float dudy,
                                          float dvdx, float dvdy) {
-  return (float4){0.0f, 0.5f, 0.0f, 1.0f};
-  Image *image = (Image *)(void *)(size_t)image_handle;
+  //    return (float4){coordx, coordy, 0.0f, 1.0f};
+  Image *  image   = (Image *)(void *)(size_t)image_handle;
   Sampler *sampler = (Sampler *)(void *)(size_t)sampler_handle;
-  return spv_image_read_2d_float4_lod(image_handle, (uint2){0, 0}, 0);
+  return spv_image_read_2d_lod(
+      image_handle,
+      (uint2){(uint32_t)(0.5f + image->width * spv_clamp_f32(coordx, 0.0f, 1.0f)),
+              (uint32_t)(0.5f + image->height * spv_clamp_f32(coordy, 0.0f, 1.0f))},
+      0);
   //_______________
   //|    |    |   |
   //|  i | j  | k |
@@ -202,8 +236,8 @@ FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle,
   //| dv | dv | 0 |
   //| dx | dy |   |
   //|____|____|___|
-  float area = spv_clamp_f32(fabsf(dudx * dvdy - dudy * dvdx), 0.0f, 1.0f);
-  float texels_per_unit = (float)(image->width * image->height);
+  float area             = spv_clamp_f32(fabsf(dudx * dvdy - dudy * dvdx), 0.0f, 1.0f);
+  float texels_per_unit  = (float)(image->width * image->height);
   float texels_per_pixel = area * texels_per_unit;
   // Magnification
   if (texels_per_pixel <= 1.0f) {
@@ -215,8 +249,7 @@ FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle,
   // x                = 1, 2, 4, 8, ... (1 << N)
   // pow2 has to be > 0.0 here
   //  float max_size = fmaxf((float)image->width, (float)image->height);
-  float mip_level = spv_clamp_f32((float)image->mip_levels - pow2, 0.0f,
-                                  (float)image->mip_levels);
+  float mip_level = spv_clamp_f32((float)image->mip_levels - pow2, 0.0f, (float)image->mip_levels);
   if (sampler->mipmap_mode == Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR) {
     uint32_t mip_level_0 = (uint32_t)floorf(mip_level);
     uint32_t mip_level_1 = (uint32_t)floorf(mip_level + 1.0f);
@@ -228,24 +261,19 @@ FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle,
   }
 }
 FNATTR float3 get_barycentrics(Invocation_Info *state, uint32_t lane_id) {
-  return (float3){state->barycentrics[lane_id * 3],
-                  state->barycentrics[lane_id * 3 + 1],
+  return (float3){state->barycentrics[lane_id * 3], state->barycentrics[lane_id * 3 + 1],
                   state->barycentrics[lane_id * 3 + 2]};
 }
 FNATTR void *get_input_ptr(Invocation_Info *state) { return state->input; }
-FNATTR void *get_private_ptr(Invocation_Info *state) {
-  return state->private_data;
-}
+FNATTR void *get_private_ptr(Invocation_Info *state) { return state->private_data; }
 FNATTR void *get_push_constant_ptr(Invocation_Info *state) {
   return (void *)&state->push_constants[0];
 }
-FNATTR void *get_output_ptr(Invocation_Info *state) { return state->output; }
-FNATTR void *get_builtin_output_ptr(Invocation_Info *state) {
-  return state->builtin_output;
-}
+FNATTR void * get_output_ptr(Invocation_Info *state) { return state->output; }
+FNATTR void * get_builtin_output_ptr(Invocation_Info *state) { return state->builtin_output; }
 FNATTR float4 dummy_sample() { return (float4){0.0f, 0.0f, 0.0f, 0.0f}; }
 using mask_t = uint64_t;
-FNATTR void kill(Invocation_Info *state, mask_t mask) {}
+FNATTR void    kill(Invocation_Info *state, mask_t mask) {}
 FNATTR int32_t spv_atomic_add_i32(int32_t *ptr, int32_t val) {
   return __atomic_fetch_add(ptr, val, __ATOMIC_SEQ_CST);
 }
@@ -256,8 +284,7 @@ FNATTR int32_t spv_atomic_or_i32(int32_t *ptr, int32_t val) {
   return __atomic_fetch_or(ptr, val, __ATOMIC_SEQ_CST);
 }
 
-FNATTR uint3 spv_get_global_invocation_id(Invocation_Info *state,
-                                          uint32_t lane_id) {
+FNATTR uint3 spv_get_global_invocation_id(Invocation_Info *state, uint32_t lane_id) {
 
   uint3 subgroup_offset = (uint3){
       state->invocation_id.x * state->subgroup_size.x,
@@ -274,12 +301,9 @@ FNATTR uint3 spv_get_global_invocation_id(Invocation_Info *state,
   return subgroup_offset + lane_offset;
 }
 
-FNATTR uint3 spv_get_work_group_size(Invocation_Info *state) {
-  return state->work_group_size;
-}
+FNATTR uint3 spv_get_work_group_size(Invocation_Info *state) { return state->work_group_size; }
 
-FNATTR void *get_uniform_const_ptr(Invocation_Info *state, uint32_t set,
-                                   uint32_t binding) {
+FNATTR void *get_uniform_const_ptr(Invocation_Info *state, uint32_t set, uint32_t binding) {
   return state->descriptor_sets[set][binding];
 }
 
@@ -297,9 +321,8 @@ FNATTR uint32_t spv_image_read_1d_i32(uint64_t handle, uint32_t coord) {
   return *(uint32_t *)&ptr->data[coord * ptr->bpp];
 }
 
-FNATTR void spv_image_write_1d_i32(uint64_t handle, uint32_t coord,
-                                   uint32_t val) {
-  Image *ptr = (Image *)(void *)(size_t)handle;
+FNATTR void spv_image_write_1d_i32(uint64_t handle, uint32_t coord, uint32_t val) {
+  Image *ptr                                  = (Image *)(void *)(size_t)handle;
   *(uint32_t *)(&ptr->data[coord * ptr->bpp]) = val;
 }
 
@@ -319,9 +342,7 @@ FNATTR float spv_dot_f4(float4 a, float4 b) {
   return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
 }
 
-FNATTR float spv_dot_f3(float3 a, float3 b) {
-  return a.x * b.x + a.y * b.y + a.z * b.z;
-}
+FNATTR float spv_dot_f3(float3 a, float3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 
 FNATTR float spv_dot_f2(float2 a, float2 b) { return a.x * b.x + a.y * b.y; }
 
@@ -335,10 +356,8 @@ FNATTR float4 spv_fabs_f4(float4 a) {
 FNATTR float3 spv_fabs_f3(float3 a) {
   return (float3){std::abs(a.x), std::abs(a.y), std::abs(a.z)};
 }
-FNATTR float2 spv_fabs_f2(float2 a) {
-  return (float2){std::abs(a.x), std::abs(a.y)};
-}
-FNATTR float spv_fabs_f1(float a) { return std::abs(a); }
+FNATTR float2 spv_fabs_f2(float2 a) { return (float2){std::abs(a.x), std::abs(a.y)}; }
+FNATTR float  spv_fabs_f1(float a) { return std::abs(a); }
 
 FNATTR float2 normalize_f2(float2 in) {
   float len = spv_length_f2(in);
@@ -354,15 +373,12 @@ FNATTR float4 normalize_f4(float4 in) {
 }
 
 FNATTR float3 spv_cross(float3 a, float3 b) {
-  return (float3){a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
-                  a.x * b.y - a.y * b.x};
+  return (float3){a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 
 FNATTR float spv_pow(float a, float b) { return std::pow(a, b); }
 
-FNATTR float3 spv_reflect(float3 I, float3 N) {
-  return I - 2.0f * spv_dot_f3(I, N) * N;
-}
+FNATTR float3 spv_reflect(float3 I, float3 N) { return I - 2.0f * spv_dot_f3(I, N) * N; }
 
 FNATTR float4 spv_matrix_times_float_4x4(float4 *matrix, float4 vector) {
   float4 out;
@@ -383,12 +399,11 @@ FNATTR void deinterleave(float4 const *in, float *out, uint32_t subgroup_size) {
 }
 
 FNATTR uint64_t spv_lsb_i64(uint64_t num) {
-  static uint32_t arr[64] = {0,  1,  2,  7,  3,  13, 8,  19, 4,  25, 14, 28, 9,
-                             34, 20, 40, 5,  17, 26, 38, 15, 46, 29, 48, 10, 31,
-                             35, 54, 21, 50, 41, 57, 63, 6,  12, 18, 24, 27, 33,
-                             39, 16, 37, 45, 47, 30, 53, 49, 56, 62, 11, 23, 32,
-                             36, 44, 52, 55, 61, 22, 43, 51, 60, 42, 59, 58};
-  const uint64_t debruijn = 0x0218A392CD3D5DBFULL;
+  static uint32_t arr[64]  = {0,  1,  2,  7,  3,  13, 8,  19, 4,  25, 14, 28, 9,  34, 20, 40,
+                             5,  17, 26, 38, 15, 46, 29, 48, 10, 31, 35, 54, 21, 50, 41, 57,
+                             63, 6,  12, 18, 24, 27, 33, 39, 16, 37, 45, 47, 30, 53, 49, 56,
+                             62, 11, 23, 32, 36, 44, 52, 55, 61, 22, 43, 51, 60, 42, 59, 58};
+  const uint64_t  debruijn = 0x0218A392CD3D5DBFULL;
   return arr[((num & (~num + 1)) * debruijn) >> 58];
 }
 

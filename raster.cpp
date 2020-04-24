@@ -13,7 +13,7 @@ void printf_flush(char const *fmt, ...) {
 #include "spv_stdlib/spv_stdlib.cpp"
 enum class Impl_Mode_t { NONE = 0, REF, OPT };
 Impl_Mode_t                impl_mode = Impl_Mode_t::REF;
-static Temporary_Storage<> ts = Temporary_Storage<>::create(256 * (1 << 20));
+static Temporary_Storage<> ts        = Temporary_Storage<>::create(256 * (1 << 20));
 
 #ifdef RASTER_EXE
 #include "utils.hpp"
@@ -24,22 +24,16 @@ Shader_Symbols *get_shader_symbols(void *ptr) { return NULL; }
 #include <chrono>
 #include <condition_variable>
 #include <thread>
-void MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity,
-                     GLsizei length, const GLchar *message,
-                     const void *userParam) {
-  fprintf(stderr,
-          "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
-          (type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""), type, severity,
-          message);
+void MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
+                     const GLchar *message, const void *userParam) {
+  fprintf(stderr, "GL CALLBACK: %s type = 0x%x, severity = 0x%x, message = %s\n",
+          (type == GL_DEBUG_TYPE_ERROR ? "** GL ERROR **" : ""), type, severity, message);
 }
 
 double my_clock() {
-  std::chrono::time_point<std::chrono::system_clock> now =
-      std::chrono::system_clock::now();
-  auto duration = now.time_since_epoch();
-  return 1.0e-3 *
-         (double)std::chrono::duration_cast<std::chrono::milliseconds>(duration)
-             .count();
+  std::chrono::time_point<std::chrono::system_clock> now      = std::chrono::system_clock::now();
+  auto                                               duration = now.time_since_epoch();
+  return 1.0e-3 * (double)std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
 SDL_Window *  window = NULL;
@@ -48,14 +42,14 @@ int           SCREEN_WIDTH, SCREEN_HEIGHT;
 
 #include "3rdparty/libpfc/include/libpfc.h"
 
-#define call_pfc(call)                                                         \
-  {                                                                            \
-    int err = call;                                                            \
-    if (err < 0) {                                                             \
-      const char *msg = pfcErrorString(err);                                   \
-      fprintf(stderr, "failed %s\n", msg);                                     \
-      abort();                                                                 \
-    }                                                                          \
+#define call_pfc(call)                                                                             \
+  {                                                                                                \
+    int err = call;                                                                                \
+    if (err < 0) {                                                                                 \
+      const char *msg = pfcErrorString(err);                                                       \
+      fprintf(stderr, "failed %s\n", msg);                                                         \
+      abort();                                                                                     \
+    }                                                                                              \
   }
 
 template <typename T> uint64_t measure_fn(T t, uint64_t N = 1) {
@@ -87,46 +81,6 @@ template <typename T> uint64_t measure_fn(T t, uint64_t N = 1) {
 
 #define PRINT_CLOCKS(fun) fprintf(stdout, "%lu\n", measure_fn([&] { fun; }));
 
-void write_image_2d_i32_ppm(const char *file_name, void *data, uint32_t pitch,
-                            uint32_t width, uint32_t height) {
-  FILE *file = fopen(file_name, "wb");
-  ASSERT_ALWAYS(file);
-  fprintf(file, "P6\n");
-  fprintf(file, "%d %d\n", width, height);
-  fprintf(file, "255\n");
-  ito(height) {
-    jto(width) {
-      uint32_t pixel =
-          *(uint32_t *)(void *)(((uint8_t *)data) + i * pitch + j * 4);
-      uint8_t r = ((pixel >> 0) & 0xff);
-      uint8_t g = ((pixel >> 8) & 0xff);
-      uint8_t b = ((pixel >> 16) & 0xff);
-      fputc(r, file);
-      fputc(g, file);
-      fputc(b, file);
-    }
-  }
-  fclose(file);
-}
-
-void write_image_2d_i8_ppm(const char *file_name, void *data, uint32_t pitch,
-                           uint32_t width, uint32_t height) {
-  FILE *file = fopen(file_name, "wb");
-  ASSERT_ALWAYS(file);
-  fprintf(file, "P6\n");
-  fprintf(file, "%d %d\n", width, height);
-  fprintf(file, "255\n");
-  ito(height) {
-    jto(width) {
-      uint8_t r = *(uint8_t *)(void *)(((uint8_t *)data) + i * pitch + j);
-      fputc(r, file);
-      fputc(r, file);
-      fputc(r, file);
-    }
-  }
-  fclose(file);
-}
-
 uint32_t morton_naive(uint32_t x, uint32_t y) {
   uint32_t offset = 0;
   kto(16) {
@@ -140,8 +94,7 @@ uint32_t morton_naive(uint32_t x, uint32_t y) {
   return offset;
 }
 
-void write_image_2d_i8_ppm_zcurve(const char *file_name, void *data,
-                                  uint32_t size_pow) {
+void write_image_2d_i8_ppm_zcurve(const char *file_name, void *data, uint32_t size_pow) {
   FILE *file = fopen(file_name, "wb");
   ASSERT_ALWAYS(file);
   fprintf(file, "P6\n");
@@ -163,10 +116,9 @@ void write_image_2d_i8_ppm_zcurve(const char *file_name, void *data,
   }
   fclose(file);
 }
-uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
-                    uint32_t tile_pow);
-void     write_image_2d_i8_ppm_tiled(const char *file_name, void *data,
-                                     uint32_t size_pow, uint32_t tile_pow) {
+uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow, uint32_t tile_pow);
+void     write_image_2d_i8_ppm_tiled(const char *file_name, void *data, uint32_t size_pow,
+                                     uint32_t tile_pow) {
   FILE *file = fopen(file_name, "wb");
   ASSERT_ALWAYS(file);
   fprintf(file, "P6\n");
@@ -237,27 +189,23 @@ struct Context2D {
       };
       // clang-format on
       memcpy(&this->proj[0], &proj[0], sizeof(proj));
-      float2 mwp = screen_to_world((float2){mouse_screen_x, mouse_screen_y});
-      mouse_world_x       = mwp.x;
-      mouse_world_y       = mwp.y;
-      world_min_x         = screen_to_world((float2){-1.0f, -1.0f}).x;
-      world_min_y         = screen_to_world((float2){-1.0f, -1.0f}).y;
-      world_max_x         = screen_to_world((float2){1.0f, 1.0f}).x;
-      world_max_y         = screen_to_world((float2){1.0f, 1.0f}).y;
-      glyphs_world_height = glyph_scale *
-                            (float)(simplefont_bitmap_glyphs_height) /
-                            viewport_height * pos.z;
-      glyphs_world_width = glyph_scale *
-                           (float)(simplefont_bitmap_glyphs_width) /
-                           viewport_width * pos.z;
+      float2 mwp    = screen_to_world((float2){mouse_screen_x, mouse_screen_y});
+      mouse_world_x = mwp.x;
+      mouse_world_y = mwp.y;
+      world_min_x   = screen_to_world((float2){-1.0f, -1.0f}).x;
+      world_min_y   = screen_to_world((float2){-1.0f, -1.0f}).y;
+      world_max_x   = screen_to_world((float2){1.0f, 1.0f}).x;
+      world_max_y   = screen_to_world((float2){1.0f, 1.0f}).y;
+      glyphs_world_height =
+          glyph_scale * (float)(simplefont_bitmap_glyphs_height) / viewport_height * pos.z;
+      glyphs_world_width =
+          glyph_scale * (float)(simplefont_bitmap_glyphs_width) / viewport_width * pos.z;
       pixel_screen_width  = 2.0f / viewport_width;
       pixel_screen_height = 2.0f / viewport_height;
-      glyphs_screen_width = 2.0f * glyph_scale *
-                            (float)(simplefont_bitmap_glyphs_width) /
-                            viewport_width;
-      glyphs_screen_height = 2.0f * glyph_scale *
-                             (float)(simplefont_bitmap_glyphs_height) /
-                             viewport_height;
+      glyphs_screen_width =
+          2.0f * glyph_scale * (float)(simplefont_bitmap_glyphs_width) / viewport_width;
+      glyphs_screen_height =
+          2.0f * glyph_scale * (float)(simplefont_bitmap_glyphs_height) / viewport_height;
     }
     float2 world_to_screen(float2 p) {
       float  x0  = spv_dot_f4(proj[0], (float4){p.x, p.y, 0.0f, 1.0f});
@@ -304,8 +252,8 @@ struct Context2D {
     }
     bool inbounds(float2 world_pos) {
       return //
-          world_pos.x > world_min_x && world_pos.x < world_max_x &&
-          world_pos.y > world_min_y && world_pos.y < world_max_y;
+          world_pos.x > world_min_x && world_pos.x < world_max_x && world_pos.y > world_min_y &&
+          world_pos.y < world_max_y;
     }
     bool intersects(float min_x, float min_y, float max_x, float max_y) {
       return //
@@ -376,17 +324,13 @@ struct Context2D {
   }
   void render_stuff();
   // Fields
-  Temporary_Storage<Line2D> line_storage =
-      Temporary_Storage<Line2D>::create(1 << 17);
-  Temporary_Storage<Rect2D> quad_storage =
-      Temporary_Storage<Rect2D>::create(1 << 17);
-  Temporary_Storage<_String2D> string_storage =
-      Temporary_Storage<_String2D>::create(1 << 18);
-  Temporary_Storage<char> char_storage =
-      Temporary_Storage<char>::create(1 * (1 << 20));
-  uint32_t viewport_width;
-  uint32_t viewport_height;
-  bool     force_update = false;
+  Temporary_Storage<Line2D>    line_storage   = Temporary_Storage<Line2D>::create(1 << 17);
+  Temporary_Storage<Rect2D>    quad_storage   = Temporary_Storage<Rect2D>::create(1 << 17);
+  Temporary_Storage<_String2D> string_storage = Temporary_Storage<_String2D>::create(1 << 18);
+  Temporary_Storage<char>      char_storage   = Temporary_Storage<char>::create(1 * (1 << 20));
+  uint32_t                     viewport_width;
+  uint32_t                     viewport_height;
+  bool                         force_update = false;
   struct Console {
     char     buffer[0x100][0x100];
     uint32_t column    = 0;
@@ -401,17 +345,13 @@ struct Context2D {
     void backspace() {
       unscroll();
       if (column > 0) {
-        ito(0x100 - column) {
-          buffer[0][column + i - 1] = buffer[0][column + i];
-        }
+        ito(0x100 - column) { buffer[0][column + i - 1] = buffer[0][column + i]; }
         column--;
       }
     }
     void newline() {
       unscroll();
-      ito(0x100 - 1) {
-        memcpy(&buffer[0x100 - 1 - i][0], &buffer[0x100 - 2 - i][0], 0x100);
-      }
+      ito(0x100 - 1) { memcpy(&buffer[0x100 - 1 - i][0], &buffer[0x100 - 2 - i][0], 0x100); }
       memset(&buffer[0][0], 0, 0x100);
       column = 0;
     }
@@ -442,9 +382,7 @@ struct Context2D {
     void put_char(char c) {
       unscroll();
       if (c >= 0x20 && c <= 0x7e && column < 0x100 - 1) {
-        ito(0x100 - column - 1) {
-          buffer[0][0x100 - i - 1] = buffer[0][0x100 - i - 2];
-        }
+        ito(0x100 - column - 1) { buffer[0][0x100 - i - 1] = buffer[0][0x100 - i - 2]; }
         buffer[0][column++] = c;
       }
     }
@@ -463,13 +401,13 @@ struct Context2D {
   } console;
   bool console_mode = false;
   void draw_console() {
-    float CONSOLE_TEXT_LAYER       = 102.0f / 256.0f;
-    float CONSOLE_CURSOR_LAYER     = 101.0f / 256.0f;
-    float CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
-    float GLYPH_HEIGHT = camera.glyph_scale * simplefont_bitmap_glyphs_height;
-    float GLYPH_WIDTH  = camera.glyph_scale * simplefont_bitmap_glyphs_width;
-    uint32_t console_lines  = 8;
-    float    console_bottom = (GLYPH_HEIGHT + 1) * console_lines;
+    float    CONSOLE_TEXT_LAYER       = 102.0f / 256.0f;
+    float    CONSOLE_CURSOR_LAYER     = 101.0f / 256.0f;
+    float    CONSOLE_BACKGROUND_LAYER = 100.0f / 256.0f;
+    float    GLYPH_HEIGHT             = camera.glyph_scale * simplefont_bitmap_glyphs_height;
+    float    GLYPH_WIDTH              = camera.glyph_scale * simplefont_bitmap_glyphs_width;
+    uint32_t console_lines            = 8;
+    float    console_bottom           = (GLYPH_HEIGHT + 1) * console_lines;
     ito(console_lines - 1) {
       draw_string({.c_str       = console.buffer[console_lines - 1 - i],
                    .x           = 0,
@@ -644,9 +582,8 @@ struct Dbg_Command {
       }
       if (str[0] == ' ' || str[0] < 0x20 || str[0] > 0x7e) {
         if (cur_tkn_start != str) {
-          tkns[num_tokens++] = {
-              .start = cur_tkn_start,
-              .len   = (size_t)((intptr_t)str - (intptr_t)cur_tkn_start)};
+          tkns[num_tokens++] = {.start = cur_tkn_start,
+                                .len   = (size_t)((intptr_t)str - (intptr_t)cur_tkn_start)};
         }
         if (str[0] == '\0') break;
         cur_tkn_start = str + 1;
@@ -656,25 +593,21 @@ struct Dbg_Command {
       str++;
     } while (1);
     if (num_tokens != 0) {
-#define CMD_NOARG(cmd_mnemonics, cmd_enum)                                     \
-  if (token_match(tkns[0].start, STRINGIFY(cmd_mnemonics), tkns[0].len) &&     \
-      num_tokens == 1) {                                                       \
-    type = Command_t::cmd_enum;                                                \
-    return true;                                                               \
+#define CMD_NOARG(cmd_mnemonics, cmd_enum)                                                         \
+  if (token_match(tkns[0].start, STRINGIFY(cmd_mnemonics), tkns[0].len) && num_tokens == 1) {      \
+    type = Command_t::cmd_enum;                                                                    \
+    return true;                                                                                   \
   }
       if (token_match(tkns[0].start, "goto", tkns[0].len)) {
         if (num_tokens != 3) return false;
-        if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0))
-          return false;
-        if (!parse_decimal_int(tkns[2].start, tkns[2].len, &iarg1))
-          return false;
+        if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0)) return false;
+        if (!parse_decimal_int(tkns[2].start, tkns[2].len, &iarg1)) return false;
         type = Command_t::GOTO;
         return true;
       }
       if (token_match(tkns[0].start, "selv", tkns[0].len)) {
         if (num_tokens != 2) return false;
-        if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0))
-          return false;
+        if (!parse_decimal_int(tkns[1].start, tkns[1].len, &iarg0)) return false;
         type = Command_t::SELECT_VERTEX;
         return true;
       }
@@ -783,10 +716,8 @@ struct Gridbg {
     if (log_all) {
       fprintf(save, "log_all\n");
     }
-    if (selection_type == Selection_t::CELL)
-      fprintf(save, "goto %i %i\n", cur_i, cur_j);
-    fprintf(save, "movc %f %f %f\n", c2d.camera.pos.x, c2d.camera.pos.y,
-            c2d.camera.pos.z);
+    if (selection_type == Selection_t::CELL) fprintf(save, "goto %i %i\n", cur_i, cur_j);
+    fprintf(save, "movc %f %f %f\n", c2d.camera.pos.x, c2d.camera.pos.y, c2d.camera.pos.z);
     if (impl_mode == Impl_Mode_t::REF) {
       fprintf(save, "setm ref\n");
     } else if (impl_mode == Impl_Mode_t::OPT) {
@@ -944,18 +875,14 @@ struct Gridbg {
 
     ito(H) {
       jto(W) {
-        if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1)))
-          continue;
-        Cell_t *cell = get_cell(i, j);
-        float3  rand_color =
-            parse_color(g_random_colors[cell->hits * 8 + cell->misses]);
-        float r = rand_color.r; // vki::clamp(cell->r, 0.0f, 1.0f);
-        float g = rand_color.g; // vki::clamp(cell->g, 0.0f, 1.0f);
-        float b = rand_color.b; // vki::clamp(cell->b, 0.0f, 1.0f);
-        if (c2d.camera.mouse_world_x > dx * j &&
-            c2d.camera.mouse_world_x < dx * (j + 1) &&
-            c2d.camera.mouse_world_y > dy * i &&
-            c2d.camera.mouse_world_y < dy * (i + 1)) {
+        if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1))) continue;
+        Cell_t *cell       = get_cell(i, j);
+        float3  rand_color = parse_color(g_random_colors[cell->hits * 8 + cell->misses]);
+        float   r          = rand_color.r; // vki::clamp(cell->r, 0.0f, 1.0f);
+        float   g          = rand_color.g; // vki::clamp(cell->g, 0.0f, 1.0f);
+        float   b          = rand_color.b; // vki::clamp(cell->b, 0.0f, 1.0f);
+        if (c2d.camera.mouse_world_x > dx * j && c2d.camera.mouse_world_x < dx * (j + 1) &&
+            c2d.camera.mouse_world_y > dy * i && c2d.camera.mouse_world_y < dy * (i + 1)) {
           if (select_clicked && selection_type == Selection_t::CELL) {
             cur_i          = i;
             cur_j          = j;
@@ -1028,14 +955,12 @@ struct Gridbg {
 
       ito(H) {
         jto(W) {
-          if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1),
-                                     dy * (i + 1)))
-            continue;
+          if (!c2d.camera.intersects(dx * j, dy * i, dx * (j + 1), dy * (i + 1))) continue;
           snprintf(tmp_buf, sizeof(tmp_buf), "(%i, %i)", j, i);
           c2d.draw_string({.c_str = tmp_buf,
                            .x     = dx * j,
-                           .y = dy * (i + 1) - c2d.camera.glyphs_world_height,
-                           .z = TEXT_LAYER,
+                           .y     = dy * (i + 1) - c2d.camera.glyphs_world_height,
+                           .z     = TEXT_LAYER,
                            .color = {.r = 0.0f, .g = 0.0f, .b = 0.0f}});
 
           //          alloc_str("y = %i", (int16_t)i, dx * j,
@@ -1044,8 +969,8 @@ struct Gridbg {
           kto(Cell_t::LOG_SIZE) {
             if (cell->log[k] != NULL) {
               alloc_str(cell->log[k], 0, dx * j,
-                        dy * i + k * (c2d.camera.glyphs_world_height +
-                                      c2d.camera.pixel_screen_height));
+                        dy * i +
+                            k * (c2d.camera.glyphs_world_height + c2d.camera.pixel_screen_height));
             }
           }
           //        alloc_str("e0 = %i", grid[i * width * 3 + j * 3 + 0], dx *
@@ -1281,12 +1206,12 @@ struct Raster_Cell {
 };
 Gridbg<256, 256, Raster_Cell> gridbg;
 #define debug_break __asm__("int3")
-#define GRIDBG_START(i, j)                                                     \
-  {                                                                            \
-    if (gridbg.hard_break_requested) {                                         \
-      debug_break;                                                             \
-    }                                                                          \
-    gridbg.on_start(i, j);                                                     \
+#define GRIDBG_START(i, j)                                                                         \
+  {                                                                                                \
+    if (gridbg.hard_break_requested) {                                                             \
+      debug_break;                                                                                 \
+    }                                                                                              \
+    gridbg.on_start(i, j);                                                                         \
   }
 #define GRIDBG_PAUSE() gridbg.on_pause()
 #define GRIDBG_BREAK(i, j) gridbg.on_break(i, j)
@@ -1309,8 +1234,7 @@ Gridbg<256, 256, Raster_Cell> gridbg;
 #define GRIDBG_MISS(i, j)
 #endif // RASTER_EXE
 
-uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
-                    uint32_t tile_pow) {
+uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow, uint32_t tile_pow) {
   uint32_t tile_mask = (1 << tile_pow) - 1;
   uint32_t tile_x    = (x >> tile_pow);
   uint32_t tile_y    = (y >> tile_pow);
@@ -1322,34 +1246,28 @@ uint32_t tile_coord(uint32_t x, uint32_t y, uint32_t size_pow,
       0;
 }
 
-void untile_coord(uint32_t offset, uint32_t *x, uint32_t *y, uint32_t size_pow,
-                  uint32_t tile_pow) {
+void untile_coord(uint32_t offset, uint32_t *x, uint32_t *y, uint32_t size_pow, uint32_t tile_pow) {
   uint32_t tile_mask = (1 << tile_pow) - 1;
   uint32_t size_mask = ((1 << size_pow) - 1) >> tile_pow;
   uint32_t local_x   = ((offset >> 0) & tile_mask);
   uint32_t local_y   = ((offset >> tile_pow) & tile_mask);
   uint32_t tile_x    = ((offset >> (tile_pow * 2)) & size_mask);
-  uint32_t tile_y =
-      ((offset >> (tile_pow * 2 + (size_pow - tile_pow))) & size_mask);
-  *x = (tile_x << tile_pow) | local_x;
-  *y = (tile_y << tile_pow) | local_y;
+  uint32_t tile_y    = ((offset >> (tile_pow * 2 + (size_pow - tile_pow))) & size_mask);
+  *x                 = (tile_x << tile_pow) | local_x;
+  *y                 = (tile_y << tile_pow) | local_y;
 }
 
-void clear_image_2d_i32(void *image, uint32_t pitch, uint32_t width,
-                        uint32_t height, uint32_t value) {
+void clear_image_2d_i32(void *image, uint32_t pitch, uint32_t width, uint32_t height,
+                        uint32_t value) {
   ito(height) {
-    jto(width) {
-      *(uint32_t *)(void *)(((uint8_t *)image) + i * pitch + j * 4) = value;
-    }
+    jto(width) { *(uint32_t *)(void *)(((uint8_t *)image) + i * pitch + j * 4) = value; }
   }
 }
 
-void clear_image_2d_i8(void *image, uint32_t pitch, uint32_t width,
-                       uint32_t height, uint8_t value) {
+void clear_image_2d_i8(void *image, uint32_t pitch, uint32_t width, uint32_t height,
+                       uint8_t value) {
   ito(height) {
-    jto(width) {
-      *(uint8_t *)(void *)(((uint8_t *)image) + i * pitch + j) = value;
-    }
+    jto(width) { *(uint8_t *)(void *)(((uint8_t *)image) + i * pitch + j) = value; }
   }
 }
 
@@ -1366,14 +1284,10 @@ uint32_t rgba32f_to_rgba8_unorm(float r, float g, float b, float a) {
 }
 
 uint32_t rgba32f_to_srgba8_unorm(float r, float g, float b, float a) {
-  uint8_t r8 =
-      (uint8_t)(vki::clamp(std::pow(r, 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
-  uint8_t g8 =
-      (uint8_t)(vki::clamp(std::pow(g, 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
-  uint8_t b8 =
-      (uint8_t)(vki::clamp(std::pow(b, 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
-  uint8_t a8 =
-      (uint8_t)(vki::clamp(std::pow(a, 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
+  uint8_t r8 = (uint8_t)(vki::clamp(std::pow(r, 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
+  uint8_t g8 = (uint8_t)(vki::clamp(std::pow(g, 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
+  uint8_t b8 = (uint8_t)(vki::clamp(std::pow(b, 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
+  uint8_t a8 = (uint8_t)(vki::clamp(std::pow(a, 1.0f / 2.2f), 0.0f, 1.0f) * 255.0f);
   return                     //
       ((uint32_t)r8 << 0) |  //
       ((uint32_t)g8 << 8) |  //
@@ -1381,31 +1295,25 @@ uint32_t rgba32f_to_srgba8_unorm(float r, float g, float b, float a) {
       ((uint32_t)a8 << 24);  //
 }
 
-extern "C" void clear_attachment(vki::VkImageView_Impl *attachment,
-                                 VkClearValue           val) {
+extern "C" void clear_attachment(vki::VkImageView_Impl *attachment, VkClearValue val) {
   switch (attachment->format) {
   case VkFormat::VK_FORMAT_D32_SFLOAT_S8_UINT: {
     float *   data_f32 = (float *)attachment->img->get_ptr();
     uint32_t *data_u32 = (uint32_t *)attachment->img->get_ptr();
     ito(attachment->img->extent.height) {
       jto(attachment->img->extent.width) {
-        data_f32[i * attachment->img->extent.width * 2 + j * 2] =
-            val.depthStencil.depth;
-        data_u32[i * attachment->img->extent.width * 2 + j * 2 + 1] =
-            val.depthStencil.stencil;
+        data_f32[i * attachment->img->extent.width * 2 + j * 2]     = val.depthStencil.depth;
+        data_u32[i * attachment->img->extent.width * 2 + j * 2 + 1] = val.depthStencil.stencil;
       }
     }
     break;
   }
   case VkFormat::VK_FORMAT_R8G8B8A8_SRGB: {
     uint32_t *data = (uint32_t *)attachment->img->get_ptr();
-    uint32_t  tval =
-        rgba32f_to_rgba8_unorm(val.color.float32[0], val.color.float32[1],
-                               val.color.float32[2], val.color.float32[3]);
+    uint32_t  tval = rgba32f_to_rgba8_unorm(val.color.float32[0], val.color.float32[1],
+                                           val.color.float32[2], val.color.float32[3]);
     ito(attachment->img->extent.height) {
-      jto(attachment->img->extent.width) {
-        data[i * attachment->img->extent.width + j] = tval;
-      }
+      jto(attachment->img->extent.width) { data[i * attachment->img->extent.width + j] = tval; }
     }
     break;
   }
@@ -1441,10 +1349,8 @@ void rasterize_triangles_tiled(
 }
 
 // Just do nested loops over each pixel on the screen
-void rasterize_triangle_naive_0(float x0, float y0, float x1, float y1,
-                                float x2, float y2, uint8_t *image,
-                                uint32_t width, uint32_t height,
-                                uint8_t value) {
+void rasterize_triangle_naive_0(float x0, float y0, float x1, float y1, float x2, float y2,
+                                uint8_t *image, uint32_t width, uint32_t height, uint8_t value) {
   float n0_x = -(y1 - y0);
   float n0_y = (x1 - x0);
   float n1_x = -(y2 - y1);
@@ -1490,29 +1396,24 @@ inline int32_t extract_sign_i32x8(i32x8 v) {
 // two bits for each lane with total of 32 bits per 16 lanes
 inline uint16_t extract_sign_i16x16(i16x16 v) {
   uint32_t mask_i8 = (uint32_t)_mm256_movemask_epi8(v);
-  mask_i8          = _pext_u32(
-      mask_i8, (uint32_t)0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10u);
+  mask_i8 = _pext_u32(mask_i8, (uint32_t)0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10u);
   return (uint16_t)mask_i8;
 }
 // maybe use _mm256_set1_epi32/16?
 inline i16x16 broadcast_i16x16(int16_t a) {
   uint32_t v = ((uint32_t)a & 0xffff) | (((uint32_t)a & 0xffff) << 16u);
-  return reinterpret_cast<__m256i>(
-      _mm256_broadcast_ss(reinterpret_cast<float const *>(&(v))));
+  return reinterpret_cast<__m256i>(_mm256_broadcast_ss(reinterpret_cast<float const *>(&(v))));
 }
 inline i8x16 broadcast_i8x16(uint8_t a) {
   uint32_t v = (((uint32_t)a & 0xff) << 0u) | (((uint32_t)a & 0xff) << 8u) |
                (((uint32_t)a & 0xff) << 16u) | (((uint32_t)a & 0xff) << 24u);
-  return reinterpret_cast<i8x16>(
-      _mm_broadcast_ss(reinterpret_cast<float const *>(&(v))));
+  return reinterpret_cast<i8x16>(_mm_broadcast_ss(reinterpret_cast<float const *>(&(v))));
 }
 inline i32x8 broadcast_i32x8(int32_t v) {
-  return reinterpret_cast<__m256i>(
-      _mm256_broadcast_ss(reinterpret_cast<float const *>(&(v))));
+  return reinterpret_cast<__m256i>(_mm256_broadcast_ss(reinterpret_cast<float const *>(&(v))));
 }
 inline i64x4 broadcast_i64x4(int64_t v) {
-  return reinterpret_cast<__m256i>(
-      _mm256_broadcast_sd(reinterpret_cast<double const *>(&(v))));
+  return reinterpret_cast<__m256i>(_mm256_broadcast_sd(reinterpret_cast<double const *>(&(v))));
 }
 
 inline i8x16 unpack_mask_i1x16(uint16_t mask) {
@@ -1524,9 +1425,9 @@ inline i8x16 unpack_mask_i1x16(uint16_t mask) {
   return _mm_set_epi64(*(__m64 *)&high, *(__m64 *)&low);
 }
 __m256i get_mask3(const uint32_t mask) {
-  i32x8 vmask    = broadcast_i32x8((int32_t)mask);
-  i64x4 shuffle  = init_i64x4(0x0000000000000000, 0x0101010101010101,
-                             0x0202020202020202, 0x0303030303030303);
+  i32x8 vmask = broadcast_i32x8((int32_t)mask);
+  i64x4 shuffle =
+      init_i64x4(0x0000000000000000, 0x0101010101010101, 0x0202020202020202, 0x0303030303030303);
   vmask          = shuffle_i8x32(vmask, shuffle);
   i64x4 bit_mask = broadcast_i64x4(0x7fbfdfeff7fbfdfe);
   vmask          = ymm_or(vmask, bit_mask);
@@ -1558,15 +1459,13 @@ inline __m256i full_shuffle_i8x32(__m256i value, __m256i shuffle) {
   // accessible for the shuffle instruction. 0x4E == 01'00'11'10 == [1, 0, 3,
   // 2] effectively swaps the low and hight 128 bit lanes. Finally we just or
   // those passes together to get combined local+far moves
-  __m256i K0 = init_i8x32(0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-                          0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0xF0, 0xF0,
-                          0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
-                          0xF0, 0xF0, 0xF0, 0xF0, 0xF0);
+  __m256i K0 = init_i8x32(0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+                          0x70, 0x70, 0x70, 0x70, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+                          0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0);
 
-  __m256i K1 = init_i8x32(0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
-                          0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0x70, 0x70,
-                          0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
-                          0x70, 0x70, 0x70, 0x70, 0x70);
+  __m256i K1 = init_i8x32(0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+                          0xF0, 0xF0, 0xF0, 0xF0, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70,
+                          0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70, 0x70);
   // move within 128 bit lanes
   __m256i local_mask    = add_i8x32(shuffle, K0);
   __m256i local_shuffle = shuffle_i8x32(value, local_mask);
@@ -1588,10 +1487,11 @@ struct Classified_Tile {
 
 // static_assert(sizeof(Classified_Tile) == 4, "incorrect padding");
 
-void rasterize_triangle_tiled_1x1_256x256_defer_ref(
-    float x0, float y0, float x1, float y1, float x2, float y2, float n0_x,
-    float n0_y, float n1_x, float n1_y, float n2_x, float n2_y,
-    Classified_Tile *tile_buffer, uint32_t *tile_count) {
+void rasterize_triangle_tiled_1x1_256x256_defer_ref(float x0, float y0, float x1, float y1,
+                                                    float x2, float y2, float n0_x, float n0_y,
+                                                    float n1_x, float n1_y, float n2_x, float n2_y,
+                                                    Classified_Tile *tile_buffer,
+                                                    uint32_t *       tile_count) {
   float min_x = MIN(x0, MIN(x1, x2));
   float max_x = MAX(x0, MAX(x1, x2));
   float min_y = MIN(y0, MIN(y1, y2));
@@ -2231,19 +2131,6 @@ void rasterize_triangle_tiled_1x1_256x256_defer_ref(
 //  }
 //}
 
-float clamp(float x, float min, float max) {
-  return x > max ? max : x < min ? min : x;
-}
-
-uint32_t rgba32f_to_rgba8(float4 in) {
-  uint8_t r = (uint8_t)clamp(255.0f * in.x, 0.0f, 255.0f);
-  uint8_t g = (uint8_t)clamp(255.0f * in.y, 0.0f, 255.0f);
-  uint8_t b = (uint8_t)clamp(255.0f * in.z, 0.0f, 255.0f);
-  uint8_t a = (uint8_t)clamp(255.0f * in.w, 0.0f, 255.0f);
-  return (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) |
-         ((uint32_t)a << 24);
-}
-
 struct Draw_Call {
   // Common state for each stage
   vki::cmd::GPU_State * state         = NULL;
@@ -2273,9 +2160,9 @@ struct Draw_Call {
     Attribute_Desc                  attribute_descs[0x10] = {};
     uint16_t *                      index_src_i16         = NULL;
     uint32_t *                      index_src_i32         = NULL;
-    VkIndexType                     index_type        = VK_INDEX_TYPE_NONE_KHR;
-    uint8_t *                       attributes        = NULL;
-    size_t                          sizeof_attributes = 0;
+    VkIndexType                     index_type            = VK_INDEX_TYPE_NONE_KHR;
+    uint8_t *                       attributes            = NULL;
+    size_t                          sizeof_attributes     = 0;
 
     size_t get_index(uint32_t i) {
       switch (index_type) {
@@ -2306,14 +2193,39 @@ struct Draw_Call {
     uint32_t rasterizer_triangles_count = 0;
   } assembly;
 
+  ///////////////
+  // Tile info //
+  ///////////////
+  struct Pixel_Invocation_Info {
+    uint32_t triangle_id;
+    // Barycentric coordinates
+    float    b_0, b_1, b_2;
+    uint32_t x, y;
+  };
+  struct {
+    Pixel_Invocation_Info *pinfos                = NULL;
+    Classified_Tile *      tiles                 = NULL;
+    uint32_t               num_pixel_invocations = 0;
+    uint8_t *              pixel_input           = NULL;
+    float4 *               pixel_output          = NULL;
+    float *                pixel_depth_output    = NULL;
+    float4 *               pixel_positions_input = NULL;
+    uint32_t               x                     = 0;
+    uint32_t               y                     = 0;
+    uint32_t               num_color_attachments = 0;
+    vki::VkImageView_Impl *rts[0x10]             = {};
+    vki::VkImageView_Impl *depth                 = NULL;
+  } cur_tile;
+  uint32_t x_num_tiles = 0;
+  uint32_t y_num_tiles = 0;
   ////////////////////////////////////////////
   // Hacky handle pools for descriptor sets //
   ////////////////////////////////////////////
-#define TMP_POOL(type, name)                                                   \
-  type     name[0x100];                                                        \
+#define TMP_POOL(type, name)                                                                       \
+  type     name[0x100];                                                                            \
   uint32_t num_##name = 0;
-#define ALLOC_TMP(name)                                                        \
-  &name[num_##name++];                                                         \
+#define ALLOC_TMP(name)                                                                            \
+  &name[num_##name++];                                                                             \
   ASSERT_ALWAYS(num_##name < 0x100);
 
   TMP_POOL(Combined_Image, combined_images)
@@ -2328,48 +2240,43 @@ struct Draw_Call {
     ASSERT_ALWAYS(pipeline->IA_bindings.vertexAttributeDescriptionCount < 0x10);
     // Buffers(bindings) info
     ito(pipeline->IA_bindings.vertexBindingDescriptionCount) {
-      VkVertexInputBindingDescription desc =
-          pipeline->IA_bindings.pVertexBindingDescriptions[i];
-      ia.vertex_bindings[desc.binding] = desc;
+      VkVertexInputBindingDescription desc = pipeline->IA_bindings.pVertexBindingDescriptions[i];
+      ia.vertex_bindings[desc.binding]     = desc;
     }
     // Attribute info
     ito(pipeline->IA_bindings.vertexAttributeDescriptionCount) {
       VkVertexInputAttributeDescription desc =
           pipeline->IA_bindings.pVertexAttributeDescriptions[i];
       Attribute_Desc                  attribute_desc;
-      VkVertexInputBindingDescription binding_desc =
-          ia.vertex_bindings[desc.binding];
-      attribute_desc.format = desc.format;
-      attribute_desc.src =
-          state->vertex_buffers[desc.binding]->get_ptr() + desc.offset;
+      VkVertexInputBindingDescription binding_desc = ia.vertex_bindings[desc.binding];
+      attribute_desc.format                        = desc.format;
+      attribute_desc.src        = state->vertex_buffers[desc.binding]->get_ptr() + desc.offset;
       attribute_desc.src_stride = binding_desc.stride;
       attribute_desc.per_vertex_rate =
-          binding_desc.inputRate ==
-          VkVertexInputRate::VK_VERTEX_INPUT_RATE_VERTEX;
+          binding_desc.inputRate == VkVertexInputRate::VK_VERTEX_INPUT_RATE_VERTEX;
       attribute_desc.size               = vki::get_format_bpp(desc.format);
       ia.attribute_descs[desc.location] = attribute_desc;
     }
-    uint32_t subgroup_size   = vs_symbols->subgroup_size;
-    uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
+    uint32_t subgroup_size           = vs_symbols->subgroup_size;
+    uint32_t num_invocations         = (indexCount + subgroup_size - 1) / subgroup_size;
     uint32_t total_data_units_needed = num_invocations * subgroup_size;
-    ia.sizeof_attributes = total_data_units_needed * vs_symbols->input_stride;
-    ia.attributes        = (uint8_t *)ts.alloc_align(ia.sizeof_attributes, 32);
-    ia.index_type        = state->index_type;
+    ia.sizeof_attributes             = total_data_units_needed * vs_symbols->input_stride;
+    ia.attributes                    = (uint8_t *)ts.alloc_align(ia.sizeof_attributes, 32);
+    ia.index_type                    = state->index_type;
     if (state->index_type == VK_INDEX_TYPE_UINT32) {
-      ia.index_src_i32 = (uint32_t *)(((size_t)state->index_buffer->get_ptr() +
-                                       state->index_buffer_offset) &
-                                      (~0b11ull));
+      ia.index_src_i32 =
+          (uint32_t *)(((size_t)state->index_buffer->get_ptr() + state->index_buffer_offset) &
+                       (~0b11ull));
     } else if (state->index_type == VK_INDEX_TYPE_UINT16) {
-      ia.index_src_i16 = (uint16_t *)(((size_t)state->index_buffer->get_ptr() +
-                                       state->index_buffer_offset) &
-                                      (~0b1ull));
+      ia.index_src_i16 =
+          (uint16_t *)(((size_t)state->index_buffer->get_ptr() + state->index_buffer_offset) &
+                       (~0b1ull));
     } else {
       UNIMPLEMENTED;
     }
     // Prepare VS input, perform format transformations
     kto(indexCount) {
-      uint32_t index =
-          (uint32_t)((int32_t)ia.get_index(k + firstIndex) + vertexOffset);
+      uint32_t index = (uint32_t)((int32_t)ia.get_index(k + firstIndex) + vertexOffset);
       ito(vs_symbols->input_item_count) {
         auto           item           = vs_symbols->input_slots[i];
         Attribute_Desc attribute_desc = ia.attribute_descs[item.location];
@@ -2378,57 +2285,103 @@ struct Draw_Call {
         if ((VkFormat)item.format == VkFormat::VK_FORMAT_R32G32B32A32_SFLOAT &&
             attribute_desc.format == VkFormat::VK_FORMAT_R32G32B32_SFLOAT) {
           float4 tmp = (float4){1.0f, 1.0f, 1.0f, 1.0f};
+          memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset, &tmp, 16);
           memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset,
-                 &tmp, 16);
-          memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset,
-                 attribute_desc.src + attribute_desc.src_stride * index,
-                 attribute_desc.size);
-        } else if ((VkFormat)item.format ==
-                       VkFormat::VK_FORMAT_R32G32B32A32_SFLOAT &&
-                   attribute_desc.format ==
-                       VkFormat::VK_FORMAT_R8G8B8A8_UNORM) {
+                 attribute_desc.src + attribute_desc.src_stride * index, attribute_desc.size);
+        } else if ((VkFormat)item.format == VkFormat::VK_FORMAT_R32G32B32A32_SFLOAT &&
+                   attribute_desc.format == VkFormat::VK_FORMAT_R8G8B8A8_UNORM) {
           float4   tmp = (float4){1.0f, 1.0f, 1.0f, 1.0f};
           uint32_t unorm;
-          memcpy(&unorm, attribute_desc.src + attribute_desc.src_stride * index,
-                 4);
+          memcpy(&unorm, attribute_desc.src + attribute_desc.src_stride * index, 4);
           tmp.x = ((float)((uint8_t)((unorm >> 0) & 0xff))) / 255.0f;
           tmp.y = ((float)((uint8_t)((unorm >> 8) & 0xff))) / 255.0f;
           tmp.z = ((float)((uint8_t)((unorm >> 16) & 0xff))) / 255.0f;
           tmp.w = ((float)((uint8_t)((unorm >> 24) & 0xff))) / 255.0f;
-          memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset,
-                 &tmp, 16);
+          memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset, &tmp, 16);
 
         } else { // Formats are equal just copy
           ASSERT_ALWAYS(item.format == attribute_desc.format);
           memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset,
-                 attribute_desc.src + attribute_desc.src_stride * index,
-                 attribute_desc.size);
+                 attribute_desc.src + attribute_desc.src_stride * index, attribute_desc.size);
         }
       }
     }
   }
   void VS_stage() {
     // Attributes are setup and ready for consumption
-    uint32_t subgroup_size   = vs_symbols->subgroup_size;
-    uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
+    uint32_t subgroup_size           = vs_symbols->subgroup_size;
+    uint32_t num_invocations         = (indexCount + subgroup_size - 1) / subgroup_size;
     uint32_t total_data_units_needed = num_invocations * subgroup_size;
-    vs.sizeof_vs_output = total_data_units_needed * vs_symbols->output_stride;
-    vs.vs_output        = (uint8_t *)ts.alloc_align(vs.sizeof_vs_output, 32);
-    vs.vs_vertex_positions = (float4 *)ts.alloc_align(total_data_units_needed * 16, 32);
+    vs.sizeof_vs_output              = total_data_units_needed * vs_symbols->output_stride;
+    vs.vs_output                     = (uint8_t *)ts.alloc_align(vs.sizeof_vs_output, 32);
+    vs.vs_vertex_positions           = (float4 *)ts.alloc_align(total_data_units_needed * 16, 32);
     ito(num_invocations) {
       info.work_group_size  = (uint3){subgroup_size, 1, 1};
       info.invocation_count = (uint3){num_invocations, 1, 1};
       info.subgroup_size    = (uint3){subgroup_size, 1, 1};
       info.wave_width       = vs_symbols->subgroup_size;
       info.invocation_id    = (uint3){i, 0, 0};
-      info.input = ia.attributes + i * subgroup_size * vs_symbols->input_stride;
-      info.output =
-          vs.vs_output + i * subgroup_size * vs_symbols->output_stride;
+      info.input            = ia.attributes + i * subgroup_size * vs_symbols->input_stride;
+      info.output           = vs.vs_output + i * subgroup_size * vs_symbols->output_stride;
       // Assume there's only gl_Position
       info.builtin_output = vs.vs_vertex_positions + i * subgroup_size;
       vs_symbols->spv_main(&info, (~0));
     }
   }
+  ATTR_USED
+  void dump_vs_outputs() {
+    ito(indexCount) {
+      fprintf(stdout, "v%i\n", i);
+      // Debug
+
+      jto(vs_symbols->input_item_count) {
+        Shader_Symbols::Varying_Slot input = vs_symbols->input_slots[j];
+        fprintf(stdout, "  in attrib: %i\n", j);
+        switch ((VkFormat)input.format) {
+        case VK_FORMAT_R32G32_SFLOAT: {
+          float2 attrib = *(float2 *)(ia.attributes + i * vs_symbols->input_stride + input.offset);
+          fprintf(stdout, "    <%f, %f>\n", attrib.x, attrib.y);
+          break;
+        }
+        case VK_FORMAT_R32G32B32_SFLOAT: {
+          float3 attrib = *(float3 *)(ia.attributes + i * vs_symbols->input_stride + input.offset);
+          fprintf(stdout, "    <%f, %f, %f>\n", attrib.x, attrib.y, attrib.z);
+          break;
+        }
+        case VK_FORMAT_R32G32B32A32_SFLOAT: {
+          float4 attrib = *(float4 *)(ia.attributes + i * vs_symbols->input_stride + input.offset);
+          fprintf(stdout, "    <%f, %f, %f, %f>\n", attrib.x, attrib.y, attrib.z, attrib.w);
+          break;
+        }
+        default: TRAP;
+        }
+      }
+
+      jto(vs_symbols->output_item_count) {
+        Shader_Symbols::Varying_Slot output = vs_symbols->output_slots[j];
+        fprintf(stdout, "  out attrib: %i\n", j);
+        switch ((VkFormat)output.format) {
+        case VK_FORMAT_R32G32_SFLOAT: {
+          float2 attrib = *(float2 *)(vs.vs_output + i * vs_symbols->output_stride + output.offset);
+          fprintf(stdout, "    <%f, %f>\n", attrib.x, attrib.y);
+          break;
+        }
+        case VK_FORMAT_R32G32B32_SFLOAT: {
+          float3 attrib = *(float3 *)(vs.vs_output + i * vs_symbols->output_stride + output.offset);
+          fprintf(stdout, "    <%f, %f, %f>\n", attrib.x, attrib.y, attrib.z);
+          break;
+        }
+        case VK_FORMAT_R32G32B32A32_SFLOAT: {
+          float4 attrib = *(float4 *)(vs.vs_output + i * vs_symbols->output_stride + output.offset);
+          fprintf(stdout, "    <%f, %f, %f, %f>\n", attrib.x, attrib.y, attrib.z, attrib.w);
+          break;
+        }
+        default: TRAP;
+        }
+      }
+    }
+  }
+
   // Primitive assembly:
   //  culling
   //  perspective division
@@ -2438,8 +2391,7 @@ struct Draw_Call {
     ASSERT_ALWAYS(indexCount % 3 == 0);
     // so the triangle could be split in up to 6 vertices per triangle after
     // culling
-    assembly.screenspace_positions =
-        (float4 *)ts.alloc_align(sizeof(float4) * indexCount * 6, 32);
+    assembly.screenspace_positions = (float4 *)ts.alloc_align(sizeof(float4) * indexCount * 6, 32);
     assembly.rasterizer_triangles_count = 0;
     // TODO: culling
     // for now just pass through the vertex output
@@ -2458,307 +2410,325 @@ struct Draw_Call {
       assembly.rasterizer_triangles_count++;
     }
   }
-  // Pixel shading and output merging
-  // two stages in one function because of tiling
-  void PS_OM_stage() {
-    ASSERT_ALWAYS(state->framebuffer->attachmentCount == 2);
-    vki::VkImageView_Impl *rt    = NULL;
-    vki::VkImageView_Impl *depth = NULL;
+
+  void PS_OM_tiled() {
+
     ASSERT_ALWAYS(state->render_pass->subpassCount == 1);
-    uint32_t num_color_attachments = 0;
-    ito(state->render_pass->pSubpasses[0].colorAttachmentCount) {
-      rt = state->framebuffer->pAttachments[state->render_pass->pSubpasses[0]
-                                                .pColorAttachments[i]
-                                                .attachment];
-      num_color_attachments++;
-    }
-    if (state->render_pass->pSubpasses[0].has_depth_stencil_attachment) {
-      depth = state->framebuffer
-                  ->pAttachments[state->render_pass->pSubpasses[0]
-                                     .pDepthStencilAttachment.attachment];
-    }
-    NOTNULL(depth);
-    NOTNULL(rt);
-    ASSERT_ALWAYS(rt->format == VkFormat::VK_FORMAT_R8G8B8A8_SRGB);
-    uint32_t x_num_tiles = (rt->img->extent.width + 255) / 256;
-    uint32_t y_num_tiles = (rt->img->extent.height + 255) / 256;
-    struct Pixel_Invocation_Info {
-      uint32_t triangle_id;
-      // Barycentric coordinates
-      float    b_0, b_1, b_2;
-      uint32_t x, y;
-    };
-    uint32_t               max_pixel_invocations = 256 * 256 * 4;
-    Pixel_Invocation_Info *pinfos =
-        (Pixel_Invocation_Info *)ts.alloc_page_aligned(
-            sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
-    Classified_Tile *tiles =
-        (Classified_Tile *)ts.alloc_align(sizeof(Classified_Tile) * (1 << 20), 32);
+
+    x_num_tiles = (state->framebuffer->width + 255) / 256;
+    y_num_tiles = (state->framebuffer->height + 255) / 256;
+
     yto(y_num_tiles) {
       xto(x_num_tiles) {
-        ts.enter_scope();
-        defer(ts.exit_scope());
-        // So like we're covering the screen with 256x256 tiles and do
-        // rasterization on them and then apply that to the screen
-        //
-        // |-----|-----|-----|
-        //  _____________
-        // ||    |       |
-        // ||____|  ...  |
-        // |     .       |
-        // |_____._______|
-        //
-        // Rastrization
+        memset(&cur_tile, 0, sizeof(cur_tile));
+        cur_tile.x = x;
+        cur_tile.y = y;
+        begin_tile();
+        rasterize_current_tile();
+        setup_pixel_input_current_tile();
+        shade_current_tile();
+        merge_current_tile();
+        end_tile();
+      }
+    }
+  }
+  void begin_tile() {
+    ts.enter_scope();
+    ito(state->render_pass->pSubpasses[0].colorAttachmentCount) {
+      cur_tile.rts[i] =
+          state->framebuffer
+              ->pAttachments[state->render_pass->pSubpasses[0].pColorAttachments[i].attachment];
+      cur_tile.num_color_attachments++;
+    }
+    if (state->render_pass->pSubpasses[0].has_depth_stencil_attachment) {
+      cur_tile.depth =
+          state->framebuffer
+              ->pAttachments[state->render_pass->pSubpasses[0].pDepthStencilAttachment.attachment];
+    }
+    uint32_t max_pixel_invocations = 256 * 256 * 4;
+    cur_tile.pinfos = (Pixel_Invocation_Info *)ts.alloc_page_aligned(sizeof(Pixel_Invocation_Info) *
+                                                                     max_pixel_invocations);
+    cur_tile.tiles  = (Classified_Tile *)ts.alloc_align(sizeof(Classified_Tile) * (1 << 20), 32);
+  }
+  void end_tile() { ts.exit_scope(); }
+  void rasterize_current_tile() {
+    // So like we're covering the screen with 256x256 tiles and do
+    // rasterization on them and then apply that to the screen
+    //
+    // |-----|-----|-----|
+    //  _____________
+    // ||    |       |
+    // ||____|  ...  |
+    // |     .       |
+    // |_____._______|
+    //
+    // Rastrization
+    float tile_x      = ((float)cur_tile.x * 256.0f) / (float)state->framebuffer->width;
+    float tile_y      = ((float)cur_tile.y * 256.0f) / (float)state->framebuffer->height;
+    float tile_size_x = 256.0f / (float)state->framebuffer->width;
+    float tile_size_y = 256.0f / (float)state->framebuffer->height;
+    // Run the rasterizer
+    kto(assembly.rasterizer_triangles_count) {
+      float4 v0  = assembly.screenspace_positions[k * 3 + 0];
+      float4 v1  = assembly.screenspace_positions[k * 3 + 1];
+      float4 v2  = assembly.screenspace_positions[k * 3 + 2];
+      float  x0  = (v0.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+      float  y0  = (v0.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+      float  x1  = (v1.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+      float  y1  = (v1.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+      float  x2  = (v2.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+      float  y2  = (v2.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+      x0         = x0 * 256.0f;
+      y0         = y0 * 256.0f;
+      x1         = x1 * 256.0f;
+      y1         = y1 * 256.0f;
+      x2         = x2 * 256.0f;
+      y2         = y2 * 256.0f;
+      float n0_x = -(y1 - y0);
+      float n0_y = (x1 - x0);
+      float n1_x = -(y2 - y1);
+      float n1_y = (x2 - x1);
+      float n2_x = -(y0 - y2);
+      float n2_y = (x0 - x2);
+      float area = (x1 - x0) * (y1 + y0) + //
+                   (x2 - x1) * (y2 + y1) + //
+                   (x0 - x2) * (y0 + y2);
+      bool  cull = pipeline->RS_state.cullMode != VkCullModeFlagBits::VK_CULL_MODE_NONE;
+      float cull_sign =
+          pipeline->RS_state.frontFace == VkFrontFace::VK_FRONT_FACE_CLOCKWISE ? -1.0f : 1.0f;
+      if (pipeline->RS_state.cullMode == VkCullModeFlagBits::VK_CULL_MODE_BACK_BIT) {
+        cull_sign *= cull_sign;
+      }
+      if (cull && area * cull_sign > 0.0f) {
+        continue;
+      }
+      uint32_t tile_count = 0;
+      if (area > 0.0f) {
+        n0_x = -n0_x;
+        n0_y = -n0_y;
+        n1_x = -n1_x;
+        n1_y = -n1_y;
+        n2_x = -n2_x;
+        n2_y = -n2_y;
+        rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+            x2, y2,                                     //
+            x1, y1,                                     //
+            x0, y0,                                     //
+            n2_x, n2_y,                                 //
+            n1_x, n1_y,                                 //
+            n0_x, n0_y,                                 //
+            cur_tile.tiles, &tile_count);
+      } else {
+        rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+            x0, y0,                                     //
+            x1, y1,                                     //
+            x2, y2,                                     //
+            n0_x, n0_y,                                 //
+            n1_x, n1_y,                                 //
+            n2_x, n2_y,                                 //
+            cur_tile.tiles, &tile_count);
+      }
 
-        float    tile_x = ((float)x * 256.0f) / (float)rt->img->extent.width;
-        float    tile_y = ((float)y * 256.0f) / (float)rt->img->extent.height;
-        float    tile_size_x           = 256.0f / (float)rt->img->extent.width;
-        float    tile_size_y           = 256.0f / (float)rt->img->extent.height;
-        uint32_t num_pixel_invocations = 0;
-        // Run the rasterizer
-        kto(assembly.rasterizer_triangles_count) {
-          float4 v0  = assembly.screenspace_positions[k * 3 + 0];
-          float4 v1  = assembly.screenspace_positions[k * 3 + 1];
-          float4 v2  = assembly.screenspace_positions[k * 3 + 2];
-          float  x0  = (v0.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-          float  y0  = (v0.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-          float  x1  = (v1.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-          float  y1  = (v1.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-          float  x2  = (v2.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-          float  y2  = (v2.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-          x0         = x0 * 256.0f;
-          y0         = y0 * 256.0f;
-          x1         = x1 * 256.0f;
-          y1         = y1 * 256.0f;
-          x2         = x2 * 256.0f;
-          y2         = y2 * 256.0f;
-          float n0_x = -(y1 - y0);
-          float n0_y = (x1 - x0);
-          float n1_x = -(y2 - y1);
-          float n1_y = (x2 - x1);
-          float n2_x = -(y0 - y2);
-          float n2_y = (x0 - x2);
-          float area = (x1 - x0) * (y1 + y0) + //
-                       (x2 - x1) * (y2 + y1) + //
-                       (x0 - x2) * (y0 + y2);
-          bool cull = pipeline->RS_state.cullMode !=
-                      VkCullModeFlagBits::VK_CULL_MODE_NONE;
-          float cull_sign = pipeline->RS_state.frontFace ==
-                                    VkFrontFace::VK_FRONT_FACE_CLOCKWISE
-                                ? -1.0f
-                                : 1.0f;
-          if (pipeline->RS_state.cullMode ==
-              VkCullModeFlagBits::VK_CULL_MODE_BACK_BIT) {
-            cull_sign *= cull_sign;
-          }
-          if (cull && area * cull_sign > 0.0f) {
-            continue;
-          }
-          uint32_t tile_count = 0;
-          if (area > 0.0f) {
-            n0_x = -n0_x;
-            n0_y = -n0_y;
-            n1_x = -n1_x;
-            n1_y = -n1_y;
-            n2_x = -n2_x;
-            n2_y = -n2_y;
-            rasterize_triangle_tiled_1x1_256x256_defer_ref( //
-                x2, y2,                                     //
-                x1, y1,                                     //
-                x0, y0,                                     //
-                n2_x, n2_y,                                 //
-                n1_x, n1_y,                                 //
-                n0_x, n0_y,                                 //
-                tiles, &tile_count);
-          } else {
-            rasterize_triangle_tiled_1x1_256x256_defer_ref( //
-                x0, y0,                                     //
-                x1, y1,                                     //
-                x2, y2,                                     //
-                n0_x, n0_y,                                 //
-                n1_x, n1_y,                                 //
-                n2_x, n2_y,                                 //
-                tiles, &tile_count);
-          }
+      ito(tile_count) {
+        Classified_Tile tile = cur_tile.tiles[i];
 
-          ito(tile_count) {
-            Classified_Tile tile = tiles[i];
+        for (uint32_t sub_y = 0; sub_y < 4; sub_y++) {
+          for (uint32_t sub_x = 0; sub_x < 4; sub_x++) {
+            if (tile.mask & (1 << (sub_x | (sub_y << 2)))) {
+              float b2;
+              float b0;
+              float b1;
 
-            for (uint32_t sub_y = 0; sub_y < 4; sub_y++) {
-              for (uint32_t sub_x = 0; sub_x < 4; sub_x++) {
-                if (tile.mask & (1 << (sub_x | (sub_y << 2)))) {
-                  float b2;
-                  float b0;
-                  float b1;
-
-                  b2 = tile.e_0 + n0_x * sub_x + n0_y * sub_y;
-                  b0 = tile.e_1 + n1_x * sub_x + n1_y * sub_y;
-                  b1 = tile.e_2 + n2_x * sub_x + n2_y * sub_y;
-                  //                if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f)
-                  //                  TRAP;
-                  // TODO: fixe the precision issues
-                  b0        = b0 < 0.0f ? 0.0f : b0;
-                  b1        = b1 < 0.0f ? 0.0f : b1;
-                  b2        = b2 < 0.0f ? 0.0f : b2;
-                  float sum = b0 + b1 + b2;
-                  b0 /= sum;
-                  b1 /= sum;
-                  b2 /= sum;
-                  if (area > 0.0f) {
-                    SWAP(b1, b2);
-                  }
-
-                  float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
-                  b0       = b0 / v0.w / bw;
-                  b1       = b1 / v1.w / bw;
-                  b2       = b2 / v2.w / bw;
-
-                  pinfos[num_pixel_invocations++] = Pixel_Invocation_Info{
-                      .triangle_id = k,
-                      .b_0         = b0,
-                      .b_1         = b1,
-                      .b_2         = b2,
-                      .x           = x * 256 + (uint32_t)tile.x * 4 + sub_x,
-                      .y           = y * 256 + (uint32_t)tile.y * 4 + sub_y};
-                }
+              b2 = tile.e_0 + n0_x * sub_x + n0_y * sub_y;
+              b0 = tile.e_1 + n1_x * sub_x + n1_y * sub_y;
+              b1 = tile.e_2 + n2_x * sub_x + n2_y * sub_y;
+              //                if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f)
+              //                  TRAP;
+              // TODO: fixe the precision issues
+              b0        = b0 < 0.0f ? 0.0f : b0;
+              b1        = b1 < 0.0f ? 0.0f : b1;
+              b2        = b2 < 0.0f ? 0.0f : b2;
+              float sum = b0 + b1 + b2;
+              b0 /= sum;
+              b1 /= sum;
+              b2 /= sum;
+              if (area > 0.0f) {
+                SWAP(b1, b2);
               }
-            }
-          }
-        }
 
-        float4 *pixel_output          = NULL;
-        float * pixel_depth_output    = NULL;
-        float4 *pixel_positions_input = NULL;
-        // Spawn pixel shaders
-        if (num_pixel_invocations != 0) {
-          uint32_t subgroup_size = ps_symbols->subgroup_size;
-          uint32_t num_invocations =
-              (num_pixel_invocations + subgroup_size - 1) / subgroup_size;
-          // Allocate storage space for render target output
-          pixel_output = (float4 *)ts.alloc_align(sizeof(float4) * num_invocations *
-                                            subgroup_size, 32);
-          pixel_positions_input = (float4 *)ts.alloc_align(
-              sizeof(float4) * num_invocations * subgroup_size * 3, 32);
-          pixel_depth_output = (float *)ts.alloc_align(
-              sizeof(float) * num_invocations * subgroup_size, 32);
-          // Allocate pixel shader input storage and
-          // Perform relocation of data for vs->ps
-          uint8_t *pixel_input = NULL;
-          pixel_input = (uint8_t *)ts.alloc(3 * ps_symbols->input_stride *
-                                            num_invocations * subgroup_size);
-          ito(num_pixel_invocations) {
-            Pixel_Invocation_Info info = pinfos[i];
+              float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
+              b0       = b0 / v0.w / bw;
+              b1       = b1 / v1.w / bw;
+              b2       = b2 / v2.w / bw;
 
-            jto(ps_symbols->input_item_count) {
-              // We push 3 attributes for each vertex of the triangle
-              // they're interpolated inside the pixel shader
-              Shader_Symbols::Varying_Slot input_slot =
-                  ps_symbols->input_slots[j];
-              Shader_Symbols::Varying_Slot output_slot = {};
-              // find the corresponding slot in the vertex outputs
-              kto(vs_symbols->output_item_count) {
-                if (vs_symbols->output_slots[k].location ==
-                    input_slot.location) {
-                  output_slot = vs_symbols->output_slots[k];
-                }
-              }
-              ASSERT_ALWAYS(input_slot.format == output_slot.format);
-              size_t slot_size =
-                  vki::get_format_bpp((VkFormat)input_slot.format);
-
-              kto(3) {
-                memcpy(                                          //
-                    pixel_input +                                //
-                        ps_symbols->input_stride * (i * 3 + k) + //
-                        input_slot.offset,                       //
-                    assembly.vertex_data +                       //
-                        output_slot.offset +                     //
-                        vs_symbols->output_stride *
-                            (info.triangle_id * 3 + k), //
-                    slot_size);
-              }
+              cur_tile.pinfos[cur_tile.num_pixel_invocations++] =
+                  Pixel_Invocation_Info{.triangle_id = k,
+                                        .b_0         = b0,
+                                        .b_1         = b1,
+                                        .b_2         = b2,
+                                        .x = cur_tile.x * 256 + (uint32_t)tile.x * 4 + sub_x,
+                                        .y = cur_tile.y * 256 + (uint32_t)tile.y * 4 + sub_y};
             }
-            kto(3) pixel_positions_input[i * 3 + k] =
-                assembly.screenspace_positions[info.triangle_id * 3 + k];
-          }
-
-          info.work_group_size   = (uint3){subgroup_size, 1, 1};
-          info.invocation_count  = (uint3){num_invocations, 1, 1};
-          info.subgroup_size     = (uint3){subgroup_size, 1, 1};
-          info.subgroup_x_bits   = 0xff;
-          info.subgroup_x_offset = 0x0;
-          info.subgroup_y_bits   = 0x0;
-          info.subgroup_y_offset = 0x0;
-          info.subgroup_z_bits   = 0x0;
-          info.subgroup_z_offset = 0x0;
-          info.input             = NULL;
-          info.output            = NULL;
-          info.builtin_output    = NULL;
-          info.push_constants    = state->push_constants;
-          info.print_fn          = (void *)printf;
-          ito(num_invocations) {
-            float barycentrics[0x100] = {};
-            jto(subgroup_size) {
-              Pixel_Invocation_Info pinfo = pinfos[j + i * subgroup_size];
-              barycentrics[j * 3 + 0]     = pinfo.b_0;
-              barycentrics[j * 3 + 1]     = pinfo.b_1;
-              barycentrics[j * 3 + 2]     = pinfo.b_2;
-            }
-            info.work_group_size  = (uint3){subgroup_size, 1, 1};
-            info.invocation_count = (uint3){num_invocations, 1, 1};
-            info.subgroup_size    = (uint3){subgroup_size, 1, 1};
-            info.barycentrics     = barycentrics;
-            info.invocation_id    = (uint3){i, 0, 0};
-            info.input =
-                pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
-            info.output = pixel_output + i * subgroup_size;
-            // Assume there's only gl_Position
-            info.builtin_output = pixel_depth_output + i * subgroup_size;
-            info.pixel_positions =
-                pixel_positions_input + i * subgroup_size * 3;
-            info.wave_width = ps_symbols->subgroup_size;
-            ps_symbols->spv_main(&info, (~0));
-          }
-          ito(num_pixel_invocations) {
-            Pixel_Invocation_Info info = pinfos[i];
-            uint32_t *            dst  = ((uint32_t *)rt->img->get_ptr());
-            if (info.x >= rt->img->extent.width) continue;
-            if (info.y >= rt->img->extent.height) continue;
-            float   depth_value = 1.0f;
-            float2 *depth_src   = (float2 *)depth->img->get_ptr() +
-                                info.y * rt->img->extent.width + info.x;
-            if (state->graphics_pipeline->DS_state.depthTestEnable == VK_TRUE) {
-              depth_value = (*depth_src).x;
-              if (state->graphics_pipeline->DS_state.depthCompareOp ==
-                  VK_COMPARE_OP_LESS) {
-                if (pixel_depth_output[i] > depth_value) continue;
-              } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
-                         VK_COMPARE_OP_LESS_OR_EQUAL) {
-                if (pixel_depth_output[i] >= depth_value) continue;
-              } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
-                         VK_COMPARE_OP_GREATER) {
-                if (pixel_depth_output[i] < depth_value) continue;
-              } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
-                         VK_COMPARE_OP_GREATER_OR_EQUAL) {
-                if (pixel_depth_output[i] <= depth_value) continue;
-              } else {
-                UNIMPLEMENTED;
-              }
-            }
-            if (state->graphics_pipeline->DS_state.depthWriteEnable ==
-                VK_TRUE) {
-              *depth_src = (float2){pixel_depth_output[i], 0};
-            }
-            dst[info.y * rt->img->extent.width + info.x] =
-                rgba32f_to_rgba8(pixel_output[i]);
           }
         }
       }
     }
   }
-  void begin_draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
-                          uint32_t instanceCount, uint32_t firstIndex,
-                          int32_t vertexOffset, uint32_t firstInstance) {
+  void setup_pixel_input_current_tile() {
+    if (cur_tile.num_pixel_invocations != 0) {
+      uint32_t subgroup_size = ps_symbols->subgroup_size;
+      uint32_t num_invocations =
+          (cur_tile.num_pixel_invocations + subgroup_size - 1) / subgroup_size;
+      // Allocate storage space for render target output
+      cur_tile.pixel_output =
+          (float4 *)ts.alloc_align(sizeof(float4) * num_invocations * subgroup_size, 32);
+      cur_tile.pixel_positions_input =
+          (float4 *)ts.alloc_align(sizeof(float4) * num_invocations * subgroup_size * 3, 32);
+      cur_tile.pixel_depth_output =
+          (float *)ts.alloc_align(sizeof(float) * num_invocations * subgroup_size, 32);
+      // Allocate pixel shader input storage and
+      // Perform relocation of data for vs->ps
+
+      cur_tile.pixel_input =
+          (uint8_t *)ts.alloc(3 * ps_symbols->input_stride * num_invocations * subgroup_size);
+      ito(cur_tile.num_pixel_invocations) {
+        Pixel_Invocation_Info info = cur_tile.pinfos[i];
+
+        jto(ps_symbols->input_item_count) {
+          // We push 3 attributes for each vertex of the triangle
+          // they're interpolated inside the pixel shader
+          Shader_Symbols::Varying_Slot input_slot  = ps_symbols->input_slots[j];
+          Shader_Symbols::Varying_Slot output_slot = {};
+          // find the corresponding slot in the vertex outputs
+          kto(vs_symbols->output_item_count) {
+            if (vs_symbols->output_slots[k].location == input_slot.location) {
+              output_slot = vs_symbols->output_slots[k];
+            }
+          }
+          ASSERT_ALWAYS(input_slot.format == output_slot.format);
+          size_t slot_size = vki::get_format_bpp((VkFormat)input_slot.format);
+
+          kto(3) {
+            memcpy(                                                         //
+                cur_tile.pixel_input +                                      //
+                    ps_symbols->input_stride * (i * 3 + k) +                //
+                    input_slot.offset,                                      //
+                assembly.vertex_data +                                      //
+                    output_slot.offset +                                    //
+                    vs_symbols->output_stride * (info.triangle_id * 3 + k), //
+                slot_size);
+          }
+        }
+        kto(3) cur_tile.pixel_positions_input[i * 3 + k] =
+            assembly.screenspace_positions[info.triangle_id * 3 + k];
+      }
+    }
+  }
+  void shade_current_tile() {
+    if (cur_tile.num_pixel_invocations != 0) {
+      uint32_t subgroup_size = ps_symbols->subgroup_size;
+      uint32_t num_invocations =
+          (cur_tile.num_pixel_invocations + subgroup_size - 1) / subgroup_size;
+
+      info.work_group_size   = (uint3){subgroup_size, 1, 1};
+      info.invocation_count  = (uint3){num_invocations, 1, 1};
+      info.subgroup_size     = (uint3){subgroup_size, 1, 1};
+      info.subgroup_x_bits   = 0xff;
+      info.subgroup_x_offset = 0x0;
+      info.subgroup_y_bits   = 0x0;
+      info.subgroup_y_offset = 0x0;
+      info.subgroup_z_bits   = 0x0;
+      info.subgroup_z_offset = 0x0;
+      info.input             = NULL;
+      info.output            = NULL;
+      info.builtin_output    = NULL;
+      info.push_constants    = state->push_constants;
+      info.print_fn          = (void *)printf;
+      ito(num_invocations) {
+        float barycentrics[0x100] = {};
+        jto(subgroup_size) {
+          Pixel_Invocation_Info pinfo = cur_tile.pinfos[j + i * subgroup_size];
+          barycentrics[j * 3 + 0]     = pinfo.b_0;
+          barycentrics[j * 3 + 1]     = pinfo.b_1;
+          barycentrics[j * 3 + 2]     = pinfo.b_2;
+        }
+        info.work_group_size  = (uint3){subgroup_size, 1, 1};
+        info.invocation_count = (uint3){num_invocations, 1, 1};
+        info.subgroup_size    = (uint3){subgroup_size, 1, 1};
+        info.barycentrics     = barycentrics;
+        info.invocation_id    = (uint3){i, 0, 0};
+        info.input  = cur_tile.pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
+        info.output = cur_tile.pixel_output + i * subgroup_size;
+        // Assume there's only gl_Position
+        info.builtin_output  = cur_tile.pixel_depth_output + i * subgroup_size;
+        info.pixel_positions = cur_tile.pixel_positions_input + i * subgroup_size * 3;
+        info.wave_width      = ps_symbols->subgroup_size;
+        ps_symbols->spv_main(&info, (~0));
+      }
+    }
+  }
+  void merge_current_tile() {
+    if (cur_tile.num_pixel_invocations != 0) {
+      ito(cur_tile.num_pixel_invocations) {
+        Pixel_Invocation_Info info = cur_tile.pinfos[i];
+        if (info.x >= state->framebuffer->width) continue;
+        if (info.y >= state->framebuffer->height) continue;
+        if (cur_tile.depth != NULL) {
+          float   depth_value = 1.0f;
+          float2 *depth_src   = (float2 *)cur_tile.depth->img->get_ptr() +
+                              info.y * cur_tile.depth->img->extent.width + info.x;
+          if (state->graphics_pipeline->DS_state.depthTestEnable == VK_TRUE) {
+            depth_value = (*depth_src).x;
+            if (state->graphics_pipeline->DS_state.depthCompareOp == VK_COMPARE_OP_LESS) {
+              if (cur_tile.pixel_depth_output[i] > depth_value) continue;
+            } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                       VK_COMPARE_OP_LESS_OR_EQUAL) {
+              if (cur_tile.pixel_depth_output[i] >= depth_value) continue;
+            } else if (state->graphics_pipeline->DS_state.depthCompareOp == VK_COMPARE_OP_GREATER) {
+              if (cur_tile.pixel_depth_output[i] < depth_value) continue;
+            } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                       VK_COMPARE_OP_GREATER_OR_EQUAL) {
+              if (cur_tile.pixel_depth_output[i] <= depth_value) continue;
+            } else {
+              UNIMPLEMENTED;
+            }
+          }
+          if (state->graphics_pipeline->DS_state.depthWriteEnable == VK_TRUE) {
+            *depth_src = (float2){cur_tile.pixel_depth_output[i], 0};
+          }
+        }
+        jto(pipeline->OM_blend_state.attachmentCount) {
+          VkPipelineColorBlendAttachmentState bstate = pipeline->OM_blend_state.pAttachments[j];
+          uint32_t *                          dst = ((uint32_t *)cur_tile.rts[j]->img->get_ptr());
+          ASSERT_ALWAYS(cur_tile.rts[j]->format == VkFormat::VK_FORMAT_R8G8B8A8_SRGB);
+          if (bstate.blendEnable) {
+            ASSERT_ALWAYS(bstate.colorWriteMask ==
+                          (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT));
+            ASSERT_ALWAYS(bstate.alphaBlendOp == VK_BLEND_OP_ADD);
+            ASSERT_ALWAYS(bstate.colorBlendOp == VK_BLEND_OP_ADD);
+            ASSERT_ALWAYS(bstate.dstAlphaBlendFactor == VK_BLEND_FACTOR_ZERO);
+            ASSERT_ALWAYS(bstate.srcAlphaBlendFactor == VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+            ASSERT_ALWAYS(bstate.dstColorBlendFactor == VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
+            ASSERT_ALWAYS(bstate.srcColorBlendFactor == VK_BLEND_FACTOR_SRC_ALPHA);
+            float4 dst_val =
+                rgba8unorm_to_rgba32f(dst[info.y * cur_tile.rts[j]->img->extent.width + info.x]);
+            float4 src_val = cur_tile.pixel_output[i];
+            dst_val.xyz    = dst_val.xyz * (1.0f - src_val.w) + src_val.xyz * src_val.w;
+            dst_val.w      = (src_val.w) * (1.0f - src_val.w);
+            dst[info.y * cur_tile.rts[j]->img->extent.width + info.x] =
+                rgba32f_to_rgba8unorm(dst_val);
+          } else {
+            dst[info.y * cur_tile.rts[j]->img->extent.width + info.x] =
+                rgba32f_to_rgba8unorm(cur_tile.pixel_output[i]);
+          }
+        }
+      }
+    }
+  }
+
+  void begin_draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount, uint32_t instanceCount,
+                          uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) {
     ts.enter_scope();
     this->state         = state;
     this->indexCount    = indexCount;
@@ -2766,11 +2736,9 @@ struct Draw_Call {
     this->firstIndex    = firstIndex;
     this->vertexOffset  = vertexOffset;
     this->firstInstance = firstInstance;
-    this->vs_symbols =
-        get_shader_symbols(state->graphics_pipeline->vs->jitted_code);
-    this->ps_symbols =
-        get_shader_symbols(state->graphics_pipeline->ps->jitted_code);
-    this->pipeline = state->graphics_pipeline;
+    this->vs_symbols    = get_shader_symbols(state->graphics_pipeline->vs->jitted_code);
+    this->ps_symbols    = get_shader_symbols(state->graphics_pipeline->ps->jitted_code);
+    this->pipeline      = state->graphics_pipeline;
     NOTNULL(vs_symbols);
     NOTNULL(ps_symbols);
     // some default values for invocation info
@@ -2793,16 +2761,14 @@ struct Draw_Call {
     /////////////////////////////
     ito(0x10) {
       if (state->descriptor_sets[i] != NULL) {
-        descriptor_sets[i] = (void **)ts.alloc(
-            sizeof(void *) * state->descriptor_sets[i]->slot_count);
+        descriptor_sets[i] =
+            (void **)ts.alloc(sizeof(void *) * state->descriptor_sets[i]->slot_count);
         jto(state->descriptor_sets[i]->slot_count) {
           switch (state->descriptor_sets[i]->slots[j].type) {
           case VkDescriptorType::VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
-            vki::VkBuffer_Impl *buffer =
-                state->descriptor_sets[i]->slots[j].buffer;
+            vki::VkBuffer_Impl *buffer = state->descriptor_sets[i]->slots[j].buffer;
             NOTNULL(buffer);
-            descriptor_sets[i][j] =
-                buffer->get_ptr() + state->descriptor_sets[i]->slots[j].offset;
+            descriptor_sets[i][j] = buffer->get_ptr() + state->descriptor_sets[i]->slots[j].offset;
             break;
           }
           case VkDescriptorType::VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
@@ -2814,11 +2780,9 @@ struct Draw_Call {
             s->filter           = Sampler::Filter::NEAREST;
             s->mipmap_mode      = Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR;
 
-            vki::VkImageView_Impl *image_view =
-                state->descriptor_sets[i]->slots[j].image_view;
+            vki::VkImageView_Impl *image_view = state->descriptor_sets[i]->slots[j].image_view;
             NOTNULL(image_view);
-            vki::VkSampler_Impl *sampler =
-                state->descriptor_sets[i]->slots[j].sampler;
+            vki::VkSampler_Impl *sampler = state->descriptor_sets[i]->slots[j].sampler;
             NOTNULL(sampler);
             vki::VkImage_Impl *image = image_view->img;
             NOTNULL(image);
@@ -2830,14 +2794,20 @@ struct Draw_Call {
             img->depth        = image->extent.depth;
             img->mip_levels   = image->mipLevels;
             img->pitch        = image->extent.width * img->bpp;
-            kto(img->array_layers) img->array_offsets[k] =
-                image->array_offsets[k];
-            kto(img->mip_levels) img->mip_offsets[k] = image->mip_offsets[k];
-            ci->image_handle                         = (uint64_t)img;
-            ci->sampler_handle                       = (uint64_t)s;
-            uint64_t *slot                           = ALLOC_TMP(handle_slots);
-            *slot                                    = (uint64_t)ci;
-            descriptor_sets[i][j]                    = slot;
+            switch (image->format) {
+            case VK_FORMAT_R8G8B8A8_UNORM: img->format = Image::Format::R8G8B8A8_UNORM; break;
+            case VK_FORMAT_R32G32B32A32_SFLOAT:
+              img->format = Image::Format::R32G32B32A32_FLOAT;
+              break;
+            default: TRAP;
+            }
+            kto(img->array_layers) img->array_offsets[k] = image->array_offsets[k];
+            kto(img->mip_levels) img->mip_offsets[k]     = image->mip_offsets[k];
+            ci->image_handle                             = (uint64_t)img;
+            ci->sampler_handle                           = (uint64_t)s;
+            uint64_t *slot                               = ALLOC_TMP(handle_slots);
+            *slot                                        = (uint64_t)ci;
+            descriptor_sets[i][j]                        = slot;
             break;
           }
           default: UNIMPLEMENTED;
@@ -2850,20 +2820,17 @@ struct Draw_Call {
     IA_stage();
     VS_stage();
     PA_stage();
-    PS_OM_stage();
-
+    PS_OM_tiled();
   }
   void end_draw() { ts.exit_scope(); }
 #undef TMP_POOL
 #undef ALLOC_TMPf
 };
 
-void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
-                  uint32_t instanceCount, uint32_t firstIndex,
-                  int32_t vertexOffset, uint32_t firstInstance) {
+void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount, uint32_t instanceCount,
+                  uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) {
   Draw_Call dc;
-  dc.begin_draw_indexed(state, indexCount, instanceCount, firstIndex,
-                        vertexOffset, firstInstance);
+  dc.begin_draw_indexed(state, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
   dc.end_draw();
 }
 
@@ -3082,11 +3049,9 @@ void main_loop() {
     case SDL_MOUSEWHEEL: {
       float dz = c2d.camera.pos.z * (float)event.wheel.y * 1.0e-1;
       c2d.camera.pos.x +=
-          -0.5f * dz *
-          (c2d.camera.window_to_screen((int2){(int32_t)old_mp_x, 0}).x);
+          -0.5f * dz * (c2d.camera.window_to_screen((int2){(int32_t)old_mp_x, 0}).x);
       c2d.camera.pos.y +=
-          -0.5f * dz *
-          (c2d.camera.window_to_screen((int2){0, (int32_t)old_mp_y}).y);
+          -0.5f * dz * (c2d.camera.window_to_screen((int2){0, (int32_t)old_mp_y}).y);
       c2d.camera.pos.z += dz;
       c2d.camera.pos.z = clamp(c2d.camera.pos.z, 0.1f, 512.0f);
     } break;
@@ -3102,9 +3067,8 @@ int main(int argc, char **argv) {
   std::thread window_loop = std::thread([&] {
     SDL_Init(SDL_INIT_VIDEO);
 
-    window = SDL_CreateWindow(
-        "2DBG", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1024, 1024,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
+    window = SDL_CreateWindow("2DBG", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1024, 1024,
+                              SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     // 3.2 is minimal requirement for renderdoc
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
@@ -3127,8 +3091,8 @@ int main(int argc, char **argv) {
   uint32_t width      = 1 << width_pow;
   uint32_t height_pow = 8;
   uint32_t height     = 1 << height_pow;
-  uint8_t *_image_i8 = (uint8_t *)malloc(sizeof(uint8_t) * width * height + 32);
-  uint8_t *image_i8  = (uint8_t *)(((size_t)_image_i8 + 0x1f) & (~0x1FULL));
+  uint8_t *_image_i8  = (uint8_t *)malloc(sizeof(uint8_t) * width * height + 32);
+  uint8_t *image_i8   = (uint8_t *)(((size_t)_image_i8 + 0x1f) & (~0x1FULL));
   clear_image_2d_i8(image_i8, width * 1, width, height, 0x00);
   defer(free(_image_i8));
   float dp = 1.0f / (float)width;
@@ -3282,8 +3246,8 @@ void Context2D::render_stuff() {
     // Draw quads
     if (quad_storage.cursor != 0) {
       glUseProgram(quad_program);
-      glUniformMatrix4fv(glGetUniformLocation(quad_program, "projection"), 1,
-                         GL_FALSE, (float *)&camera.proj[0]);
+      glUniformMatrix4fv(glGetUniformLocation(quad_program, "projection"), 1, GL_FALSE,
+                         (float *)&camera.proj[0]);
       glBindVertexArray(quad_vao);
       glBindBuffer(GL_ARRAY_BUFFER, quad_vbo);
       glEnableVertexAttribArray(0);
@@ -3302,13 +3266,12 @@ void Context2D::render_stuff() {
       uint32_t num_quads     = 0;
       ts.enter_scope();
       defer(ts.exit_scope());
-      Rect_Instance_GL *qinstances = (Rect_Instance_GL *)ts.alloc(
-          sizeof(Rect_Instance_GL) * max_num_quads);
+      Rect_Instance_GL *qinstances =
+          (Rect_Instance_GL *)ts.alloc(sizeof(Rect_Instance_GL) * max_num_quads);
       ito(max_num_quads) {
         Rect2D quad2d = *quad_storage.at(i);
-        if (quad2d.world_space &&
-            !camera.intersects(quad2d.x, quad2d.y, quad2d.x + quad2d.width,
-                               quad2d.y + quad2d.height))
+        if (quad2d.world_space && !camera.intersects(quad2d.x, quad2d.y, quad2d.x + quad2d.width,
+                                                     quad2d.y + quad2d.height))
           continue;
         Rect_Instance_GL quadgl;
         if (quad2d.world_space) {
@@ -3333,24 +3296,21 @@ void Context2D::render_stuff() {
         qinstances[num_quads++] = quadgl;
       }
       if (num_quads == 0) goto skip_quads;
-      glBufferData(GL_ARRAY_BUFFER, sizeof(Rect_Instance_GL) * num_quads,
-                   qinstances, GL_DYNAMIC_DRAW);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(Rect_Instance_GL) * num_quads, qinstances,
+                   GL_DYNAMIC_DRAW);
 
       glEnableVertexAttribArray(1);
       glVertexAttribBinding(1, 0);
       glVertexAttribDivisor(1, 1);
-      glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL),
-                            0);
+      glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL), 0);
       glEnableVertexAttribArray(2);
       glVertexAttribBinding(2, 0);
       glVertexAttribDivisor(2, 1);
-      glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL),
-                            (void *)16);
+      glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL), (void *)16);
       glEnableVertexAttribArray(3);
       glVertexAttribBinding(3, 0);
       glVertexAttribDivisor(3, 1);
-      glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL),
-                            (void *)28);
+      glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(Rect_Instance_GL), (void *)28);
 
       glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_quads);
 
@@ -3412,11 +3372,10 @@ void Context2D::render_stuff() {
       }
       glBindVertexArray(line_vao);
       glBindBuffer(GL_ARRAY_BUFFER, line_vbo);
-      glBufferData(GL_ARRAY_BUFFER, sizeof(Line_GL) * num_lines, lines,
-                   GL_DYNAMIC_DRAW);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(Line_GL) * num_lines, lines, GL_DYNAMIC_DRAW);
       glUseProgram(line_program);
-      glUniformMatrix4fv(glGetUniformLocation(line_program, "projection"), 1,
-                         GL_FALSE, (float *)&camera.proj[0]);
+      glUniformMatrix4fv(glGetUniformLocation(line_program, "projection"), 1, GL_FALSE,
+                         (float *)&camera.proj[0]);
 
       glEnableVertexAttribArray(0);
       glVertexAttribBinding(0, 0);
@@ -3481,8 +3440,7 @@ void Context2D::render_stuff() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        uint8_t *r8_data = (uint8_t *)malloc(simplefont_bitmap_height *
-                                             simplefont_bitmap_width);
+        uint8_t *r8_data = (uint8_t *)malloc(simplefont_bitmap_height * simplefont_bitmap_width);
         defer(free(r8_data));
         ito(simplefont_bitmap_height) {
           jto(simplefont_bitmap_width) {
@@ -3490,9 +3448,8 @@ void Context2D::render_stuff() {
             r8_data[(i)*simplefont_bitmap_width + j] = c == ' ' ? 0 : 0xff;
           }
         }
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, simplefont_bitmap_width,
-                     simplefont_bitmap_height, 0, GL_RED, GL_UNSIGNED_BYTE,
-                     r8_data);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, simplefont_bitmap_width, simplefont_bitmap_height, 0,
+                     GL_RED, GL_UNSIGNED_BYTE, r8_data);
         return tex;
       }();
       static GLuint vao;
@@ -3524,11 +3481,9 @@ void Context2D::render_stuff() {
         float r, g, b;
       };
       static_assert(sizeof(Glyph_Instance_GL) == 32, "");
-      uint32_t glyph_scale = 2;
-      float    glyph_uv_width =
-          (float)simplefont_bitmap_glyphs_width / simplefont_bitmap_width;
-      float glyph_uv_height =
-          (float)simplefont_bitmap_glyphs_height / simplefont_bitmap_height;
+      uint32_t glyph_scale     = 2;
+      float    glyph_uv_width  = (float)simplefont_bitmap_glyphs_width / simplefont_bitmap_width;
+      float    glyph_uv_height = (float)simplefont_bitmap_glyphs_height / simplefont_bitmap_height;
 
       float      glyph_pad_ss   = 2.0f / viewport_width;
       uint32_t   max_num_glyphs = 0;
@@ -3537,8 +3492,8 @@ void Context2D::render_stuff() {
       kto(num_strings) { max_num_glyphs += (uint32_t)strings[k].len; }
       ts.enter_scope();
       defer(ts.exit_scope());
-      Glyph_Instance_GL *glyphs_gl = (Glyph_Instance_GL *)ts.alloc(
-          sizeof(Glyph_Instance_GL) * max_num_glyphs);
+      Glyph_Instance_GL *glyphs_gl =
+          (Glyph_Instance_GL *)ts.alloc(sizeof(Glyph_Instance_GL) * max_num_glyphs);
       uint32_t num_glyphs = 0;
 
       kto(num_strings) {
@@ -3552,12 +3507,9 @@ void Context2D::render_stuff() {
         }
         float min_ss_x = ss.x;
         float min_ss_y = ss.y;
-        float max_ss_x =
-            ss.x + (camera.glyphs_screen_width + glyph_pad_ss) * string.len;
+        float max_ss_x = ss.x + (camera.glyphs_screen_width + glyph_pad_ss) * string.len;
         float max_ss_y = ss.y + camera.glyphs_screen_height;
-        if (min_ss_x > 1.0f || min_ss_y > 1.0f || max_ss_x < -1.0f ||
-            max_ss_y < -1.0f)
-          continue;
+        if (min_ss_x > 1.0f || min_ss_y > 1.0f || max_ss_x < -1.0f || max_ss_y < -1.0f) continue;
 
         ito(string.len) {
           uint32_t c = (uint32_t)string.c_str[i];
@@ -3566,23 +3518,23 @@ void Context2D::render_stuff() {
           c            = clamp(c, 0x20, 0x7e);
           uint32_t row = (c - 0x20) / simplefont_bitmap_glyphs_per_row;
           uint32_t col = (c - 0x20) % simplefont_bitmap_glyphs_per_row;
-          float    v0  = ((float)row * (simplefont_bitmap_glyphs_height +
-                                    simplefont_bitmap_glyphs_pad_y * 2) +
-                      simplefont_bitmap_glyphs_pad_y) /
-                     simplefont_bitmap_height;
-          float u0 = ((float)col * (simplefont_bitmap_glyphs_width +
-                                    simplefont_bitmap_glyphs_pad_x * 2) +
-                      simplefont_bitmap_glyphs_pad_x) /
-                     simplefont_bitmap_width;
+          float    v0 =
+              ((float)row * (simplefont_bitmap_glyphs_height + simplefont_bitmap_glyphs_pad_y * 2) +
+               simplefont_bitmap_glyphs_pad_y) /
+              simplefont_bitmap_height;
+          float u0 =
+              ((float)col * (simplefont_bitmap_glyphs_width + simplefont_bitmap_glyphs_pad_x * 2) +
+               simplefont_bitmap_glyphs_pad_x) /
+              simplefont_bitmap_width;
           Glyph_Instance_GL glyph;
-          glyph.u = u0;
-          glyph.v = v0;
-          glyph.x = ss.x + (camera.glyphs_screen_width + glyph_pad_ss) * i;
-          glyph.y = ss.y;
-          glyph.z = string.z;
-          glyph.r = string.color.r;
-          glyph.g = string.color.g;
-          glyph.b = string.color.b;
+          glyph.u                 = u0;
+          glyph.v                 = v0;
+          glyph.x                 = ss.x + (camera.glyphs_screen_width + glyph_pad_ss) * i;
+          glyph.y                 = ss.y;
+          glyph.z                 = string.z;
+          glyph.r                 = string.color.r;
+          glyph.g                 = string.color.g;
+          glyph.b                 = string.color.b;
           glyphs_gl[num_glyphs++] = glyph;
         }
       }
@@ -3593,8 +3545,8 @@ void Context2D::render_stuff() {
       glVertexAttribBinding(0, 0);
       glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
       glBindBuffer(GL_ARRAY_BUFFER, instance_vbo);
-      glBufferData(GL_ARRAY_BUFFER, sizeof(Glyph_Instance_GL) * num_glyphs,
-                   glyphs_gl, GL_DYNAMIC_DRAW);
+      glBufferData(GL_ARRAY_BUFFER, sizeof(Glyph_Instance_GL) * num_glyphs, glyphs_gl,
+                   GL_DYNAMIC_DRAW);
       glEnableVertexAttribArray(1);
       glVertexAttribBinding(1, 0);
       glVertexAttribDivisor(1, 1);
@@ -3616,12 +3568,11 @@ void Context2D::render_stuff() {
       //      glUniformMatrix4fv(glGetUniformLocation(line_program,
       //      "projection"), 1,
       //                         GL_FALSE, (float *)&camera.proj[0]);
-      glUniform2f(glGetUniformLocation(program, "viewport_size"),
-                  (float)viewport_width, (float)viewport_height);
-      glUniform2f(glGetUniformLocation(program, "glyph_size"),
-                  camera.glyphs_screen_width, camera.glyphs_screen_height);
-      glUniform2f(glGetUniformLocation(program, "glyph_uv_size"),
-                  glyph_uv_width, glyph_uv_height);
+      glUniform2f(glGetUniformLocation(program, "viewport_size"), (float)viewport_width,
+                  (float)viewport_height);
+      glUniform2f(glGetUniformLocation(program, "glyph_size"), camera.glyphs_screen_width,
+                  camera.glyphs_screen_height);
+      glUniform2f(glGetUniformLocation(program, "glyph_uv_size"), glyph_uv_width, glyph_uv_height);
 
       glDrawArraysInstanced(GL_TRIANGLES, 0, 6, num_glyphs);
       glBindVertexArray(0);

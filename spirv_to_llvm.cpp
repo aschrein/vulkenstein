@@ -51,18 +51,14 @@
 #include "llvm_stdlib_4.h"
 #include "llvm_stdlib_64.h"
 
-#define DLL_EXPORT __attribute__((visibility("default")))
-#define ATTR_USED __attribute__((used))
-
-#define LOOKUP_FN(name)                                                        \
-  llvm::Function *name = module->getFunction(#name);                           \
+#define LOOKUP_FN(name)                                                                            \
+  llvm::Function *name = module->getFunction(#name);                                               \
   ASSERT_ALWAYS(name != NULL);
-#define LOOKUP_TY(name)                                                        \
-  llvm::Type *name = module->getTypeByName(#name);                             \
+#define LOOKUP_TY(name)                                                                            \
+  llvm::Type *name = module->getTypeByName(#name);                                                 \
   ASSERT_ALWAYS(name != NULL);
 
-void llvm_fatal(void *user_data, const std::string &reason,
-                bool gen_crash_diag) {
+void llvm_fatal(void *user_data, const std::string &reason, bool gen_crash_diag) {
   fprintf(stderr, "[LLVM_FATAL] %s\n", reason.c_str());
   abort();
 }
@@ -76,8 +72,7 @@ static void WARNING(char const *fmt, ...) {
   fprintf(stderr, "[WARNING] %s\n", buf);
 }
 
-void *read_file(const char *filename, size_t *size,
-                Allocator *allocator = NULL) {
+void *read_file(const char *filename, size_t *size, Allocator *allocator = NULL) {
   if (allocator == NULL) allocator = Allocator::get_default();
   FILE *f = fopen(filename, "rb");
   fseek(f, 0, SEEK_END);
@@ -95,10 +90,9 @@ struct Jitted_Shader {
 
   class MyObjectCache : public llvm::ObjectCache {
 public:
-    void notifyObjectCompiled(const llvm::Module *  M,
-                              llvm::MemoryBufferRef ObjBuffer) override {
-      auto buf = llvm::MemoryBuffer::getMemBufferCopy(
-          ObjBuffer.getBuffer(), ObjBuffer.getBufferIdentifier());
+    void notifyObjectCompiled(const llvm::Module *M, llvm::MemoryBufferRef ObjBuffer) override {
+      auto buf = llvm::MemoryBuffer::getMemBufferCopy(ObjBuffer.getBuffer(),
+                                                      ObjBuffer.getBufferIdentifier());
       if (dump) {
         TMP_STORAGE_SCOPE;
         char tmp_buf[0x100];
@@ -114,8 +108,7 @@ public:
       }
     }
 
-    std::unique_ptr<llvm::MemoryBuffer>
-    getObject(const llvm::Module *M) override {
+    std::unique_ptr<llvm::MemoryBuffer> getObject(const llvm::Module *M) override {
       return nullptr;
     }
     bool     dump = false;
@@ -127,13 +120,10 @@ public:
     obj_cache.code_hash = code_hash;
     llvm::ExitOnError ExitOnErr;
 
-    static_cast<llvm::orc::RTDyldObjectLinkingLayer &>(
-        jit->getObjLinkingLayer())
-        .registerJITEventListener(
-            *llvm::JITEventListener::createGDBRegistrationListener());
+    static_cast<llvm::orc::RTDyldObjectLinkingLayer &>(jit->getObjLinkingLayer())
+        .registerJITEventListener(*llvm::JITEventListener::createGDBRegistrationListener());
     jit->getIRTransformLayer().setTransform(
-        [&](llvm::orc::ThreadSafeModule                     TSM,
-            const llvm::orc::MaterializationResponsibility &R) {
+        [&](llvm::orc::ThreadSafeModule TSM, const llvm::orc::MaterializationResponsibility &R) {
           TSM.withModuleDo([&](llvm::Module &M) {
             if (dump) {
               TMP_STORAGE_SCOPE;
@@ -148,14 +138,12 @@ public:
                 make_dir_recursive(dir);
                 snprintf(buf, sizeof(buf), "%lx.ll", code_hash);
                 string_ref final_path = stref_concat(dir, stref_s(buf));
-                dump_file(stref_to_tmp_cstr(final_path), str.c_str(),
-                          str.length());
+                dump_file(stref_to_tmp_cstr(final_path), str.c_str(), str.length());
               }
             }
             // Create a function pass manager.
-            auto FPM = std::make_unique<llvm::legacy::PassManager>();
-            llvm::PassRegistry *registry =
-                llvm::PassRegistry::getPassRegistry();
+            auto                FPM      = std::make_unique<llvm::legacy::PassManager>();
+            llvm::PassRegistry *registry = llvm::PassRegistry::getPassRegistry();
             llvm::initializeCore(*registry);
             llvm::initializeScalarOpts(*registry);
             llvm::initializeIPO(*registry);
@@ -260,19 +248,17 @@ public:
                 make_dir_recursive(dir);
                 snprintf(buf, sizeof(buf), "%lx.opt.ll", code_hash);
                 string_ref final_path = stref_concat(dir, stref_s(buf));
-                dump_file(stref_to_tmp_cstr(final_path), str.c_str(),
-                          str.length());
+                dump_file(stref_to_tmp_cstr(final_path), str.c_str(), str.length());
               }
             }
           });
           return TSM;
         });
-    jit->getMainJITDylib().addGenerator(ExitOnErr(
-        llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+    jit->getMainJITDylib().addGenerator(
+        ExitOnErr(llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
             jit->getDataLayout().getGlobalPrefix())));
-#define LOOKUP(name)                                                           \
-  symbols.name =                                                               \
-      (typeof(symbols.name))ExitOnErr(jit->lookup(#name)).getAddress();
+#define LOOKUP(name)                                                                               \
+  symbols.name = (typeof(symbols.name))ExitOnErr(jit->lookup(#name)).getAddress();
     LOOKUP(spv_main)
     LOOKUP(get_private_size)
     LOOKUP(get_input_count)
@@ -351,22 +337,7 @@ struct Member_Decoration {
   uint32_t        param3;
   uint32_t        param4;
 };
-enum class Primitive_t {
-  I1,
-  I8,
-  I16,
-  I32,
-  I64,
-  U8,
-  U16,
-  U32,
-  U64,
-  F8,
-  F16,
-  F32,
-  F64,
-  Void
-};
+enum class Primitive_t { I1, I8, I16, I32, I64, U8, U16, U32, U64, F8, F16, F32, F64, Void };
 struct PrimitiveTy {
   uint32_t    id;
   Primitive_t type;
@@ -558,8 +529,8 @@ struct Spirv_Builder {
     }
     UNIMPLEMENTED;
   }
-  auto has_member_decoration(spv::Decoration spv_dec, uint32_t type_id,
-                             uint32_t member_id) -> bool {
+  auto has_member_decoration(spv::Decoration spv_dec, uint32_t type_id, uint32_t member_id)
+      -> bool {
     ASSERT_ALWAYS(contains(member_decorations, type_id));
     for (auto &item : member_decorations[type_id]) {
       if (item.type == spv_dec && item.member_id == member_id) {
@@ -568,8 +539,8 @@ struct Spirv_Builder {
     }
     return false;
   }
-  auto find_member_decoration(spv::Decoration spv_dec, uint32_t type_id,
-                              uint32_t member_id) -> Member_Decoration {
+  auto find_member_decoration(spv::Decoration spv_dec, uint32_t type_id, uint32_t member_id)
+      -> Member_Decoration {
     ASSERT_ALWAYS(contains(member_decorations, type_id));
     for (auto &item : member_decorations[type_id]) {
       if (item.type == spv_dec && item.member_id == member_id) {
@@ -588,22 +559,19 @@ struct Spirv_Builder {
     switch (opt_subgroup_size) {
     case 1: {
       auto mbuf = llvm::MemoryBuffer::getMemBuffer(
-          llvm::StringRef((char *)llvm_stdlib_1_bc, llvm_stdlib_1_bc_len), "",
-          false);
+          llvm::StringRef((char *)llvm_stdlib_1_bc, llvm_stdlib_1_bc_len), "", false);
       module = llvm::parseIR(*mbuf.get(), error, c);
       break;
     }
     case 4: {
       auto mbuf = llvm::MemoryBuffer::getMemBuffer(
-          llvm::StringRef((char *)llvm_stdlib_4_bc, llvm_stdlib_4_bc_len), "",
-          false);
+          llvm::StringRef((char *)llvm_stdlib_4_bc, llvm_stdlib_4_bc_len), "", false);
       module = llvm::parseIR(*mbuf.get(), error, c);
       break;
     }
     case 64: {
       auto mbuf = llvm::MemoryBuffer::getMemBuffer(
-          llvm::StringRef((char *)llvm_stdlib_64_bc, llvm_stdlib_64_bc_len), "",
-          false);
+          llvm::StringRef((char *)llvm_stdlib_64_bc, llvm_stdlib_64_bc_len), "", false);
       module = llvm::parseIR(*mbuf.get(), error, c);
       break;
     }
@@ -620,9 +588,8 @@ struct Spirv_Builder {
       llvm_di_builder.reset(new llvm::DIBuilder(*module));
       // those are removed along with dibuilder
       llvm_di_cuint = llvm_di_builder->createCompileUnit(
-          llvm::dwarf::DW_LANG_C,
-          llvm_di_builder->createFile(shader_dump_path, "."), "SPRIV JIT", 0,
-          "", 0);
+          llvm::dwarf::DW_LANG_C, llvm_di_builder->createFile(shader_dump_path, "."), "SPRIV JIT",
+          0, "", 0);
       llvm_di_unit = llvm_di_builder->createFile(shader_dump_path, ".");
     }
     //    std::map<llvm::Type *, llvm::DIType *> llvm_debug_type_table;
@@ -675,24 +642,17 @@ struct Spirv_Builder {
       llvm::VectorType *vty = llvm::dyn_cast<llvm::VectorType>(ty);
       return vty->getElementCount().Min;
     };
-    auto llvm_matrix_transpose = [&](llvm::Value *      matrix,
-                                     llvm::IRBuilder<> *llvm_builder) {
-      llvm::Type *elem_type =
-          llvm_vec_elem_type(matrix->getType()->getArrayElementType());
-      uint32_t matrix_row_size =
-          llvm_vec_num_elems(matrix->getType()->getArrayElementType());
-      uint32_t matrix_col_size =
-          (uint32_t)matrix->getType()->getArrayNumElements();
-      llvm::Type *matrix_t_type = llvm::ArrayType::get(
-          llvm::VectorType::get(elem_type, matrix_col_size), matrix_row_size);
-      llvm::Value *result = llvm::UndefValue::get(matrix_t_type);
+    auto llvm_matrix_transpose = [&](llvm::Value *matrix, llvm::IRBuilder<> *llvm_builder) {
+      llvm::Type *elem_type       = llvm_vec_elem_type(matrix->getType()->getArrayElementType());
+      uint32_t    matrix_row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
+      uint32_t    matrix_col_size = (uint32_t)matrix->getType()->getArrayNumElements();
+      llvm::Type *matrix_t_type =
+          llvm::ArrayType::get(llvm::VectorType::get(elem_type, matrix_col_size), matrix_row_size);
+      llvm::Value *                       result = llvm::UndefValue::get(matrix_t_type);
       llvm::SmallVector<llvm::Value *, 4> rows;
-      jto(matrix_row_size) {
-        rows.push_back(llvm_builder->CreateExtractValue(matrix, j));
-      }
+      jto(matrix_row_size) { rows.push_back(llvm_builder->CreateExtractValue(matrix, j)); }
       ito(matrix_col_size) {
-        llvm::Value *result_row =
-            llvm::UndefValue::get(matrix_t_type->getArrayElementType());
+        llvm::Value *result_row = llvm::UndefValue::get(matrix_t_type->getArrayElementType());
         jto(matrix_row_size) {
           result_row = llvm_builder->CreateInsertElement(
               result_row, llvm_builder->CreateExtractElement(rows[j], i), j);
@@ -710,9 +670,8 @@ struct Spirv_Builder {
                     llvm_vec_num_elems(vector_0->getType()));
       jto(vector_size) {
         result = llvm_builder->CreateFAdd(
-            result, llvm_builder->CreateFMul(
-                        llvm_builder->CreateExtractElement(vector_0, j),
-                        llvm_builder->CreateExtractElement(vector_1, j)));
+            result, llvm_builder->CreateFMul(llvm_builder->CreateExtractElement(vector_0, j),
+                                             llvm_builder->CreateExtractElement(vector_1, j)));
       }
       return result;
     };
@@ -768,18 +727,15 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_atomic_sub_i32);
     LOOKUP_FN(spv_atomic_or_i32);
     std::map<std::string, llvm::GlobalVariable *> global_strings;
-    auto lookup_string = [&](std::string str) {
+    auto                                          lookup_string = [&](std::string str) {
       if (contains(global_strings, str)) return global_strings[str];
-      llvm::Constant *msg =
-          llvm::ConstantDataArray::getString(c, str.c_str(), true);
-      llvm::GlobalVariable *msg_glob =
-          new llvm::GlobalVariable(*module, msg->getType(), true,
-                                   llvm::GlobalValue::InternalLinkage, msg);
+      llvm::Constant *      msg = llvm::ConstantDataArray::getString(c, str.c_str(), true);
+      llvm::GlobalVariable *msg_glob = new llvm::GlobalVariable(
+          *module, msg->getType(), true, llvm::GlobalValue::InternalLinkage, msg);
       global_strings[str] = msg_glob;
       return msg_glob;
     };
-    auto lookup_image_op = [&](llvm::Type *res_type, llvm::Type *coord_type,
-                               bool read) {
+    auto lookup_image_op = [&](llvm::Type *res_type, llvm::Type *coord_type, bool read) {
       static char tmp_buf[0x100];
       char const *type_names[] = {
           // clang-format off
@@ -815,12 +771,11 @@ struct Spirv_Builder {
       }
 
       ASSERT_ALWAYS(dim == 1 || dim == 2 || dim == 3 || dim == 4);
-      ASSERT_ALWAYS(component_type == Primitive_t::F32 ||
-                    component_type == Primitive_t::U32);
+      ASSERT_ALWAYS(component_type == Primitive_t::F32 || component_type == Primitive_t::U32);
       uint32_t    is_float = component_type == Primitive_t::F32 ? 1 : 0;
       char const *type_str = type_names[components * 2 + is_float];
-      snprintf(tmp_buf, sizeof(tmp_buf), "spv_image_%s_%id_%s",
-               (read ? "read" : "write"), dim, type_str);
+      snprintf(tmp_buf, sizeof(tmp_buf), "spv_image_%s_%id_%s", (read ? "read" : "write"), dim,
+               type_str);
       llvm::Function *fun = module->getFunction(tmp_buf);
       ASSERT_ALWAYS(fun != NULL);
       return fun;
@@ -850,9 +805,8 @@ struct Spirv_Builder {
     // Each function creates a copy that inherits the global
     // table
     std::vector<llvm::Value *> llvm_global_values(ID_bound);
-    auto get_global_const_i32 = [&llvm_global_values](uint32_t const_id) {
-      llvm::ConstantInt *co =
-          llvm::dyn_cast<llvm::ConstantInt>(llvm_global_values[const_id]);
+    auto                       get_global_const_i32 = [&llvm_global_values](uint32_t const_id) {
+      llvm::ConstantInt *co = llvm::dyn_cast<llvm::ConstantInt>(llvm_global_values[const_id]);
       NOTNULL(co);
       return (uint32_t)co->getLimitedValue();
     };
@@ -863,10 +817,8 @@ struct Spirv_Builder {
     // Map spirv types to llvm types
     char name_buf[0x100];
     for (auto &item : this->decl_types) {
-      ASSERT_ALWAYS(llvm_types[item.first] == NULL &&
-                    "Types must have unique ids");
-      ASSERT_ALWAYS(llvm_global_values[item.first] == NULL &&
-                    "Values must have unique ids");
+      ASSERT_ALWAYS(llvm_types[item.first] == NULL && "Types must have unique ids");
+      ASSERT_ALWAYS(llvm_global_values[item.first] == NULL && "Values must have unique ids");
 #define ASSERT_HAS(table) ASSERT_ALWAYS(table.find(item.first) != table.end());
       // Skip this declaration in this pass
       bool skip = false;
@@ -875,8 +827,7 @@ struct Spirv_Builder {
         ASSERT_HAS(functypes);
         FunTy       type     = functypes.find(item.first)->second;
         llvm::Type *ret_type = llvm_types[type.ret];
-        ASSERT_ALWAYS(ret_type != NULL &&
-                      "Function must have a return type defined");
+        ASSERT_ALWAYS(ret_type != NULL && "Function must have a return type defined");
         llvm::SmallVector<llvm::Type *, 16> args;
         // Prepend state_t* to each function type
         args.push_back(state_t_ptr);
@@ -884,8 +835,7 @@ struct Spirv_Builder {
         args.push_back(mask_t);
         for (auto &param_id : type.params) {
           llvm::Type *arg_type = llvm_types[param_id];
-          ASSERT_ALWAYS(arg_type != NULL &&
-                        "Function must have all argumet types defined");
+          ASSERT_ALWAYS(arg_type != NULL && "Function must have all argumet types defined");
           kto(opt_subgroup_size) args.push_back(arg_type);
         }
         if (ret_type->isVoidTy())
@@ -901,9 +851,8 @@ struct Spirv_Builder {
         llvm::FunctionType *fun_type =
             llvm::dyn_cast<llvm::FunctionType>(llvm_types[fun.function_type]);
         ASSERT_ALWAYS(fun_type != NULL && "Function type must be defined");
-        llvm_global_values[fun.id] =
-            llvm::Function::Create(fun_type, llvm::GlobalValue::ExternalLinkage,
-                                   get_spv_name(fun.id), module.get());
+        llvm_global_values[fun.id] = llvm::Function::Create(
+            fun_type, llvm::GlobalValue::ExternalLinkage, get_spv_name(fun.id), module.get());
         break;
       }
       case DeclTy::RuntimeArrayTy:
@@ -922,12 +871,9 @@ struct Spirv_Builder {
         ASSERT_ALWAYS(elem_t != NULL && "Element type must be defined");
         llvm::Value *width_value = llvm_global_values[type.width_id];
         ASSERT_ALWAYS(width_value != NULL && "Array width must be defined");
-        llvm::ConstantInt *constant =
-            llvm::dyn_cast<llvm::ConstantInt>(width_value);
-        ASSERT_ALWAYS(constant != NULL &&
-                      "Array width must be an integer constant");
-        llvm_types[type.id] = llvm::ArrayType::get(
-            elem_t, constant->getValue().getLimitedValue());
+        llvm::ConstantInt *constant = llvm::dyn_cast<llvm::ConstantInt>(width_value);
+        ASSERT_ALWAYS(constant != NULL && "Array width must be an integer constant");
+        llvm_types[type.id] = llvm::ArrayType::get(elem_t, constant->getValue().getLimitedValue());
         break;
       }
       case DeclTy::ImageTy: {
@@ -942,14 +888,12 @@ struct Spirv_Builder {
         llvm::Type *type = llvm_types[c.type];
         ASSERT_ALWAYS(type != NULL && "Constant type must be defined");
         // In LLVM float means float 32bit
-        if (!(type->isFloatTy()) &&
-            !(type->isIntegerTy() && (type->getIntegerBitWidth() == 32 ||
-                                      type->getIntegerBitWidth() == 1))) {
+        if (!(type->isFloatTy()) && !(type->isIntegerTy() && (type->getIntegerBitWidth() == 32 ||
+                                                              type->getIntegerBitWidth() == 1))) {
           UNIMPLEMENTED;
         }
         if (type->isFloatTy())
-          llvm_global_values[c.id] =
-              llvm::ConstantFP::get(type, llvm::APFloat(c.f32_val));
+          llvm_global_values[c.id] = llvm::ConstantFP::get(type, llvm::APFloat(c.f32_val));
         else {
           llvm_global_values[c.id] = llvm::ConstantInt::get(type, c.i32_val);
         }
@@ -970,8 +914,8 @@ struct Spirv_Builder {
         if (type->isVectorTy())
           llvm_global_values[c.id] = llvm::ConstantVector::get(llvm_elems);
         else if (type->isArrayTy())
-          llvm_global_values[c.id] = llvm::ConstantArray::get(
-              llvm::dyn_cast<llvm::ArrayType>(type), llvm_elems);
+          llvm_global_values[c.id] =
+              llvm::ConstantArray::get(llvm::dyn_cast<llvm::ArrayType>(type), llvm_elems);
         else {
           UNIMPLEMENTED;
         }
@@ -1023,9 +967,9 @@ struct Spirv_Builder {
         // gl_Position and assume that other members are not written to
         // @TODO: Implement other output structures
         if (type.is_builtin) {
-          llvm::Type *struct_type = llvm::StructType::create(
-              c, {llvm::VectorType::get(llvm::Type::getFloatTy(c), 4)},
-              get_spv_name(type.id), true);
+          llvm::Type *struct_type =
+              llvm::StructType::create(c, {llvm::VectorType::get(llvm::Type::getFloatTy(c), 4)},
+                                       get_spv_name(type.id), true);
           member_reloc[struct_type] = {0};
           llvm_types[type.id]       = struct_type;
           break;
@@ -1037,8 +981,7 @@ struct Spirv_Builder {
         std::vector<uint32_t> member_indices;
         std::set<uint32_t>    this_member_transpose;
         uint32_t              index_offset = 0;
-        for (uint32_t member_id = 0; member_id < type.member_types.size();
-             member_id++) {
+        for (uint32_t member_id = 0; member_id < type.member_types.size(); member_id++) {
           llvm::Type *member_type = llvm_types[type.member_types[member_id]];
           ASSERT_ALWAYS(member_type != NULL && "Member types must be defined");
           if (!type.is_builtin && type.member_offsets[member_id] != offset) {
@@ -1046,20 +989,17 @@ struct Spirv_Builder {
                           "Can't move a member back in memory layout");
             size_t diff = type.member_offsets[member_id] - offset;
             // Push dummy bytes until the member offset is ok
-            members.push_back(
-                llvm::ArrayType::get(llvm::Type::getInt8Ty(c), diff));
+            members.push_back(llvm::ArrayType::get(llvm::Type::getInt8Ty(c), diff));
             index_offset += 1;
           }
-          if (has_member_decoration(spv::Decoration::DecorationColMajor,
-                                    type.id, member_id)) {
+          if (has_member_decoration(spv::Decoration::DecorationColMajor, type.id, member_id)) {
             this_member_transpose.insert(member_id);
-            if (has_member_decoration(spv::Decoration::DecorationMatrixStride,
-                                      type.id, member_id)) {
+            if (has_member_decoration(spv::Decoration::DecorationMatrixStride, type.id,
+                                      member_id)) {
               // do we need to change anything if that's not true?
               // TODO allow 12 and 8 for mat3 and mat2
-              ASSERT_ALWAYS(find_member_decoration(
-                                spv::Decoration::DecorationMatrixStride,
-                                type.id, member_id)
+              ASSERT_ALWAYS(find_member_decoration(spv::Decoration::DecorationMatrixStride, type.id,
+                                                   member_id)
                                 .param1 == 16);
             }
           }
@@ -1073,8 +1013,7 @@ struct Spirv_Builder {
           offset += size;
           members.push_back(member_type);
         }
-        llvm::Type *struct_type =
-            llvm::StructType::create(c, members, get_spv_name(type.id), true);
+        llvm::Type *struct_type = llvm::StructType::create(c, members, get_spv_name(type.id), true);
         member_reloc[struct_type] = member_indices;
         if (this_member_transpose.size() != 0)
           member_transpose[struct_type] = this_member_transpose;
@@ -1105,7 +1044,7 @@ struct Spirv_Builder {
         ASSERT_HAS(primitive_types);
         PrimitiveTy type = primitive_types.find(item.first)->second;
         switch (type.type) {
-#define MAP(TY, LLVM_TY)                                                       \
+#define MAP(TY, LLVM_TY)                                                                           \
   case Primitive_t::TY: llvm_types[type.id] = LLVM_TY; break;
           MAP(I1, llvm::Type::getInt1Ty(c));
           MAP(I8, llvm::Type::getInt8Ty(c));
@@ -1128,8 +1067,7 @@ struct Spirv_Builder {
       default: UNIMPLEMENTED_(get_cstr(item.second));
       }
       if (skip) continue;
-      ASSERT_ALWAYS((llvm_global_values[item.first] != NULL ||
-                     llvm_types[item.first] != NULL) &&
+      ASSERT_ALWAYS((llvm_global_values[item.first] != NULL || llvm_types[item.first] != NULL) &&
                     "eh there must be a type or value at the end!");
     }
 
@@ -1158,24 +1096,21 @@ struct Spirv_Builder {
       std::vector<DeferredStore>                           deferred_stores;
       std::map<uint32_t, llvm::BasicBlock *>               llvm_labels;
       ///////////////////////////////////////////////
-      uint32_t func_id  = item.first;
-      Function function = functions[func_id];
-      bool     is_entry = contains(entries, func_id);
-      bool     is_pixel_shader =
-          is_entry && entries[func_id].execution_model ==
-                          spv::ExecutionModel::ExecutionModelFragment;
+      uint32_t func_id         = item.first;
+      Function function        = functions[func_id];
+      bool     is_entry        = contains(entries, func_id);
+      bool     is_pixel_shader = is_entry && entries[func_id].execution_model ==
+                                             spv::ExecutionModel::ExecutionModelFragment;
       NOTNULL(llvm_global_values[func_id]);
-      llvm::Function *cur_fun =
-          llvm::dyn_cast<llvm::Function>(llvm_global_values[func_id]);
+      llvm::Function *cur_fun = llvm::dyn_cast<llvm::Function>(llvm_global_values[func_id]);
       NOTNULL(cur_fun);
       llvm::Value *state_ptr = cur_fun->getArg(0);
       state_ptr->setName("state_ptr");
       // Check that the first parameter is state_t*
       ASSERT_ALWAYS(state_ptr->getType() == state_t_ptr);
       // @llvm/allocas
-      llvm::BasicBlock *cur_bb =
-          llvm::BasicBlock::Create(c, "allocas", cur_fun, NULL);
-      llvm::Value *cur_mask = cur_fun->getArg(1);
+      llvm::BasicBlock *cur_bb   = llvm::BasicBlock::Create(c, "allocas", cur_fun, NULL);
+      llvm::Value *     cur_mask = cur_fun->getArg(1);
       NOTNULL(cur_mask);
       ASSERT_ALWAYS(cur_mask->getType() == mask_t);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
@@ -1185,20 +1120,17 @@ struct Spirv_Builder {
       llvm::DIScope *di_scope       = NULL;
       if (opt_debug_info) {
         llvm::DISubprogram *SP = llvm_di_builder->createFunction(
-            (llvm::DIScope *)llvm_di_unit, "@Function", llvm::StringRef(),
-            llvm_di_unit, cur_spirv_line,
-            llvm_di_builder->createSubroutineType({}), 0,
+            (llvm::DIScope *)llvm_di_unit, "@Function", llvm::StringRef(), llvm_di_unit,
+            cur_spirv_line, llvm_di_builder->createSubroutineType({}), 0,
             llvm::DINode::FlagPrototyped, llvm::DISubprogram::SPFlagDefinition);
         cur_fun->setSubprogram(SP);
         di_scope = SP;
-        llvm_builder->SetCurrentDebugLocation(
-            llvm::DebugLoc::get(cur_spirv_line, 0, di_scope));
+        llvm_builder->SetCurrentDebugLocation(llvm::DebugLoc::get(cur_spirv_line, 0, di_scope));
       }
       // TODO(aschrein) maybe do something more optimal?
       // Each lane has it's own value table(quick and dirty way but will help me
       // advance)
-      std::vector<std::vector<llvm::Value *>> llvm_values_per_lane(
-          opt_subgroup_size);
+      std::vector<std::vector<llvm::Value *>> llvm_values_per_lane(opt_subgroup_size);
       // Copy global constants into each lane
       ito(opt_subgroup_size) llvm_values_per_lane[i] = copy(llvm_global_values);
       // Setup arguments
@@ -1213,30 +1145,24 @@ struct Spirv_Builder {
       }
 
       // Call to get input/output/uniform data
-      llvm::Value *input_ptr =
-          llvm_builder->CreateCall(get_input_ptr, state_ptr);
-      llvm::Value *output_ptr =
-          llvm_builder->CreateCall(get_output_ptr, state_ptr);
-      llvm::Value *builtin_output_ptr =
-          llvm_builder->CreateCall(get_builtin_output_ptr, state_ptr);
+      llvm::Value *input_ptr          = llvm_builder->CreateCall(get_input_ptr, state_ptr);
+      llvm::Value *output_ptr         = llvm_builder->CreateCall(get_output_ptr, state_ptr);
+      llvm::Value *builtin_output_ptr = llvm_builder->CreateCall(get_builtin_output_ptr, state_ptr);
       llvm::SmallVector<llvm::Value *, 64> barycentrics;
       llvm::SmallVector<llvm::Value *, 64> pixel_positions;
       if (is_pixel_shader) {
         ito(opt_subgroup_size) {
-          llvm::Value *b = llvm_builder->CreateCall(
-              get_barycentrics, {state_ptr, llvm_get_constant_i32(i)});
+          llvm::Value *b =
+              llvm_builder->CreateCall(get_barycentrics, {state_ptr, llvm_get_constant_i32(i)});
           barycentrics.push_back(b);
           llvm::Value *b_0 = llvm_builder->CreateExtractElement(b, (uint64_t)0);
           llvm::Value *b_1 = llvm_builder->CreateExtractElement(b, (uint64_t)1);
           llvm::Value *b_2 = llvm_builder->CreateExtractElement(b, (uint64_t)2);
           llvm::Value *pos = llvm_builder->CreateCall(
-              get_pixel_position,
-              {state_ptr, llvm_get_constant_i32(i), b_0, b_1, b_2});
+              get_pixel_position, {state_ptr, llvm_get_constant_i32(i), b_0, b_1, b_2});
           pixel_positions.push_back(pos);
-          llvm::Value *depth =
-              llvm_builder->CreateExtractElement(pos, (uint64_t)2);
-          llvm_builder->CreateCall(
-              pixel_store_depth, {state_ptr, llvm_get_constant_i32(i), depth});
+          llvm::Value *depth = llvm_builder->CreateExtractElement(pos, (uint64_t)2);
+          llvm_builder->CreateCall(pixel_store_depth, {state_ptr, llvm_get_constant_i32(i), depth});
         }
       }
       // @llvm/local_variables
@@ -1250,14 +1176,13 @@ struct Spirv_Builder {
 
         // SPIRV declares local variables as pointers so we need to allocate
         // the actual storage for them on the stack
-        llvm::PointerType *ptr_type =
-            llvm::dyn_cast<llvm::PointerType>(llvm_type);
+        llvm::PointerType *ptr_type = llvm::dyn_cast<llvm::PointerType>(llvm_type);
         NOTNULL(ptr_type);
 
         llvm::Type *pointee_type = ptr_type->getElementType();
         ito(opt_subgroup_size) {
-          llvm::Value *llvm_value = llvm_builder->CreateAlloca(
-              pointee_type, 0, NULL, get_spv_name(var.id));
+          llvm::Value *llvm_value =
+              llvm_builder->CreateAlloca(pointee_type, 0, NULL, get_spv_name(var.id));
           llvm_values_per_lane[i][var.id] = llvm_value;
         }
         if (var.init_id != 0) {
@@ -1317,15 +1242,13 @@ struct Spirv_Builder {
         switch (var.storage) {
         case spv::StorageClass::StorageClassPrivate: {
           ito(opt_subgroup_size) {
-            llvm::Value *pc_ptr =
-                llvm_builder->CreateCall(get_private_ptr, state_ptr);
+            llvm::Value *pc_ptr = llvm_builder->CreateCall(get_private_ptr, state_ptr);
             ASSERT_ALWAYS(contains(private_offsets, var_id));
-            uint32_t offset =
-                private_storage_size * i + private_offsets[var_id];
-            llvm::Value *pc_ptr_offset = llvm_builder->CreateGEP(
-                pc_ptr, llvm::ConstantInt::get(c, llvm::APInt(32, offset)));
-            llvm::Value *llvm_value = llvm_builder->CreateBitCast(
-                pc_ptr_offset, llvm_type, get_spv_name(var.id));
+            uint32_t     offset = private_storage_size * i + private_offsets[var_id];
+            llvm::Value *pc_ptr_offset =
+                llvm_builder->CreateGEP(pc_ptr, llvm::ConstantInt::get(c, llvm::APInt(32, offset)));
+            llvm::Value *llvm_value =
+                llvm_builder->CreateBitCast(pc_ptr_offset, llvm_type, get_spv_name(var.id));
             llvm_values_per_lane[i][var.id] = llvm_value;
           }
           break;
@@ -1333,34 +1256,27 @@ struct Spirv_Builder {
         case spv::StorageClass::StorageClassUniformConstant:
         case spv::StorageClass::StorageClassStorageBuffer:
         case spv::StorageClass::StorageClassUniform: {
-          uint32_t set =
-              find_decoration(spv::Decoration::DecorationDescriptorSet, var.id)
-                  .param1;
-          uint32_t binding =
-              find_decoration(spv::Decoration::DecorationBinding, var.id)
-                  .param1;
+          uint32_t set = find_decoration(spv::Decoration::DecorationDescriptorSet, var.id).param1;
+          uint32_t binding = find_decoration(spv::Decoration::DecorationBinding, var.id).param1;
           ASSERT_ALWAYS(set >= 0);
           ASSERT_ALWAYS(binding >= 0);
           llvm::Value *pc_ptr = llvm_builder->CreateCall(
 
               var.storage == spv::StorageClass::StorageClassUniformConstant
                   ? get_uniform_const_ptr
-                  : var.storage == spv::StorageClass::StorageClassUniform
-                        ? get_uniform_ptr
-                        : get_storage_ptr,
+                  : var.storage == spv::StorageClass::StorageClassUniform ? get_uniform_ptr
+                                                                          : get_storage_ptr,
               {state_ptr, llvm_builder->getInt32((uint32_t)set),
                llvm_builder->getInt32((uint32_t)binding)});
-          llvm::Value *llvm_value = llvm_builder->CreateBitCast(
-              pc_ptr, llvm_type, get_spv_name(var.id));
-          ito(opt_subgroup_size) {
-            llvm_values_per_lane[i][var.id] = llvm_value;
-          }
+          llvm::Value *llvm_value =
+              llvm_builder->CreateBitCast(pc_ptr, llvm_type, get_spv_name(var.id));
+          ito(opt_subgroup_size) { llvm_values_per_lane[i][var.id] = llvm_value; }
           break;
         }
         case spv::StorageClass::StorageClassOutput: {
           if (is_builtin_struct) {
-            llvm::ArrayType *array_type = llvm::ArrayType::get(
-                llvm_type->getPointerElementType(), opt_subgroup_size);
+            llvm::ArrayType *array_type =
+                llvm::ArrayType::get(llvm_type->getPointerElementType(), opt_subgroup_size);
             llvm::Value * alloca = llvm_builder->CreateAlloca(array_type);
             DeferredStore ds;
             ds.dst_ptr   = builtin_output_ptr;
@@ -1374,18 +1290,15 @@ struct Spirv_Builder {
               llvm_values_per_lane[i][var.id] = offset;
             }
           } else {
-            uint32_t location =
-                find_decoration(spv::Decoration::DecorationLocation, var.id)
-                    .param1;
+            uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
             ASSERT_ALWAYS(location >= 0);
             ASSERT_ALWAYS(llvm_type->isPointerTy());
             ito(opt_subgroup_size) {
-              llvm::Value *alloca = llvm_builder->CreateAlloca(
-                  llvm_type->getPointerElementType());
+              llvm::Value * alloca = llvm_builder->CreateAlloca(llvm_type->getPointerElementType());
               DeferredStore ds;
               ds.dst_ptr = llvm_builder->CreateGEP(
-                  output_ptr, llvm_get_constant_i32(output_offsets[location] +
-                                                    output_storage_size * i));
+                  output_ptr,
+                  llvm_get_constant_i32(output_offsets[location] + output_storage_size * i));
               ds.value_ptr = alloca;
               deferred_stores.push_back(ds);
               llvm_values_per_lane[i][var.id] = alloca;
@@ -1397,19 +1310,14 @@ struct Spirv_Builder {
           // Builtin variable: special case
           if (has_decoration(spv::Decoration::DecorationBuiltIn, var.id)) {
             spv::BuiltIn builtin_id =
-                (spv::BuiltIn)find_decoration(
-                    spv::Decoration::DecorationBuiltIn, var.id)
-                    .param1;
+                (spv::BuiltIn)find_decoration(spv::Decoration::DecorationBuiltIn, var.id).param1;
             switch (builtin_id) {
             case spv::BuiltIn::BuiltInGlobalInvocationId: {
-              llvm::VectorType *gid_t =
-                  llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
+              llvm::VectorType *gid_t = llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
               ito(opt_subgroup_size) {
-                llvm::Value *alloca = llvm_builder->CreateAlloca(
-                    gid_t, NULL, get_spv_name(var.id));
-                llvm::Value *gid = llvm_builder->CreateCall(
-                    spv_get_global_invocation_id,
-                    {state_ptr, llvm_get_constant_i32(i)});
+                llvm::Value *alloca = llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
+                llvm::Value *gid    = llvm_builder->CreateCall(spv_get_global_invocation_id,
+                                                            {state_ptr, llvm_get_constant_i32(i)});
                 llvm_builder->CreateStore(gid, alloca);
                 llvm_values_per_lane[i][var.id] = alloca;
               }
@@ -1417,16 +1325,11 @@ struct Spirv_Builder {
               break;
             }
             case spv::BuiltIn::BuiltInWorkgroupSize: {
-              llvm::VectorType *gid_t =
-                  llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
-              llvm::Value *alloca =
-                  llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
-              llvm::Value *gid = llvm_builder->CreateCall(
-                  spv_get_work_group_size, {state_ptr});
+              llvm::VectorType *gid_t = llvm::VectorType::get(llvm::IntegerType::getInt32Ty(c), 3);
+              llvm::Value *alloca = llvm_builder->CreateAlloca(gid_t, NULL, get_spv_name(var.id));
+              llvm::Value *gid    = llvm_builder->CreateCall(spv_get_work_group_size, {state_ptr});
               llvm_builder->CreateStore(gid, alloca);
-              ito(opt_subgroup_size) {
-                llvm_values_per_lane[i][var.id] = alloca;
-              }
+              ito(opt_subgroup_size) { llvm_values_per_lane[i][var.id] = alloca; }
               break;
             }
             default: UNIMPLEMENTED_(get_cstr(builtin_id));
@@ -1438,47 +1341,35 @@ struct Spirv_Builder {
           // function is called from a pixel shader of vertex shader
           if (!is_entry) break;
           // Pipeline input
-          ASSERT_ALWAYS(
-              (pointee_decl_ty == DeclTy::PrimitiveTy &&
-               primitive_types[ptr_type.target_id].type == Primitive_t::F32) ||
-              (pointee_decl_ty == DeclTy::VectorTy &&
-               vector_types[ptr_type.target_id].width <= 4) ||
-              false);
-          uint32_t location =
-              find_decoration(spv::Decoration::DecorationLocation, var.id)
-                  .param1;
+          ASSERT_ALWAYS((pointee_decl_ty == DeclTy::PrimitiveTy &&
+                         primitive_types[ptr_type.target_id].type == Primitive_t::F32) ||
+                        (pointee_decl_ty == DeclTy::VectorTy &&
+                         vector_types[ptr_type.target_id].width <= 4) ||
+                        false);
+          uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
           ASSERT_ALWAYS(location >= 0);
           // For now just stupid array of structures
           ito(opt_subgroup_size) {
             // For pixel shader we need to interpolate pipeline inputs
             if (is_pixel_shader) {
-              llvm::Value *b_0 = llvm_builder->CreateExtractElement(
-                  barycentrics[i], (uint64_t)0);
-              llvm::Value *b_1 = llvm_builder->CreateExtractElement(
-                  barycentrics[i], (uint64_t)1);
-              llvm::Value *b_2 = llvm_builder->CreateExtractElement(
-                  barycentrics[i], (uint64_t)2);
+              llvm::Value *b_0   = llvm_builder->CreateExtractElement(barycentrics[i], (uint64_t)0);
+              llvm::Value *b_1   = llvm_builder->CreateExtractElement(barycentrics[i], (uint64_t)1);
+              llvm::Value *b_2   = llvm_builder->CreateExtractElement(barycentrics[i], (uint64_t)2);
               llvm::Value *gep_0 = llvm_builder->CreateGEP(
-                  input_ptr,
-                  llvm_get_constant_i32(input_storage_size * (i * 3 + 0) +
-                                        input_offsets[location]));
+                  input_ptr, llvm_get_constant_i32(input_storage_size * (i * 3 + 0) +
+                                                   input_offsets[location]));
               llvm::Value *gep_1 = llvm_builder->CreateGEP(
-                  input_ptr,
-                  llvm_get_constant_i32(input_storage_size * (i * 3 + 1) +
-                                        input_offsets[location]));
+                  input_ptr, llvm_get_constant_i32(input_storage_size * (i * 3 + 1) +
+                                                   input_offsets[location]));
               llvm::Value *gep_2 = llvm_builder->CreateGEP(
-                  input_ptr,
-                  llvm_get_constant_i32(input_storage_size * (i * 3 + 2) +
-                                        input_offsets[location]));
-              llvm::Value *bitcast_0 =
-                  llvm_builder->CreateBitCast(gep_0, llvm_type);
-              llvm::Value *bitcast_1 =
-                  llvm_builder->CreateBitCast(gep_1, llvm_type);
-              llvm::Value *bitcast_2 =
-                  llvm_builder->CreateBitCast(gep_2, llvm_type);
-              llvm::Value *val_0 = llvm_builder->CreateLoad(bitcast_0);
-              llvm::Value *val_1 = llvm_builder->CreateLoad(bitcast_1);
-              llvm::Value *val_2 = llvm_builder->CreateLoad(bitcast_2);
+                  input_ptr, llvm_get_constant_i32(input_storage_size * (i * 3 + 2) +
+                                                   input_offsets[location]));
+              llvm::Value *bitcast_0 = llvm_builder->CreateBitCast(gep_0, llvm_type);
+              llvm::Value *bitcast_1 = llvm_builder->CreateBitCast(gep_1, llvm_type);
+              llvm::Value *bitcast_2 = llvm_builder->CreateBitCast(gep_2, llvm_type);
+              llvm::Value *val_0     = llvm_builder->CreateLoad(bitcast_0);
+              llvm::Value *val_1     = llvm_builder->CreateLoad(bitcast_1);
+              llvm::Value *val_2     = llvm_builder->CreateLoad(bitcast_2);
               // Debug
               if (0) {
                 {
@@ -1491,52 +1382,42 @@ struct Spirv_Builder {
                   if
 
                       (num_elems == 3) {
-                    llvm::Value *reinterpret = llvm_builder->CreateBitCast(
-                        bitcast_0, llvm::Type::getFloatPtrTy(c));
-                    llvm_builder->CreateCall(dump_float3,
-                                             {state_ptr, reinterpret});
+                    llvm::Value *reinterpret =
+                        llvm_builder->CreateBitCast(bitcast_0, llvm::Type::getFloatPtrTy(c));
+                    llvm_builder->CreateCall(dump_float3, {state_ptr, reinterpret});
                   }
                 }
               }
               // TODO: handle more types/flat interpolation later
-              ASSERT_ALWAYS(val_0->getType()->isVectorTy() ||
-                            val_0->getType()->isFloatTy());
+              ASSERT_ALWAYS(val_0->getType()->isVectorTy() || val_0->getType()->isFloatTy());
               if (val_0->getType()->isVectorTy()) {
-                b_0 = llvm_builder->CreateVectorSplat(
-                    llvm_vec_num_elems(val_0->getType()), b_0);
-                b_1 = llvm_builder->CreateVectorSplat(
-                    llvm_vec_num_elems(val_0->getType()), b_1);
-                b_2 = llvm_builder->CreateVectorSplat(
-                    llvm_vec_num_elems(val_0->getType()), b_2);
+                b_0 = llvm_builder->CreateVectorSplat(llvm_vec_num_elems(val_0->getType()), b_0);
+                b_1 = llvm_builder->CreateVectorSplat(llvm_vec_num_elems(val_0->getType()), b_1);
+                b_2 = llvm_builder->CreateVectorSplat(llvm_vec_num_elems(val_0->getType()), b_2);
               }
-              val_0                  = llvm_builder->CreateFMul(val_0, b_0);
-              val_1                  = llvm_builder->CreateFMul(val_1, b_1);
-              val_2                  = llvm_builder->CreateFMul(val_2, b_2);
-              llvm::Value *final_val = llvm_builder->CreateFAdd(
-                  val_0, llvm_builder->CreateFAdd(val_1, val_2));
-              llvm::Value *alloca =
-                  llvm_builder->CreateAlloca(val_0->getType());
+              val_0 = llvm_builder->CreateFMul(val_0, b_0);
+              val_1 = llvm_builder->CreateFMul(val_1, b_1);
+              val_2 = llvm_builder->CreateFMul(val_2, b_2);
+              llvm::Value *final_val =
+                  llvm_builder->CreateFAdd(val_0, llvm_builder->CreateFAdd(val_1, val_2));
+              llvm::Value *alloca = llvm_builder->CreateAlloca(val_0->getType());
               llvm_builder->CreateStore(final_val, alloca);
               llvm_values_per_lane[i][var.id] = alloca;
             } else { // Just load raw input
               llvm::Value *gep = llvm_builder->CreateGEP(
-                  input_ptr, llvm_get_constant_i32(input_storage_size * i +
-                                                   input_offsets[location]));
-              llvm::Value *bitcast =
-                  llvm_builder->CreateBitCast(gep, llvm_type);
+                  input_ptr,
+                  llvm_get_constant_i32(input_storage_size * i + input_offsets[location]));
+              llvm::Value *bitcast            = llvm_builder->CreateBitCast(gep, llvm_type);
               llvm_values_per_lane[i][var.id] = bitcast;
             }
           }
           break;
         }
         case spv::StorageClass::StorageClassPushConstant: {
-          llvm::Value *pc_ptr =
-              llvm_builder->CreateCall(get_push_constant_ptr, state_ptr);
-          llvm::Value *llvm_value = llvm_builder->CreateBitCast(
-              pc_ptr, llvm_type, get_spv_name(var.id));
-          ito(opt_subgroup_size) {
-            llvm_values_per_lane[i][var.id] = llvm_value;
-          }
+          llvm::Value *pc_ptr = llvm_builder->CreateCall(get_push_constant_ptr, state_ptr);
+          llvm::Value *llvm_value =
+              llvm_builder->CreateBitCast(pc_ptr, llvm_type, get_spv_name(var.id));
+          ito(opt_subgroup_size) { llvm_values_per_lane[i][var.id] = llvm_value; }
           break;
         }
         default: UNIMPLEMENTED_(get_cstr(var.storage));
@@ -1562,19 +1443,18 @@ struct Spirv_Builder {
           static char                str_buf[0x100];
           std::vector<llvm::Type *>  AsmArgTypes;
           std::vector<llvm::Value *> AsmArgs;
-          snprintf(str_buf, sizeof(str_buf), "%s: word1: %i word2: %i",
-                   get_cstr((spv::Op)opcode), word1, word2);
-          llvm::FunctionType *AsmFTy = llvm::FunctionType::get(
-              llvm::Type::getVoidTy(c), AsmArgTypes, false);
-          llvm::InlineAsm *IA = llvm::InlineAsm::get(AsmFTy, str_buf, "", true,
-                                                     /* IsAlignStack */ false,
-                                                     llvm::InlineAsm::AD_ATT);
+          snprintf(str_buf, sizeof(str_buf), "%s: word1: %i word2: %i", get_cstr((spv::Op)opcode),
+                   word1, word2);
+          llvm::FunctionType *AsmFTy =
+              llvm::FunctionType::get(llvm::Type::getVoidTy(c), AsmArgTypes, false);
+          llvm::InlineAsm *IA =
+              llvm::InlineAsm::get(AsmFTy, str_buf, "", true,
+                                   /* IsAlignStack */ false, llvm::InlineAsm::AD_ATT);
           llvm::CallInst::Create(IA, AsmArgs, "", cur_bb);
         }
         cur_spirv_line++;
         if (cur_bb != NULL && opt_debug_info) {
-          llvm_builder->SetCurrentDebugLocation(
-              llvm::DebugLoc::get(cur_spirv_line, 0, di_scope));
+          llvm_builder->SetCurrentDebugLocation(llvm::DebugLoc::get(cur_spirv_line, 0, di_scope));
         }
 
         switch (opcode) {
@@ -1582,14 +1462,12 @@ struct Spirv_Builder {
           uint32_t id = word1;
           snprintf(name_buf, sizeof(name_buf), "label_%i", id);
 
-          llvm::BasicBlock *new_bb =
-              llvm::BasicBlock::Create(c, name_buf, cur_fun, NULL);
+          llvm::BasicBlock *new_bb = llvm::BasicBlock::Create(c, name_buf, cur_fun, NULL);
           if (cur_bb != NULL) {
             llvm::BranchInst::Create(new_bb, cur_bb);
           }
           cur_bb = new_bb;
-          llvm_builder.reset(
-              new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
+          llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
           llvm_labels[id] = cur_bb;
           break;
         }
@@ -1613,19 +1491,15 @@ struct Spirv_Builder {
             ito(indices.size()) {
               llvm::Value *index_val = indices[i];
               NOTNULL(index_val);
-              llvm::Type *pointee_type =
-                  val->getType()->getPointerElementType();
+              llvm::Type *pointee_type = val->getType()->getPointerElementType();
               NOTNULL(pointee_type);
               if (pointee_type->isStructTy()) {
-                llvm::StructType *struct_type =
-                    llvm::dyn_cast<llvm::StructType>(pointee_type);
+                llvm::StructType *struct_type = llvm::dyn_cast<llvm::StructType>(pointee_type);
                 NOTNULL(struct_type);
-                llvm::ConstantInt *integer =
-                    llvm::dyn_cast<llvm::ConstantInt>(index_val);
-                ASSERT_ALWAYS(
-                    integer != NULL &&
-                    "Access chain index must be OpConstant for structures");
-                uint32_t cval = (uint32_t)integer->getLimitedValue();
+                llvm::ConstantInt *integer = llvm::dyn_cast<llvm::ConstantInt>(index_val);
+                ASSERT_ALWAYS(integer != NULL &&
+                              "Access chain index must be OpConstant for structures");
+                uint32_t cval             = (uint32_t)integer->getLimitedValue();
                 uint32_t struct_member_id = cval;
                 bool     transpose        = false;
                 if (contains(member_transpose, struct_type) &&
@@ -1633,36 +1507,29 @@ struct Spirv_Builder {
                   transpose = true;
                 }
                 if (contains(member_reloc, pointee_type)) {
-                  std::vector<uint32_t> const &reloc_table =
-                      member_reloc[pointee_type];
-                  struct_member_id = reloc_table[cval];
+                  std::vector<uint32_t> const &reloc_table = member_reloc[pointee_type];
+                  struct_member_id                         = reloc_table[cval];
                 }
-                llvm::Type *member_type =
-                    struct_type->getElementType(struct_member_id);
+                llvm::Type *member_type = struct_type->getElementType(struct_member_id);
 
                 val = llvm_builder->CreateGEP(
-                    val, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
-                                                 (uint32_t)0),
+                    val, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), (uint32_t)0),
                           llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
                                                  (uint32_t)struct_member_id)});
                 if (transpose) {
                   llvm::Value *alloca = llvm_builder->CreateAlloca(member_type);
                   llvm_builder->CreateStore(
-                      llvm_matrix_transpose(llvm_builder->CreateLoad(val),
-                                            llvm_builder.get()),
+                      llvm_matrix_transpose(llvm_builder->CreateLoad(val), llvm_builder.get()),
                       alloca);
                   val = alloca;
                 }
                 // Make sure there is no reinterpretation at SPIRV level
-                ASSERT_ALWAYS(i != indices.size() - 1 ||
-                              result_type == val->getType());
+                ASSERT_ALWAYS(i != indices.size() - 1 || result_type == val->getType());
               } else {
                 if (i == indices.size() - 1) {
-                  llvm::Value *reinter =
-                      llvm_builder->CreateBitCast(val, result_type);
-                  llvm::Value *gep =
-                      llvm_builder->CreateGEP(reinter, index_val);
-                  val = gep;
+                  llvm::Value *reinter = llvm_builder->CreateBitCast(val, result_type);
+                  llvm::Value *gep     = llvm_builder->CreateGEP(reinter, index_val);
+                  val                  = gep;
                 } else {
                   llvm::Value *gep = llvm_builder->CreateGEP(val, index_val);
                   val              = gep;
@@ -1739,48 +1606,38 @@ struct Spirv_Builder {
           uint32_t           res_id      = word2;
           uint32_t           scope_id    = word3;
           llvm::Value *      scope_val   = llvm_global_values[scope_id];
-          llvm::ConstantInt *scope_const =
-              llvm::dyn_cast<llvm::ConstantInt>(scope_val);
+          llvm::ConstantInt *scope_const = llvm::dyn_cast<llvm::ConstantInt>(scope_val);
           NOTNULL(scope_const);
           uint32_t scope        = (uint32_t)scope_const->getLimitedValue();
           uint32_t predicate_id = word4;
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
           llvm::Type *result_type = llvm_types[res_type_id];
-          ASSERT_ALWAYS(result_type->isVectorTy() &&
-                        llvm_vec_num_elems(result_type) == 4 &&
-                        llvm_vec_elem_type(result_type) ==
-                            llvm::IntegerType::getInt32Ty(c));
-          llvm::Value *result_value =
-              llvm_builder->CreateVectorSplat(4, llvm_get_constant_i32(0));
+          ASSERT_ALWAYS(result_type->isVectorTy() && llvm_vec_num_elems(result_type) == 4 &&
+                        llvm_vec_elem_type(result_type) == llvm::IntegerType::getInt32Ty(c));
+          llvm::Value *result_value = llvm_builder->CreateVectorSplat(4, llvm_get_constant_i32(0));
           ASSERT_ALWAYS(opt_subgroup_size <= 64);
-          llvm::Value *result_elem_0 = llvm_builder->CreateAnd(
-              llvm_get_constant_i32(0), llvm_get_constant_i32(0));
-          llvm::Value *result_elem_1 = llvm_builder->CreateAnd(
-              llvm_get_constant_i32(0), llvm_get_constant_i32(0));
+          llvm::Value *result_elem_0 =
+              llvm_builder->CreateAnd(llvm_get_constant_i32(0), llvm_get_constant_i32(0));
+          llvm::Value *result_elem_1 =
+              llvm_builder->CreateAnd(llvm_get_constant_i32(0), llvm_get_constant_i32(0));
           kto(opt_subgroup_size) {
-            llvm::Value *pred_val = llvm_values_per_lane[k][predicate_id];
-            llvm::Value *lane_mask =
-                llvm_builder->CreateExtractElement(cur_mask, k);
-            llvm::Value *and_val = llvm_builder->CreateAnd(pred_val, lane_mask);
-            llvm::Value *zext    = llvm_builder->CreateZExt(
-                and_val, llvm::IntegerType::getInt32Ty(c));
+            llvm::Value *pred_val  = llvm_values_per_lane[k][predicate_id];
+            llvm::Value *lane_mask = llvm_builder->CreateExtractElement(cur_mask, k);
+            llvm::Value *and_val   = llvm_builder->CreateAnd(pred_val, lane_mask);
+            llvm::Value *zext = llvm_builder->CreateZExt(and_val, llvm::IntegerType::getInt32Ty(c));
             if (k < 32) {
-              llvm::Value *shift =
-                  llvm_builder->CreateShl(zext, llvm::APInt(32, k));
-              result_elem_0 = llvm_builder->CreateOr(shift, result_elem_0);
+              llvm::Value *shift = llvm_builder->CreateShl(zext, llvm::APInt(32, k));
+              result_elem_0      = llvm_builder->CreateOr(shift, result_elem_0);
             } else {
-              llvm::Value *shift =
-                  llvm_builder->CreateShl(zext, llvm::APInt(32, k - 32));
-              result_elem_1 = llvm_builder->CreateOr(shift, result_elem_1);
+              llvm::Value *shift = llvm_builder->CreateShl(zext, llvm::APInt(32, k - 32));
+              result_elem_1      = llvm_builder->CreateOr(shift, result_elem_1);
             }
           }
-          result_value = llvm_builder->CreateInsertElement(
-              result_value, result_elem_0, (uint64_t)0);
-          result_value = llvm_builder->CreateInsertElement(
-              result_value, result_elem_1, (uint64_t)1);
-          kto(opt_subgroup_size) {
-            llvm_values_per_lane[k][res_id] = result_value;
-          }
+          result_value =
+              llvm_builder->CreateInsertElement(result_value, result_elem_0, (uint64_t)0);
+          result_value =
+              llvm_builder->CreateInsertElement(result_value, result_elem_1, (uint64_t)1);
+          kto(opt_subgroup_size) { llvm_values_per_lane[k][res_id] = result_value; }
           break;
         }
         case spv::Op::OpGroupNonUniformBallotBitCount: {
@@ -1800,12 +1657,11 @@ struct Spirv_Builder {
           kto(opt_subgroup_size) {
             llvm::Value *val = llvm_values_per_lane[k][value_id];
             NOTNULL(val);
-            ASSERT_ALWAYS(val->getType()->isVectorTy() &&
-                          llvm_vec_num_elems(val->getType()) == 4 &&
+            ASSERT_ALWAYS(val->getType()->isVectorTy() && llvm_vec_num_elems(val->getType()) == 4 &&
                           llvm_vec_elem_type(val->getType())->isIntegerTy(32));
-            llvm::Value *lane_mask_i32 = llvm_builder->CreateSExt(
-                llvm_builder->CreateExtractElement(cur_mask, (uint64_t)k),
-                llvm::Type::getInt32Ty(c));
+            llvm::Value *lane_mask_i32 =
+                llvm_builder->CreateSExt(llvm_builder->CreateExtractElement(cur_mask, (uint64_t)k),
+                                         llvm::Type::getInt32Ty(c));
             llvm::Value *popcnt_0 = llvm_builder->CreateIntrinsic(
                 llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
                 {llvm_builder->CreateExtractElement(val, (uint64_t)0)});
@@ -1820,28 +1676,21 @@ struct Spirv_Builder {
                 {llvm_builder->CreateExtractElement(val, (uint64_t)3)});
             llvm::Value *popcnt = llvm_builder->CreateAdd(
                 popcnt_0,
-                llvm_builder->CreateAdd(
-                    popcnt_1, llvm_builder->CreateAdd(popcnt_2, popcnt_3)));
+                llvm_builder->CreateAdd(popcnt_1, llvm_builder->CreateAdd(popcnt_2, popcnt_3)));
             popcnt = llvm_builder->CreateAnd(lane_mask_i32, popcnt);
             scan.push_back(llvm_builder->CreateAdd(popcnt, scan.back()));
           }
           switch ((spv::GroupOperation)group_op) {
           case spv::GroupOperation::GroupOperationExclusiveScan: {
-            kto(opt_subgroup_size) {
-              llvm_values_per_lane[k][res_id] = scan[k];
-            }
+            kto(opt_subgroup_size) { llvm_values_per_lane[k][res_id] = scan[k]; }
             break;
           }
           case spv::GroupOperation::GroupOperationInclusiveScan: {
-            kto(opt_subgroup_size) {
-              llvm_values_per_lane[k][res_id] = scan[k + 1];
-            }
+            kto(opt_subgroup_size) { llvm_values_per_lane[k][res_id] = scan[k + 1]; }
             break;
           }
           case spv::GroupOperation::GroupOperationReduce: {
-            kto(opt_subgroup_size) {
-              llvm_values_per_lane[k][res_id] = scan.back();
-            }
+            kto(opt_subgroup_size) { llvm_values_per_lane[k][res_id] = scan.back(); }
             break;
           }
           default: UNIMPLEMENTED_(get_cstr((spv::GroupOperation)group_op));
@@ -1857,23 +1706,19 @@ struct Spirv_Builder {
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
           llvm::Value *result = llvm_builder->CreateVectorSplat(
               opt_subgroup_size,
-              llvm::Constant::getIntegerValue(llvm::Type::getInt1Ty(c),
-                                              llvm::APInt(1, 0)));
+              llvm::Constant::getIntegerValue(llvm::Type::getInt1Ty(c), llvm::APInt(1, 0)));
           ASSERT_ALWAYS(opt_subgroup_size <= 64);
-          llvm::Value *cur_mask_packed = llvm_builder->CreateBitCast(
-              cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
-          llvm::Value *cur_mask_i64 = llvm_builder->CreateZExt(
-              cur_mask_packed, llvm::IntegerType::get(c, 64));
-          llvm::Value *lsb =
-              llvm_builder->CreateCall(spv_lsb_i64, cur_mask_i64);
-          llvm::Value *election_mask =
-              llvm_builder->CreateShl(llvm_get_constant_i64(1), lsb);
+          llvm::Value *cur_mask_packed =
+              llvm_builder->CreateBitCast(cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
+          llvm::Value *cur_mask_i64 =
+              llvm_builder->CreateZExt(cur_mask_packed, llvm::IntegerType::get(c, 64));
+          llvm::Value *lsb           = llvm_builder->CreateCall(spv_lsb_i64, cur_mask_i64);
+          llvm::Value *election_mask = llvm_builder->CreateShl(llvm_get_constant_i64(1), lsb);
           kto(opt_subgroup_size) {
             // lane_bit = (i1)((election_mask >> k) & 1)
             llvm::Value *lane_bit = llvm_builder->CreateTrunc(
                 llvm_builder->CreateAnd(
-                    llvm_builder->CreateLShr(election_mask,
-                                             llvm_get_constant_i64(k)),
+                    llvm_builder->CreateLShr(election_mask, llvm_get_constant_i64(k)),
                     llvm_get_constant_i64(1)),
                 llvm::IntegerType::getInt1Ty(c));
             llvm_values_per_lane[k][res_id] = lane_bit;
@@ -1890,29 +1735,22 @@ struct Spirv_Builder {
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
           llvm::Type *result_type = llvm_types[res_type_id];
           NOTNULL(result_type);
-          llvm::ArrayType *result_arr =
-              llvm::ArrayType::get(result_type, opt_subgroup_size);
-          llvm::Value *result = llvm::UndefValue::get(result_arr);
+          llvm::ArrayType *result_arr = llvm::ArrayType::get(result_type, opt_subgroup_size);
+          llvm::Value *    result     = llvm::UndefValue::get(result_arr);
           kto(opt_subgroup_size) {
             llvm::Value *lane_val = llvm_values_per_lane[k][value_id];
-            result = llvm_builder->CreateInsertValue(result, lane_val,
-                                                     {(uint32_t)k});
+            result = llvm_builder->CreateInsertValue(result, lane_val, {(uint32_t)k});
           }
-          llvm::Value *cur_mask_packed = llvm_builder->CreateBitCast(
-              cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
-          llvm::Value *cur_mask_i64 = llvm_builder->CreateZExt(
-              cur_mask_packed, llvm::IntegerType::get(c, 64));
-          llvm::Value *lsb =
-              llvm_builder->CreateCall(spv_lsb_i64, cur_mask_i64);
-          llvm::Value *stack_proxy =
-              llvm_builder->CreateAlloca(result->getType());
+          llvm::Value *cur_mask_packed =
+              llvm_builder->CreateBitCast(cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
+          llvm::Value *cur_mask_i64 =
+              llvm_builder->CreateZExt(cur_mask_packed, llvm::IntegerType::get(c, 64));
+          llvm::Value *lsb         = llvm_builder->CreateCall(spv_lsb_i64, cur_mask_i64);
+          llvm::Value *stack_proxy = llvm_builder->CreateAlloca(result->getType());
           llvm_builder->CreateStore(result, stack_proxy);
-          llvm::Value *gep = llvm_builder->CreateGEP(
-              stack_proxy, {llvm_get_constant_i32(0), lsb});
+          llvm::Value *gep = llvm_builder->CreateGEP(stack_proxy, {llvm_get_constant_i32(0), lsb});
           llvm::Value *broadcast = llvm_builder->CreateLoad(gep);
-          kto(opt_subgroup_size) {
-            llvm_values_per_lane[k][res_id] = broadcast;
-          }
+          kto(opt_subgroup_size) { llvm_values_per_lane[k][res_id] = broadcast; }
           break;
         }
         case spv::Op::OpAtomicISub:
@@ -1931,8 +1769,7 @@ struct Spirv_Builder {
           //          spv::MemorySemanticsMask::MemorySemantics
           llvm::Type *result_type = llvm_types[res_type_id];
           NOTNULL(result_type);
-          ASSERT_ALWAYS(result_type->isIntegerTy() &&
-                        result_type->getIntegerBitWidth() == 32);
+          ASSERT_ALWAYS(result_type->isIntegerTy() && result_type->getIntegerBitWidth() == 32);
           // Do they have different pointers?
           kto(opt_subgroup_size) {
             llvm::Value *val = llvm_values_per_lane[k][value_id];
@@ -1941,11 +1778,9 @@ struct Spirv_Builder {
                           val->getType()->getIntegerBitWidth() == 32);
             llvm::Value *ptr = llvm_values_per_lane[k][pointer_id];
             NOTNULL(ptr);
-            ASSERT_ALWAYS(
-                ptr->getType()->isPointerTy() &&
-                ptr->getType()->getPointerElementType()->isIntegerTy() &&
-                ptr->getType()->getPointerElementType()->getIntegerBitWidth() ==
-                    32);
+            ASSERT_ALWAYS(ptr->getType()->isPointerTy() &&
+                          ptr->getType()->getPointerElementType()->isIntegerTy() &&
+                          ptr->getType()->getPointerElementType()->getIntegerBitWidth() == 32);
             llvm_values_per_lane[k][res_id] = llvm_builder->CreateCall(
                 // clang-format off
                 opcode == spv::Op::OpAtomicISub ? spv_atomic_sub_i32 :
@@ -1964,16 +1799,13 @@ struct Spirv_Builder {
           // (var, parent_bb)
           std::vector<std::pair<uint32_t, uint32_t>> vars;
           ASSERT_ALWAYS((WordCount - 3) % 2 == 0);
-          ito((WordCount - 3) / 2) {
-            vars.push_back({pCode[3 + i * 2], pCode[3 + i * 2 + 1]});
-          }
+          ito((WordCount - 3) / 2) { vars.push_back({pCode[3 + i * 2], pCode[3 + i * 2 + 1]}); }
           llvm::Type *result_type = llvm_types[res_type_id];
           NOTNULL(result_type);
           kto(opt_subgroup_size) {
-            llvm::PHINode *llvm_phi =
-                llvm_builder->CreatePHI(result_type, (uint32_t)vars.size());
+            llvm::PHINode *llvm_phi = llvm_builder->CreatePHI(result_type, (uint32_t)vars.size());
             ito(vars.size()) {
-              llvm::Value *     value = llvm_values_per_lane[k][vars[i].first];
+              llvm::Value *     value     = llvm_values_per_lane[k][vars[i].first];
               llvm::BasicBlock *parent_bb = llvm_labels[vars[i].second];
               NOTNULL(parent_bb);
               NOTNULL(value);
@@ -1983,13 +1815,13 @@ struct Spirv_Builder {
           }
           break;
         }
-#define SIMPLE_LLVM_OP(llvm_op)                                                \
-  kto(opt_subgroup_size) {                                                     \
-    ASSERT_ALWAYS(llvm_values_per_lane[k][word2] == NULL);                     \
-    ASSERT_ALWAYS(llvm_values_per_lane[k][word3] != NULL);                     \
-    ASSERT_ALWAYS(llvm_values_per_lane[k][word4] != NULL);                     \
-    llvm_values_per_lane[k][word2] = llvm_builder->llvm_op(                    \
-        llvm_values_per_lane[k][word3], llvm_values_per_lane[k][word4]);       \
+#define SIMPLE_LLVM_OP(llvm_op)                                                                    \
+  kto(opt_subgroup_size) {                                                                         \
+    ASSERT_ALWAYS(llvm_values_per_lane[k][word2] == NULL);                                         \
+    ASSERT_ALWAYS(llvm_values_per_lane[k][word3] != NULL);                                         \
+    ASSERT_ALWAYS(llvm_values_per_lane[k][word4] != NULL);                                         \
+    llvm_values_per_lane[k][word2] =                                                               \
+        llvm_builder->llvm_op(llvm_values_per_lane[k][word3], llvm_values_per_lane[k][word4]);     \
   };
         case spv::Op::OpIEqual: {
           SIMPLE_LLVM_OP(CreateICmpEQ);
@@ -2180,8 +2012,7 @@ struct Spirv_Builder {
             NOTNULL(dest_ty);
             llvm::Value *src_val = llvm_values_per_lane[k][word3];
             NOTNULL(src_val);
-            llvm_values_per_lane[k][word2] =
-                llvm_builder->CreateUIToFP(src_val, dest_ty);
+            llvm_values_per_lane[k][word2] = llvm_builder->CreateUIToFP(src_val, dest_ty);
           }
           break;
         }
@@ -2194,8 +2025,7 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpKill: {
-          llvm_builder->CreateCall(
-              kill, {state_ptr, llvm_get_constant_i32((uint32_t)~0)});
+          llvm_builder->CreateCall(kill, {state_ptr, llvm_get_constant_i32((uint32_t)~0)});
           break;
         }
         case spv::Op::OpVectorTimesScalar: {
@@ -2203,13 +2033,10 @@ struct Spirv_Builder {
             llvm::Value *vector = llvm_values_per_lane[k][word3];
             llvm::Value *scalar = llvm_values_per_lane[k][word4];
             ASSERT_ALWAYS(vector != NULL && scalar != NULL);
-            llvm::VectorType *vtype =
-                llvm::dyn_cast<llvm::VectorType>(vector->getType());
+            llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(vector->getType());
             ASSERT_ALWAYS(vtype != NULL);
-            llvm::Value *splat = llvm_builder->CreateVectorSplat(
-                llvm_vec_num_elems(vtype), scalar);
-            llvm_values_per_lane[k][word2] =
-                llvm_builder->CreateFMul(vector, splat);
+            llvm::Value *splat = llvm_builder->CreateVectorSplat(llvm_vec_num_elems(vtype), scalar);
+            llvm_values_per_lane[k][word2] = llvm_builder->CreateFMul(vector, splat);
           }
           break;
         }
@@ -2239,21 +2066,18 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(dst_type != NULL);
             if (dst_type->isVectorTy()) {
               llvm::Value *     undef = llvm::UndefValue::get(dst_type);
-              llvm::VectorType *vtype =
-                  llvm::dyn_cast<llvm::VectorType>(dst_type);
+              llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(dst_type);
               ASSERT_ALWAYS(vtype != NULL);
               llvm::Value *final_val = undef;
               ito(llvm_vec_num_elems(vtype)) {
                 llvm::Value *src = llvm_values_per_lane[k][pCode[3 + i]];
                 ASSERT_ALWAYS(src != NULL);
-                final_val =
-                    llvm_builder->CreateInsertElement(final_val, src, i);
+                final_val = llvm_builder->CreateInsertElement(final_val, src, i);
               }
               llvm_values_per_lane[k][word2] = final_val;
             } else if (dst_type->isArrayTy()) {
               llvm::Value *    undef = llvm::UndefValue::get(dst_type);
-              llvm::ArrayType *atype =
-                  llvm::dyn_cast<llvm::ArrayType>(dst_type);
+              llvm::ArrayType *atype = llvm::dyn_cast<llvm::ArrayType>(dst_type);
               ASSERT_ALWAYS(atype != NULL);
               llvm::Value *final_val = undef;
               ito(atype->getArrayNumElements()) {
@@ -2273,51 +2097,44 @@ struct Spirv_Builder {
             llvm::Value *op1 = llvm_values_per_lane[k][word3];
             llvm::Value *op2 = llvm_values_per_lane[k][word4];
             ASSERT_ALWAYS(op1 != NULL && op2 != NULL);
-            llvm::VectorType *vtype1 =
-                llvm::dyn_cast<llvm::VectorType>(op1->getType());
-            llvm::VectorType *vtype2 =
-                llvm::dyn_cast<llvm::VectorType>(op2->getType());
+            llvm::VectorType *vtype1 = llvm::dyn_cast<llvm::VectorType>(op1->getType());
+            llvm::VectorType *vtype2 = llvm::dyn_cast<llvm::VectorType>(op2->getType());
             ASSERT_ALWAYS(vtype1 != NULL && vtype2 != NULL);
             std::vector<uint32_t> indices;
-            for (uint16_t i = 5; i < WordCount; i++)
-              indices.push_back(pCode[i]);
+            for (uint16_t i = 5; i < WordCount; i++) indices.push_back(pCode[i]);
             // In LLVM shufflevector must have both operands of the same type
             // In SPIRV operands may be of different types
             // Handle the different size case by creating one big vector and
             // construct the final vector by extracting elements from it
             if (llvm_vec_num_elems(vtype1) != llvm_vec_num_elems(vtype2)) {
-              uint32_t total_width =
-                  llvm_vec_num_elems(vtype1) + llvm_vec_num_elems(vtype2);
-              llvm::VectorType *new_vtype = llvm::VectorType::get(
-                  llvm_vec_elem_type(vtype1), total_width);
+              uint32_t total_width = llvm_vec_num_elems(vtype1) + llvm_vec_num_elems(vtype2);
+              llvm::VectorType *new_vtype =
+                  llvm::VectorType::get(llvm_vec_elem_type(vtype1), total_width);
               // Create a dummy super vector and appedn op1 and op2 elements
               // to it
               llvm::Value *prev = llvm::UndefValue::get(new_vtype);
               ito(llvm_vec_num_elems(vtype1)) {
                 llvm::Value *extr = llvm_builder->CreateExtractElement(op1, i);
-                prev = llvm_builder->CreateInsertElement(prev, extr, i);
+                prev              = llvm_builder->CreateInsertElement(prev, extr, i);
               }
               uint32_t offset = llvm_vec_num_elems(vtype1);
               ito(llvm_vec_num_elems(vtype2)) {
                 llvm::Value *extr = llvm_builder->CreateExtractElement(op2, i);
-                prev =
-                    llvm_builder->CreateInsertElement(prev, extr, i + offset);
+                prev              = llvm_builder->CreateInsertElement(prev, extr, i + offset);
               }
               // Now we need to emit a chain of extact elements to make up the
               // result
-              llvm::VectorType *res_type = llvm::VectorType::get(
-                  llvm_vec_elem_type(vtype1), (uint32_t)indices.size());
+              llvm::VectorType *res_type =
+                  llvm::VectorType::get(llvm_vec_elem_type(vtype1), (uint32_t)indices.size());
               llvm::Value *res = llvm::UndefValue::get(res_type);
               ito(indices.size()) {
-                llvm::Value *elem =
-                    llvm_builder->CreateExtractElement(prev, indices[i]);
-                res = llvm_builder->CreateInsertElement(res, elem, i);
+                llvm::Value *elem = llvm_builder->CreateExtractElement(prev, indices[i]);
+                res               = llvm_builder->CreateInsertElement(res, elem, i);
               }
               llvm_values_per_lane[k][word2] = res;
             } else {
               ASSERT_ALWAYS(llvm_builder && cur_bb != NULL);
-              llvm_values_per_lane[k][word2] =
-                  llvm_builder->CreateShuffleVector(op1, op2, indices);
+              llvm_values_per_lane[k][word2] = llvm_builder->CreateShuffleVector(op1, op2, indices);
             }
           }
           break;
@@ -2329,16 +2146,13 @@ struct Spirv_Builder {
             uint32_t     op2_id  = word4;
             llvm::Value *op1_val = llvm_values_per_lane[k][op1_id];
             ASSERT_ALWAYS(op1_val != NULL);
-            llvm::VectorType *op1_vtype =
-                llvm::dyn_cast<llvm::VectorType>(op1_val->getType());
+            llvm::VectorType *op1_vtype = llvm::dyn_cast<llvm::VectorType>(op1_val->getType());
             ASSERT_ALWAYS(op1_vtype != NULL);
             llvm::Value *op2_val = llvm_values_per_lane[k][op2_id];
             ASSERT_ALWAYS(op2_val != NULL);
-            llvm::VectorType *op2_vtype =
-                llvm::dyn_cast<llvm::VectorType>(op2_val->getType());
+            llvm::VectorType *op2_vtype = llvm::dyn_cast<llvm::VectorType>(op2_val->getType());
             ASSERT_ALWAYS(op2_vtype != NULL);
-            ASSERT_ALWAYS(llvm_vec_num_elems(op1_vtype) ==
-                          llvm_vec_num_elems(op2_vtype));
+            ASSERT_ALWAYS(llvm_vec_num_elems(op1_vtype) == llvm_vec_num_elems(op2_vtype));
             switch (llvm_vec_num_elems(op1_vtype)) {
             case 2:
               llvm_values_per_lane[k][res_id] =
@@ -2368,22 +2182,18 @@ struct Spirv_Builder {
             kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
               ASSERT_ALWAYS(arg != NULL);
-              llvm::VectorType *vtype =
-                  llvm::dyn_cast<llvm::VectorType>(arg->getType());
+              llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(arg->getType());
               ASSERT_ALWAYS(vtype != NULL);
               uint32_t width = llvm_vec_num_elems(vtype);
               switch (width) {
               case 2:
-                llvm_values_per_lane[k][result_id] =
-                    llvm_builder->CreateCall(normalize_f2, {arg});
+                llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(normalize_f2, {arg});
                 break;
               case 3:
-                llvm_values_per_lane[k][result_id] =
-                    llvm_builder->CreateCall(normalize_f3, {arg});
+                llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(normalize_f3, {arg});
                 break;
               case 4:
-                llvm_values_per_lane[k][result_id] =
-                    llvm_builder->CreateCall(normalize_f4, {arg});
+                llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(normalize_f4, {arg});
                 break;
               default: UNIMPLEMENTED;
               }
@@ -2395,26 +2205,22 @@ struct Spirv_Builder {
             kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
               ASSERT_ALWAYS(arg != NULL);
-              llvm::VectorType *vtype =
-                  llvm::dyn_cast<llvm::VectorType>(arg->getType());
+              llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(arg->getType());
               if (vtype != NULL) {
 
                 ASSERT_ALWAYS(vtype != NULL);
                 uint32_t     width = llvm_vec_num_elems(vtype);
                 llvm::Value *prev  = arg;
                 ito(width) {
-                  llvm::Value *elem =
-                      llvm_builder->CreateExtractElement(arg, i);
-                  llvm::Value *sqrt =
-                      llvm_builder->CreateCall(spv_sqrt, {elem});
-                  prev = llvm_builder->CreateInsertElement(prev, sqrt, i);
+                  llvm::Value *elem = llvm_builder->CreateExtractElement(arg, i);
+                  llvm::Value *sqrt = llvm_builder->CreateCall(spv_sqrt, {elem});
+                  prev              = llvm_builder->CreateInsertElement(prev, sqrt, i);
                 }
                 llvm_values_per_lane[k][result_id] = prev;
               } else {
                 llvm::Type *type = arg->getType();
                 ASSERT_ALWAYS(type->isFloatTy());
-                llvm_values_per_lane[k][result_id] =
-                    llvm_builder->CreateCall(spv_sqrt, {arg});
+                llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_sqrt, {arg});
               }
             }
             break;
@@ -2424,22 +2230,18 @@ struct Spirv_Builder {
             kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
               ASSERT_ALWAYS(arg != NULL);
-              llvm::VectorType *vtype =
-                  llvm::dyn_cast<llvm::VectorType>(arg->getType());
+              llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(arg->getType());
               ASSERT_ALWAYS(vtype != NULL);
               uint32_t width = llvm_vec_num_elems(vtype);
               switch (width) {
               case 2:
-                llvm_values_per_lane[k][result_id] =
-                    llvm_builder->CreateCall(spv_length_f2, {arg});
+                llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_length_f2, {arg});
                 break;
               case 3:
-                llvm_values_per_lane[k][result_id] =
-                    llvm_builder->CreateCall(spv_length_f3, {arg});
+                llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_length_f3, {arg});
                 break;
               case 4:
-                llvm_values_per_lane[k][result_id] =
-                    llvm_builder->CreateCall(spv_length_f4, {arg});
+                llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_length_f4, {arg});
                 break;
               default: UNIMPLEMENTED;
               }
@@ -2453,8 +2255,7 @@ struct Spirv_Builder {
               ASSERT_ALWAYS(op1 != NULL);
               llvm::Value *op2 = llvm_values_per_lane[k][pCode[6]];
               ASSERT_ALWAYS(op2 != NULL);
-              llvm_values_per_lane[k][result_id] =
-                  llvm_builder->CreateCall(spv_cross, {op1, op2});
+              llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_cross, {op1, op2});
             }
             break;
           }
@@ -2471,7 +2272,7 @@ struct Spirv_Builder {
                 cmp = llvm_builder->CreateICmpULT(op1, op2);
               else
                 cmp = llvm_builder->CreateFCmpOLT(op1, op2);
-              llvm::Value *select = llvm_builder->CreateSelect(cmp, op1, op2);
+              llvm::Value *select                = llvm_builder->CreateSelect(cmp, op1, op2);
               llvm_values_per_lane[k][result_id] = select;
             }
             break;
@@ -2489,7 +2290,7 @@ struct Spirv_Builder {
                 cmp = llvm_builder->CreateICmpUGT(op1, op2);
               else
                 cmp = llvm_builder->CreateFCmpOGT(op1, op2);
-              llvm::Value *select = llvm_builder->CreateSelect(cmp, op1, op2);
+              llvm::Value *select                = llvm_builder->CreateSelect(cmp, op1, op2);
               llvm_values_per_lane[k][result_id] = select;
             }
             break;
@@ -2500,13 +2301,11 @@ struct Spirv_Builder {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[5]];
               ASSERT_ALWAYS(arg != NULL);
               if (arg->getType()->isVectorTy()) {
-                llvm::VectorType *vtype =
-                    llvm::dyn_cast<llvm::VectorType>(arg->getType());
-                llvm::Value *cmp = llvm_builder->CreateFCmpOLT(
-                    arg,
-                    llvm_builder->CreateVectorSplat(
-                        llvm_vec_num_elems(vtype),
-                        llvm::ConstantFP::get(llvm::Type::getFloatTy(c), 0.0)));
+                llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(arg->getType());
+                llvm::Value *     cmp   = llvm_builder->CreateFCmpOLT(
+                    arg, llvm_builder->CreateVectorSplat(
+                             llvm_vec_num_elems(vtype),
+                             llvm::ConstantFP::get(llvm::Type::getFloatTy(c), 0.0)));
                 llvm::Value *select = llvm_builder->CreateSelect(
                     cmp,
                     llvm_builder->CreateVectorSplat(
@@ -2539,8 +2338,7 @@ struct Spirv_Builder {
               llvm::Value *N = llvm_values_per_lane[k][word6];
               NOTNULL(I);
               NOTNULL(N);
-              llvm_values_per_lane[k][result_id] =
-                  llvm_builder->CreateCall(spv_reflect, {I, N});
+              llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_reflect, {I, N});
             }
             break;
           }
@@ -2552,8 +2350,7 @@ struct Spirv_Builder {
               llvm::Value *y = llvm_values_per_lane[k][word6];
               NOTNULL(x);
               NOTNULL(y);
-              llvm_values_per_lane[k][result_id] =
-                  llvm_builder->CreateCall(spv_pow, {x, y});
+              llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_pow, {x, y});
             }
             break;
           }
@@ -2578,28 +2375,23 @@ struct Spirv_Builder {
               NOTNULL(arg);
               llvm::Value *result = NULL;
               if (arg->getType()->isVectorTy()) {
-                llvm::VectorType *vtype =
-                    llvm::dyn_cast<llvm::VectorType>(arg->getType());
+                llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(arg->getType());
                 ASSERT_ALWAYS(vtype != NULL);
                 uint32_t width = llvm_vec_num_elems(vtype);
                 switch (width) {
                 case 2:
-                  llvm_values_per_lane[k][result_id] =
-                      llvm_builder->CreateCall(spv_fabs_f2, {arg});
+                  llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_fabs_f2, {arg});
                   break;
                 case 3:
-                  llvm_values_per_lane[k][result_id] =
-                      llvm_builder->CreateCall(spv_fabs_f3, {arg});
+                  llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_fabs_f3, {arg});
                   break;
                 case 4:
-                  llvm_values_per_lane[k][result_id] =
-                      llvm_builder->CreateCall(spv_fabs_f4, {arg});
+                  llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_fabs_f4, {arg});
                   break;
                 default: UNIMPLEMENTED;
                 }
               } else if (arg->getType()->isFloatTy()) {
-                llvm_values_per_lane[k][result_id] =
-                    llvm_builder->CreateCall(spv_fabs_f1, {arg});
+                llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_fabs_f1, {arg});
 
               } else {
                 UNIMPLEMENTED;
@@ -2616,7 +2408,7 @@ struct Spirv_Builder {
         case spv::Op::OpReturnValue: {
           ASSERT_ALWAYS(!contains(entries, item.first));
           uint32_t     ret_value_id = word1;
-          llvm::Value *arr = llvm::UndefValue::get(cur_fun->getReturnType());
+          llvm::Value *arr          = llvm::UndefValue::get(cur_fun->getReturnType());
           kto(opt_subgroup_size) {
             llvm::Value *ret_value = llvm_values_per_lane[k][ret_value_id];
             NOTNULL(ret_value);
@@ -2634,8 +2426,7 @@ struct Spirv_Builder {
           NOTNULL(cur_bb);
           if (contains(entries, item.first)) {
             for (auto &ds : deferred_stores) {
-              llvm::Value *cast = llvm_builder->CreateBitCast(
-                  ds.dst_ptr, ds.value_ptr->getType());
+              llvm::Value *cast  = llvm_builder->CreateBitCast(ds.dst_ptr, ds.value_ptr->getType());
               llvm::Value *deref = llvm_builder->CreateLoad(ds.value_ptr);
               llvm_builder->CreateStore(deref, cast);
             }
@@ -2670,8 +2461,7 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(res_type != NULL);
             llvm::Value *src = llvm_values_per_lane[k][src_id];
             ASSERT_ALWAYS(src != NULL);
-            llvm_values_per_lane[k][res_id] =
-                llvm_builder->CreateBitCast(src, res_type);
+            llvm_values_per_lane[k][res_id] = llvm_builder->CreateBitCast(src, res_type);
           }
           break;
         }
@@ -2688,8 +2478,7 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(coord != NULL);
             llvm::Value *texel = llvm_values_per_lane[k][texel_id];
             ASSERT_ALWAYS(texel != NULL);
-            llvm_builder->CreateCall(lookup_image_op(texel->getType(),
-                                                     coord->getType(),
+            llvm_builder->CreateCall(lookup_image_op(texel->getType(), coord->getType(),
                                                      /*read =*/false),
                                      {image, coord, texel});
           }
@@ -2710,8 +2499,7 @@ struct Spirv_Builder {
             llvm::Value *coord = llvm_values_per_lane[k][coord_id];
             ASSERT_ALWAYS(coord != NULL);
             llvm::Value *call = llvm_builder->CreateCall(
-                lookup_image_op(res_type, coord->getType(), /*read =*/true),
-                {image, coord});
+                lookup_image_op(res_type, coord->getType(), /*read =*/true), {image, coord});
             llvm_values_per_lane[k][res_id] = call;
           }
           break;
@@ -2721,8 +2509,7 @@ struct Spirv_Builder {
           uint32_t     res_id    = word2;
           llvm::Value *fun_value = llvm_global_values[fun_id];
           NOTNULL(fun_value);
-          llvm::Function *target_fun =
-              llvm::dyn_cast<llvm::Function>(fun_value);
+          llvm::Function *target_fun = llvm::dyn_cast<llvm::Function>(fun_value);
           NOTNULL(target_fun);
           llvm::SmallVector<llvm::Value *, 4> args;
           // Prepend state * and mask
@@ -2738,8 +2525,7 @@ struct Spirv_Builder {
           }
           llvm::Value *result = llvm_builder->CreateCall(target_fun, args);
           kto(opt_subgroup_size) {
-            llvm_values_per_lane[k][res_id] =
-                llvm_builder->CreateExtractValue(result, k);
+            llvm_values_per_lane[k][res_id] = llvm_builder->CreateExtractValue(result, k);
           }
           break;
         }
@@ -2753,18 +2539,15 @@ struct Spirv_Builder {
             llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
             llvm::Value *scalar = llvm_values_per_lane[k][scalar_id];
             NOTNULL(matrix);
-            ASSERT_ALWAYS(
-                matrix->getType()->isArrayTy() &&
-                matrix->getType()->getArrayElementType()->isVectorTy());
-            llvm::Value *result = llvm::UndefValue::get(matrix->getType());
-            uint32_t     row_size =
-                llvm_vec_num_elems(matrix->getType()->getArrayElementType());
+            ASSERT_ALWAYS(matrix->getType()->isArrayTy() &&
+                          matrix->getType()->getArrayElementType()->isVectorTy());
+            llvm::Value *result   = llvm::UndefValue::get(matrix->getType());
+            uint32_t     row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
             ito(matrix->getType()->getArrayNumElements()) {
               llvm::Value *row = llvm_builder->CreateExtractValue(matrix, i);
               result           = llvm_builder->CreateInsertValue(
                   result,
-                  llvm_builder->CreateFMul(
-                      row, llvm_builder->CreateVectorSplat(row_size, scalar)),
+                  llvm_builder->CreateFMul(row, llvm_builder->CreateVectorSplat(row_size, scalar)),
                   {0});
             }
             llvm_values_per_lane[k][result_id] = result;
@@ -2781,28 +2564,21 @@ struct Spirv_Builder {
             llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
             llvm::Value *vector = llvm_values_per_lane[k][vector_id];
             NOTNULL(matrix);
-            ASSERT_ALWAYS(
-                matrix->getType()->isArrayTy() &&
-                matrix->getType()->getArrayElementType()->isVectorTy());
+            ASSERT_ALWAYS(matrix->getType()->isArrayTy() &&
+                          matrix->getType()->getArrayElementType()->isVectorTy());
 
             uint32_t vector_size = llvm_vec_num_elems(vector->getType());
-            ASSERT_ALWAYS(vector_size ==
-                          matrix->getType()->getArrayNumElements());
-            uint32_t matrix_row_size =
-                llvm_vec_num_elems(matrix->getType()->getArrayElementType());
-            llvm::Type *result_type = llvm::VectorType::get(
-                llvm_vec_elem_type(vector->getType()), matrix_row_size);
-            llvm::Value *result = llvm::UndefValue::get(result_type);
-            llvm::Value *matrix_t =
-                llvm_matrix_transpose(matrix, llvm_builder.get());
+            ASSERT_ALWAYS(vector_size == matrix->getType()->getArrayNumElements());
+            uint32_t matrix_row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
+            llvm::Type *result_type =
+                llvm::VectorType::get(llvm_vec_elem_type(vector->getType()), matrix_row_size);
+            llvm::Value *result   = llvm::UndefValue::get(result_type);
+            llvm::Value *matrix_t = llvm_matrix_transpose(matrix, llvm_builder.get());
             llvm::SmallVector<llvm::Value *, 4> rows;
-            jto(matrix_row_size) {
-              rows.push_back(llvm_builder->CreateExtractValue(matrix_t, j));
-            }
+            jto(matrix_row_size) { rows.push_back(llvm_builder->CreateExtractValue(matrix_t, j)); }
             ito(matrix_row_size) {
-              llvm::Value *dot_result =
-                  llvm_dot(vector, rows[i], llvm_builder.get());
-              result = llvm_builder->CreateInsertElement(result, dot_result, i);
+              llvm::Value *dot_result = llvm_dot(vector, rows[i], llvm_builder.get());
+              result                  = llvm_builder->CreateInsertElement(result, dot_result, i);
             }
             llvm_values_per_lane[k][result_id] = result;
           }
@@ -2818,28 +2594,23 @@ struct Spirv_Builder {
             llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
             llvm::Value *vector = llvm_values_per_lane[k][vector_id];
             NOTNULL(matrix);
-            ASSERT_ALWAYS(
-                matrix->getType()->isArrayTy() &&
-                matrix->getType()->getArrayElementType()->isVectorTy());
+            ASSERT_ALWAYS(matrix->getType()->isArrayTy() &&
+                          matrix->getType()->getArrayElementType()->isVectorTy());
 
             uint32_t vector_size = llvm_vec_num_elems(vector->getType());
 
             uint32_t matrix_col_size = matrix->getType()->getArrayNumElements();
-            ASSERT_ALWAYS(
-                vector_size ==
-                llvm_vec_num_elems(matrix->getType()->getArrayElementType()));
+            ASSERT_ALWAYS(vector_size ==
+                          llvm_vec_num_elems(matrix->getType()->getArrayElementType()));
 
-            llvm::Type *result_type = llvm::VectorType::get(
-                llvm_vec_elem_type(vector->getType()), matrix_col_size);
-            llvm::Value *result = llvm::UndefValue::get(result_type);
+            llvm::Type *result_type =
+                llvm::VectorType::get(llvm_vec_elem_type(vector->getType()), matrix_col_size);
+            llvm::Value *                       result = llvm::UndefValue::get(result_type);
             llvm::SmallVector<llvm::Value *, 4> rows;
-            jto(matrix_col_size) {
-              rows.push_back(llvm_builder->CreateExtractValue(matrix, j));
-            }
+            jto(matrix_col_size) { rows.push_back(llvm_builder->CreateExtractValue(matrix, j)); }
             ito(matrix_col_size) {
-              llvm::Value *dot_result =
-                  llvm_dot(vector, rows[i], llvm_builder.get());
-              result = llvm_builder->CreateInsertElement(result, dot_result, i);
+              llvm::Value *dot_result = llvm_dot(vector, rows[i], llvm_builder.get());
+              result                  = llvm_builder->CreateInsertElement(result, dot_result, i);
             }
             llvm_values_per_lane[k][result_id] = result;
           }
@@ -2857,43 +2628,29 @@ struct Spirv_Builder {
             llvm::Value *matrix_2 = llvm_values_per_lane[u][matrix_2_id];
             NOTNULL(matrix_1);
             NOTNULL(matrix_2);
-            ASSERT_ALWAYS(
-                matrix_1->getType()->isArrayTy() &&
-                matrix_1->getType()->getArrayElementType()->isVectorTy());
-            ASSERT_ALWAYS(
-                matrix_2->getType()->isArrayTy() &&
-                matrix_2->getType()->getArrayElementType()->isVectorTy());
-            llvm::Type *elem_type =
-                llvm_vec_elem_type(matrix_1->getType()->getArrayElementType());
-            uint32_t N = (uint32_t)matrix_1->getType()->getArrayNumElements();
-            uint32_t K =
-                llvm_vec_num_elems(matrix_1->getType()->getArrayElementType());
-            uint32_t K_1 = (uint32_t)matrix_2->getType()->getArrayNumElements();
+            ASSERT_ALWAYS(matrix_1->getType()->isArrayTy() &&
+                          matrix_1->getType()->getArrayElementType()->isVectorTy());
+            ASSERT_ALWAYS(matrix_2->getType()->isArrayTy() &&
+                          matrix_2->getType()->getArrayElementType()->isVectorTy());
+            llvm::Type *elem_type = llvm_vec_elem_type(matrix_1->getType()->getArrayElementType());
+            uint32_t    N         = (uint32_t)matrix_1->getType()->getArrayNumElements();
+            uint32_t    K         = llvm_vec_num_elems(matrix_1->getType()->getArrayElementType());
+            uint32_t    K_1       = (uint32_t)matrix_2->getType()->getArrayNumElements();
             ASSERT_ALWAYS(K == K_1);
-            uint32_t M =
-                llvm_vec_num_elems(matrix_2->getType()->getArrayElementType());
+            uint32_t M = llvm_vec_num_elems(matrix_2->getType()->getArrayElementType());
 
-            llvm::Value *matrix_2_t =
-                llvm_matrix_transpose(matrix_2, llvm_builder.get());
+            llvm::Value *matrix_2_t = llvm_matrix_transpose(matrix_2, llvm_builder.get());
             llvm::SmallVector<llvm::Value *, 4> rows_1;
             llvm::SmallVector<llvm::Value *, 4> cols_2;
-            jto(K) {
-              cols_2.push_back(llvm_builder->CreateExtractValue(matrix_2_t, j));
-            }
-            jto(K) {
-              rows_1.push_back(llvm_builder->CreateExtractValue(matrix_1, j));
-            }
-            llvm::Type *result_type =
-                llvm::ArrayType::get(llvm::VectorType::get(elem_type, M), N);
-            llvm::Value *result = llvm::UndefValue::get(result_type);
+            jto(K) { cols_2.push_back(llvm_builder->CreateExtractValue(matrix_2_t, j)); }
+            jto(K) { rows_1.push_back(llvm_builder->CreateExtractValue(matrix_1, j)); }
+            llvm::Type * result_type = llvm::ArrayType::get(llvm::VectorType::get(elem_type, M), N);
+            llvm::Value *result      = llvm::UndefValue::get(result_type);
             ito(N) {
-              llvm::Value *result_row =
-                  llvm::UndefValue::get(result_type->getArrayElementType());
+              llvm::Value *result_row = llvm::UndefValue::get(result_type->getArrayElementType());
               jto(M) {
-                llvm::Value *dot_result =
-                    llvm_dot(rows_1[i], cols_2[j], llvm_builder.get());
-                result_row = llvm_builder->CreateInsertElement(result_row,
-                                                               dot_result, j);
+                llvm::Value *dot_result = llvm_dot(rows_1[i], cols_2[j], llvm_builder.get());
+                result_row = llvm_builder->CreateInsertElement(result_row, dot_result, j);
               }
               result = llvm_builder->CreateInsertValue(result, result_row, i);
             }
@@ -2921,12 +2678,10 @@ struct Spirv_Builder {
                 coord_elem_type = coord->getType();
               }
             } else {
-              ASSERT_ALWAYS(dim == 1 ||
-                            coord->getType()->isVectorTy() &&
-                                llvm_vec_num_elems(coord->getType()) == dim);
+              ASSERT_ALWAYS(dim == 1 || coord->getType()->isVectorTy() &&
+                                            llvm_vec_num_elems(coord->getType()) == dim);
               ASSERT_ALWAYS(dim == 1 && coord->getType() == coord_elem_type ||
-                            llvm_vec_elem_type(coord->getType()) ==
-                                coord_elem_type);
+                            llvm_vec_elem_type(coord->getType()) == coord_elem_type);
             }
           }
           llvm::SmallVector<llvm::Value *, 3> coordinates;
@@ -2941,17 +2696,14 @@ struct Spirv_Builder {
           //          llvm::Value *coordinate_array =
           //              llvm::UndefValue::get(coordinate_array_type);
           ito(dim) {
-            llvm::Type *dim_array_type =
-                llvm::ArrayType::get(coord_elem_type, opt_subgroup_size);
-            llvm::Value *dim_array = llvm_builder->CreateAlloca(dim_array_type);
-            llvm::Value *dim_ptr   = llvm_builder->CreateBitCast(
-                dim_array, llvm::PointerType::get(coord_elem_type, 0));
+            llvm::Type * dim_array_type = llvm::ArrayType::get(coord_elem_type, opt_subgroup_size);
+            llvm::Value *dim_array      = llvm_builder->CreateAlloca(dim_array_type);
+            llvm::Value *dim_ptr =
+                llvm_builder->CreateBitCast(dim_array, llvm::PointerType::get(coord_elem_type, 0));
             jto(opt_subgroup_size) {
-              llvm::Value *coord = llvm_values_per_lane[j][coordinate_id];
-              llvm::Value *coordinate_elem =
-                  llvm_builder->CreateExtractElement(coord, i);
-              llvm::Value *gep =
-                  llvm_builder->CreateGEP(dim_ptr, llvm_get_constant_i32(j));
+              llvm::Value *coord           = llvm_values_per_lane[j][coordinate_id];
+              llvm::Value *coordinate_elem = llvm_builder->CreateExtractElement(coord, i);
+              llvm::Value *gep = llvm_builder->CreateGEP(dim_ptr, llvm_get_constant_i32(j));
               llvm_builder->CreateStore(coordinate_elem, gep);
             }
             coordinates.push_back(dim_array);
@@ -2969,17 +2721,14 @@ struct Spirv_Builder {
             //                llvm_builder->CreateGEP(coordinate_array_alloca,
             //                {0, i});
             llvm::Value *dim_deriv_alloca = llvm_builder->CreateAlloca(
-                llvm::ArrayType::get(llvm::VectorType::get(coord_elem_type, 2),
-                                     opt_subgroup_size));
+                llvm::ArrayType::get(llvm::VectorType::get(coord_elem_type, 2), opt_subgroup_size));
             llvm::Value *float2_arr_to_ptr = llvm_builder->CreateBitCast(
                 dim_deriv_alloca,
-                llvm::PointerType::get(
-                    llvm::VectorType::get(coord_elem_type, 2), 0));
+                llvm::PointerType::get(llvm::VectorType::get(coord_elem_type, 2), 0));
             llvm_builder->CreateCall(
                 get_derivatives, {state_ptr,
                                   llvm_builder->CreateBitCast(
-                                      coordinates[i], llvm::PointerType::get(
-                                                          coord_elem_type, 0)),
+                                      coordinates[i], llvm::PointerType::get(coord_elem_type, 0)),
                                   float2_arr_to_ptr});
             //	    llvm::Value *dim_deriv = llvm_builder->CreateAlloca();
             //            derivatives.push_back();
@@ -2988,38 +2737,28 @@ struct Spirv_Builder {
           if (dim == 1) {
             UNIMPLEMENTED;
           } else if (dim == 2) {
-            llvm::Value *derivatives_x =
-                llvm_builder->CreateLoad(derivatives[0]);
-            llvm::Value *derivatives_y =
-                llvm_builder->CreateLoad(derivatives[1]);
+            llvm::Value *derivatives_x = llvm_builder->CreateLoad(derivatives[0]);
+            llvm::Value *derivatives_y = llvm_builder->CreateLoad(derivatives[1]);
             ito(opt_subgroup_size) {
-              llvm::Value *dudxdy =
-                  llvm_builder->CreateExtractValue(derivatives_x, {i});
-              llvm::Value *dvdxdy =
-                  llvm_builder->CreateExtractValue(derivatives_y, {i});
-              llvm::Value *dudx =
-                  llvm_builder->CreateExtractElement(dudxdy, (uint64_t)0);
-              llvm::Value *dvdx =
-                  llvm_builder->CreateExtractElement(dvdxdy, (uint64_t)0);
-              llvm::Value *dudy =
-                  llvm_builder->CreateExtractElement(dudxdy, (uint64_t)1);
-              llvm::Value *dvdy =
-                  llvm_builder->CreateExtractElement(dvdxdy, (uint64_t)1);
-              llvm::Value *combined_image =
-                  llvm_values_per_lane[i][sampled_image_id];
+              llvm::Value *dudxdy         = llvm_builder->CreateExtractValue(derivatives_x, {i});
+              llvm::Value *dvdxdy         = llvm_builder->CreateExtractValue(derivatives_y, {i});
+              llvm::Value *dudx           = llvm_builder->CreateExtractElement(dudxdy, (uint64_t)0);
+              llvm::Value *dvdx           = llvm_builder->CreateExtractElement(dvdxdy, (uint64_t)0);
+              llvm::Value *dudy           = llvm_builder->CreateExtractElement(dudxdy, (uint64_t)1);
+              llvm::Value *dvdy           = llvm_builder->CreateExtractElement(dvdxdy, (uint64_t)1);
+              llvm::Value *combined_image = llvm_values_per_lane[i][sampled_image_id];
               NOTNULL(combined_image);
               ASSERT_ALWAYS(combined_image->getType() == combined_image_t);
               llvm::Value *image_handle =
                   llvm_builder->CreateCall(get_combined_image, combined_image);
-              llvm::Value *sampler_handle = llvm_builder->CreateCall(
-                  get_combined_sampler, combined_image);
-              llvm::Value *coord = llvm_values_per_lane[i][coordinate_id];
+              llvm::Value *sampler_handle =
+                  llvm_builder->CreateCall(get_combined_sampler, combined_image);
+              llvm::Value *coord                 = llvm_values_per_lane[i][coordinate_id];
               llvm_values_per_lane[i][result_id] = llvm_builder->CreateCall(
                   spv_image_sample_2d_float4,
                   {image_handle, sampler_handle,
                    llvm_builder->CreateExtractElement(coord, (uint64_t)0),
-                   llvm_builder->CreateExtractElement(coord, (uint64_t)1), dudx,
-                   dudy, dvdx, dvdy});
+                   llvm_builder->CreateExtractElement(coord, (uint64_t)1), dudx, dudy, dvdx, dvdy});
             }
           } else {
             UNIMPLEMENTED;
@@ -3367,8 +3106,7 @@ struct Spirv_Builder {
         case spv::Op::OpTypeAvcImeDualReferenceStreaminINTEL:
         case spv::Op::OpTypeAvcRefResultINTEL:
         case spv::Op::OpTypeAvcSicResultINTEL:
-        case spv::Op::
-            OpSubgroupAvcMceGetDefaultInterBaseMultiReferencePenaltyINTEL:
+        case spv::Op::OpSubgroupAvcMceGetDefaultInterBaseMultiReferencePenaltyINTEL:
         case spv::Op::OpSubgroupAvcMceSetInterBaseMultiReferencePenaltyINTEL:
         case spv::Op::OpSubgroupAvcMceGetDefaultInterShapePenaltyINTEL:
         case spv::Op::OpSubgroupAvcMceSetInterShapePenaltyINTEL:
@@ -3385,10 +3123,8 @@ struct Spirv_Builder {
         case spv::Op::OpSubgroupAvcMceGetDefaultIntraChromaModeBasePenaltyINTEL:
         case spv::Op::OpSubgroupAvcMceSetAcOnlyHaarINTEL:
         case spv::Op::OpSubgroupAvcMceSetSourceInterlacedFieldPolarityINTEL:
-        case spv::Op::
-            OpSubgroupAvcMceSetSingleReferenceInterlacedFieldPolarityINTEL:
-        case spv::Op::
-            OpSubgroupAvcMceSetDualReferenceInterlacedFieldPolaritiesINTEL:
+        case spv::Op::OpSubgroupAvcMceSetSingleReferenceInterlacedFieldPolarityINTEL:
+        case spv::Op::OpSubgroupAvcMceSetDualReferenceInterlacedFieldPolaritiesINTEL:
         case spv::Op::OpSubgroupAvcMceConvertToImePayloadINTEL:
         case spv::Op::OpSubgroupAvcMceConvertToImeResultINTEL:
         case spv::Op::OpSubgroupAvcMceConvertToRefPayloadINTEL:
@@ -3403,8 +3139,7 @@ struct Spirv_Builder {
         case spv::Op::OpSubgroupAvcMceGetInterDirectionsINTEL:
         case spv::Op::OpSubgroupAvcMceGetInterMotionVectorCountINTEL:
         case spv::Op::OpSubgroupAvcMceGetInterReferenceIdsINTEL:
-        case spv::Op::
-            OpSubgroupAvcMceGetInterReferenceInterlacedFieldPolaritiesINTEL:
+        case spv::Op::OpSubgroupAvcMceGetInterReferenceInterlacedFieldPolaritiesINTEL:
         case spv::Op::OpSubgroupAvcImeInitializeINTEL:
         case spv::Op::OpSubgroupAvcImeSetSingleReferenceINTEL:
         case spv::Op::OpSubgroupAvcImeSetDualReferenceINTEL:
@@ -3421,32 +3156,23 @@ struct Spirv_Builder {
         case spv::Op::OpSubgroupAvcImeEvaluateWithDualReferenceStreaminINTEL:
         case spv::Op::OpSubgroupAvcImeEvaluateWithSingleReferenceStreamoutINTEL:
         case spv::Op::OpSubgroupAvcImeEvaluateWithDualReferenceStreamoutINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeEvaluateWithSingleReferenceStreaminoutINTEL:
+        case spv::Op::OpSubgroupAvcImeEvaluateWithSingleReferenceStreaminoutINTEL:
         case spv::Op::OpSubgroupAvcImeEvaluateWithDualReferenceStreaminoutINTEL:
         case spv::Op::OpSubgroupAvcImeConvertToMceResultINTEL:
         case spv::Op::OpSubgroupAvcImeGetSingleReferenceStreaminINTEL:
         case spv::Op::OpSubgroupAvcImeGetDualReferenceStreaminINTEL:
         case spv::Op::OpSubgroupAvcImeStripSingleReferenceStreamoutINTEL:
         case spv::Op::OpSubgroupAvcImeStripDualReferenceStreamoutINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeMotionVectorsINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeDistortionsINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeReferenceIdsINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeMotionVectorsINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeDistortionsINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeReferenceIdsINTEL:
+        case spv::Op::OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeMotionVectorsINTEL:
+        case spv::Op::OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeDistortionsINTEL:
+        case spv::Op::OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeReferenceIdsINTEL:
+        case spv::Op::OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeMotionVectorsINTEL:
+        case spv::Op::OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeDistortionsINTEL:
+        case spv::Op::OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeReferenceIdsINTEL:
         case spv::Op::OpSubgroupAvcImeGetBorderReachedINTEL:
         case spv::Op::OpSubgroupAvcImeGetTruncatedSearchIndicationINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeGetUnidirectionalEarlySearchTerminationINTEL:
-        case spv::Op::
-            OpSubgroupAvcImeGetWeightingPatternMinimumMotionVectorINTEL:
+        case spv::Op::OpSubgroupAvcImeGetUnidirectionalEarlySearchTerminationINTEL:
+        case spv::Op::OpSubgroupAvcImeGetWeightingPatternMinimumMotionVectorINTEL:
         case spv::Op::OpSubgroupAvcImeGetWeightingPatternMinimumDistortionINTEL:
         case spv::Op::OpSubgroupAvcFmeInitializeINTEL:
         case spv::Op::OpSubgroupAvcBmeInitializeINTEL:
@@ -3507,18 +3233,16 @@ struct Spirv_Builder {
           NOTNULL(cond);
           new_mask = llvm_builder->CreateInsertElement(
               new_mask,
-              llvm_builder->CreateAnd(
-                  llvm_builder->CreateExtractElement(new_mask, (uint64_t)0),
-                  cond),
+              llvm_builder->CreateAnd(llvm_builder->CreateExtractElement(new_mask, (uint64_t)0),
+                                      cond),
               (uint32_t)k);
         }
         // TODO(aschrein) actual mask handling
-        llvm::Value *new_mask_packed = llvm_builder->CreateBitCast(
-            new_mask, llvm::IntegerType::get(c, opt_subgroup_size));
-        llvm::Value *new_mask_i64 = llvm_builder->CreateZExt(
-            new_mask_packed, llvm::IntegerType::get(c, 64));
-        llvm::Value *cmp =
-            llvm_builder->CreateICmpEQ(new_mask_i64, llvm_get_constant_i64(0));
+        llvm::Value *new_mask_packed =
+            llvm_builder->CreateBitCast(new_mask, llvm::IntegerType::get(c, opt_subgroup_size));
+        llvm::Value *new_mask_i64 =
+            llvm_builder->CreateZExt(new_mask_packed, llvm::IntegerType::get(c, 64));
+        llvm::Value *cmp = llvm_builder->CreateICmpEQ(new_mask_i64, llvm_get_constant_i64(0));
         llvm::BranchInst::Create(dst_true, dst_false, cmp, bb);
       }
       for (auto &j : deferred_jumps) {
@@ -3537,13 +3261,10 @@ struct Spirv_Builder {
     {
       llvm::Function *get_private_size = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_private_size",
-          module.get());
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_private_size);
-      llvm::ReturnInst::Create(
-          c, llvm::ConstantInt::get(c, llvm::APInt(32, private_storage_size)),
-          bb);
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_private_size", module.get());
+      llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_private_size);
+      llvm::ReturnInst::Create(c, llvm::ConstantInt::get(c, llvm::APInt(32, private_storage_size)),
+                               bb);
     }
     // Function returns the amount of items that this module generates
     // Like in this case there would be 4 items
@@ -3555,32 +3276,25 @@ struct Spirv_Builder {
     {
       llvm::Function *get_export_count = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_export_count",
-          module.get());
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_export_count);
-      uint32_t field_count = 0;
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_export_count", module.get());
+      llvm::BasicBlock *bb          = llvm::BasicBlock::Create(c, "entry", get_export_count);
+      uint32_t          field_count = 0;
       for (auto &item : struct_types) {
         if (item.second.is_builtin) {
-          ASSERT_ALWAYS(field_count == 0 &&
-                        "Only one export structure per module is allowed");
+          ASSERT_ALWAYS(field_count == 0 && "Only one export structure per module is allowed");
           field_count = (uint32_t)item.second.member_types.size();
         }
       }
-      llvm::ReturnInst::Create(
-          c, llvm::ConstantInt::get(c, llvm::APInt(32, field_count)), bb);
+      llvm::ReturnInst::Create(c, llvm::ConstantInt::get(c, llvm::APInt(32, field_count)), bb);
     }
     // Now enumerate all the items that are exported
     {
       llvm::Function *get_export_items = llvm::Function::Create(
-          llvm::FunctionType::get(llvm::Type::getVoidTy(c),
-                                  {llvm::Type::getInt32PtrTy(c)}, false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_export_items",
-          module.get());
+          llvm::FunctionType::get(llvm::Type::getVoidTy(c), {llvm::Type::getInt32PtrTy(c)}, false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_export_items", module.get());
       llvm::Value *ptr_arg = get_export_items->getArg(0);
       NOTNULL(ptr_arg);
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_export_items);
+      llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_export_items);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
 
@@ -3589,10 +3303,8 @@ struct Spirv_Builder {
         if (item.second.is_builtin) {
           ASSERT_ALWAYS(i == 0);
           for (auto &member_builtin_id : item.second.member_builtins) {
-            llvm::Value *gep =
-                llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(i));
-            llvm_builder->CreateStore(llvm_get_constant_i32(member_builtin_id),
-                                      gep);
+            llvm::Value *gep = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(i));
+            llvm_builder->CreateStore(llvm_get_constant_i32(member_builtin_id), gep);
             i++;
           }
         }
@@ -3602,54 +3314,40 @@ struct Spirv_Builder {
     {
       llvm::Function *get_input_count = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_count",
-          module.get());
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_input_count);
-      uint32_t input_count = 0;
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_count", module.get());
+      llvm::BasicBlock *bb          = llvm::BasicBlock::Create(c, "entry", get_input_count);
+      uint32_t          input_count = 0;
       ito(input_sizes.size()) {
         if (input_sizes[i] != 0) input_count++;
       }
-      llvm::ReturnInst::Create(
-          c, llvm::ConstantInt::get(c, llvm::APInt(32, input_count)), bb);
+      llvm::ReturnInst::Create(c, llvm::ConstantInt::get(c, llvm::APInt(32, input_count)), bb);
     }
     {
       llvm::Function *get_input_stride = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_stride",
-          module.get());
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_input_stride);
-      llvm::ReturnInst::Create(
-          c, llvm::ConstantInt::get(c, llvm::APInt(32, input_storage_size)),
-          bb);
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_stride", module.get());
+      llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_input_stride);
+      llvm::ReturnInst::Create(c, llvm::ConstantInt::get(c, llvm::APInt(32, input_storage_size)),
+                               bb);
     }
     {
       llvm::Function *get_input_slots = llvm::Function::Create(
-          llvm::FunctionType::get(llvm::Type::getVoidTy(c),
-                                  {llvm::Type::getInt32PtrTy(c)}, false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_slots",
-          module.get());
+          llvm::FunctionType::get(llvm::Type::getVoidTy(c), {llvm::Type::getInt32PtrTy(c)}, false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_input_slots", module.get());
       llvm::Value *ptr_arg = get_input_slots->getArg(0);
       NOTNULL(ptr_arg);
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_input_slots);
+      llvm::BasicBlock *                 bb = llvm::BasicBlock::Create(c, "entry", get_input_slots);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
       uint32_t k = 0;
       ito(input_sizes.size()) {
         if (input_sizes[i] != 0) {
-          llvm::Value *gep_0 =
-              llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3));
-          llvm::Value *gep_1 = llvm_builder->CreateGEP(
-              ptr_arg, llvm_get_constant_i32(k * 3 + 1));
-          llvm::Value *gep_2 = llvm_builder->CreateGEP(
-              ptr_arg, llvm_get_constant_i32(k * 3 + 2));
+          llvm::Value *gep_0 = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3));
+          llvm::Value *gep_1 = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3 + 1));
+          llvm::Value *gep_2 = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3 + 2));
           llvm_builder->CreateStore(llvm_get_constant_i32(i), gep_0);
-          llvm_builder->CreateStore(llvm_get_constant_i32(input_offsets[i]),
-                                    gep_1);
-          llvm_builder->CreateStore(llvm_get_constant_i32(input_formats[i]),
-                                    gep_2);
+          llvm_builder->CreateStore(llvm_get_constant_i32(input_offsets[i]), gep_1);
+          llvm_builder->CreateStore(llvm_get_constant_i32(input_formats[i]), gep_2);
           k++;
         }
       }
@@ -3658,54 +3356,40 @@ struct Spirv_Builder {
     {
       llvm::Function *get_output_count = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_count",
-          module.get());
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_output_count);
-      uint32_t output_count = 0;
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_count", module.get());
+      llvm::BasicBlock *bb           = llvm::BasicBlock::Create(c, "entry", get_output_count);
+      uint32_t          output_count = 0;
       ito(output_sizes.size()) {
         if (output_sizes[i] != 0) output_count++;
       }
-      llvm::ReturnInst::Create(
-          c, llvm::ConstantInt::get(c, llvm::APInt(32, output_count)), bb);
+      llvm::ReturnInst::Create(c, llvm::ConstantInt::get(c, llvm::APInt(32, output_count)), bb);
     }
     {
       llvm::Function *get_output_stride = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_stride",
-          module.get());
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_output_stride);
-      llvm::ReturnInst::Create(
-          c, llvm::ConstantInt::get(c, llvm::APInt(32, output_storage_size)),
-          bb);
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_stride", module.get());
+      llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_output_stride);
+      llvm::ReturnInst::Create(c, llvm::ConstantInt::get(c, llvm::APInt(32, output_storage_size)),
+                               bb);
     }
     {
       llvm::Function *get_output_slots = llvm::Function::Create(
-          llvm::FunctionType::get(llvm::Type::getVoidTy(c),
-                                  {llvm::Type::getInt32PtrTy(c)}, false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_slots",
-          module.get());
+          llvm::FunctionType::get(llvm::Type::getVoidTy(c), {llvm::Type::getInt32PtrTy(c)}, false),
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_output_slots", module.get());
       llvm::Value *ptr_arg = get_output_slots->getArg(0);
       NOTNULL(ptr_arg);
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_output_slots);
+      llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_output_slots);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
       uint32_t k = 0;
       ito(output_sizes.size()) {
         if (output_sizes[i] != 0) {
-          llvm::Value *gep_0 =
-              llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3));
-          llvm::Value *gep_1 = llvm_builder->CreateGEP(
-              ptr_arg, llvm_get_constant_i32(k * 3 + 1));
-          llvm::Value *gep_2 = llvm_builder->CreateGEP(
-              ptr_arg, llvm_get_constant_i32(k * 3 + 2));
+          llvm::Value *gep_0 = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3));
+          llvm::Value *gep_1 = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3 + 1));
+          llvm::Value *gep_2 = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3 + 2));
           llvm_builder->CreateStore(llvm_get_constant_i32(i), gep_0);
-          llvm_builder->CreateStore(llvm_get_constant_i32(output_offsets[i]),
-                                    gep_1);
-          llvm_builder->CreateStore(llvm_get_constant_i32(output_formats[i]),
-                                    gep_2);
+          llvm_builder->CreateStore(llvm_get_constant_i32(output_offsets[i]), gep_1);
+          llvm_builder->CreateStore(llvm_get_constant_i32(output_formats[i]), gep_2);
           k++;
         }
       }
@@ -3714,12 +3398,10 @@ struct Spirv_Builder {
     {
       llvm::Function *get_subgroup_size = llvm::Function::Create(
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
-          llvm::Function::LinkageTypes::ExternalLinkage, "get_subgroup_size",
-          module.get());
-      llvm::BasicBlock *bb =
-          llvm::BasicBlock::Create(c, "entry", get_subgroup_size);
-      llvm::ReturnInst::Create(
-          c, llvm::ConstantInt::get(c, llvm::APInt(32, opt_subgroup_size)), bb);
+          llvm::Function::LinkageTypes::ExternalLinkage, "get_subgroup_size", module.get());
+      llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_subgroup_size);
+      llvm::ReturnInst::Create(c, llvm::ConstantInt::get(c, llvm::APInt(32, opt_subgroup_size)),
+                               bb);
     }
     // TODO(aschrein): investigate why LLVM removes code after tail calls in
     // this module.
@@ -3750,7 +3432,7 @@ struct Spirv_Builder {
   void parse_meta(const uint32_t *pCode, size_t codeSize) {
     this->code      = pCode;
     this->code_size = codeSize;
-    code_hash = hash_of(string_ref{(char const *)pCode, (size_t)codeSize * 4});
+    code_hash       = hash_of(string_ref{(char const *)pCode, (size_t)codeSize * 4});
     if (opt_dump) {
       TMP_STORAGE_SCOPE;
       char buf[0x100];
@@ -3761,16 +3443,16 @@ struct Spirv_Builder {
         make_dir_recursive(dir);
         snprintf(buf, sizeof(buf), "%lx.spirv", code_hash);
         string_ref final_path = stref_concat(dir, stref_s(buf));
-        snprintf(shader_dump_path, sizeof(shader_dump_path), "%.*s",
-                 (int)final_path.len, final_path.ptr);
+        snprintf(shader_dump_path, sizeof(shader_dump_path), "%.*s", (int)final_path.len,
+                 final_path.ptr);
         spv_context context = spvContextCreate(SPV_ENV_VULKAN_1_2);
         uint32_t    options = SPV_BINARY_TO_TEXT_OPTION_NONE;
         options |= SPV_BINARY_TO_TEXT_OPTION_NO_HEADER;
         options |= SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES;
         spv_text       text;
         spv_diagnostic diagnostic = nullptr;
-        spv_result_t error = spvBinaryToText(context, pCode, code_size, options,
-                                             &text, &diagnostic);
+        spv_result_t   error =
+            spvBinaryToText(context, pCode, code_size, options, &text, &diagnostic);
         spvContextDestroy(context);
         dump_file(stref_to_tmp_cstr(final_path), text->str, text->length);
         spvTextDestroy(text);
@@ -3850,21 +3532,17 @@ struct Spirv_Builder {
         break;
       }
       case spv::Op::OpTypeVoid: {
-        primitive_types[word1] =
-            PrimitiveTy{.id = word1, .type = Primitive_t::Void};
+        primitive_types[word1] = PrimitiveTy{.id = word1, .type = Primitive_t::Void};
         CLASSIFY(word1, DeclTy::PrimitiveTy);
         break;
       }
       case spv::Op::OpTypeFloat: {
         if (word2 == 16)
-          primitive_types[word1] =
-              PrimitiveTy{.id = word1, .type = Primitive_t::F16};
+          primitive_types[word1] = PrimitiveTy{.id = word1, .type = Primitive_t::F16};
         else if (word2 == 32)
-          primitive_types[word1] =
-              PrimitiveTy{.id = word1, .type = Primitive_t::F32};
+          primitive_types[word1] = PrimitiveTy{.id = word1, .type = Primitive_t::F32};
         else if (word2 == 64)
-          primitive_types[word1] =
-              PrimitiveTy{.id = word1, .type = Primitive_t::F64};
+          primitive_types[word1] = PrimitiveTy{.id = word1, .type = Primitive_t::F64};
         else {
           UNIMPLEMENTED;
         }
@@ -3872,28 +3550,24 @@ struct Spirv_Builder {
         break;
       }
       case spv::Op::OpTypeBool: {
-        primitive_types[word1] =
-            PrimitiveTy{.id = word1, .type = Primitive_t::I1};
+        primitive_types[word1] = PrimitiveTy{.id = word1, .type = Primitive_t::I1};
         CLASSIFY(word1, DeclTy::PrimitiveTy);
         break;
       }
       case spv::Op::OpTypeInt: {
         bool sign = word3 != 0;
         if (word2 == 8)
-          primitive_types[word1] = PrimitiveTy{
-              .id = word1, .type = (sign ? Primitive_t::I8 : Primitive_t::U8)};
+          primitive_types[word1] =
+              PrimitiveTy{.id = word1, .type = (sign ? Primitive_t::I8 : Primitive_t::U8)};
         else if (word2 == 16)
           primitive_types[word1] =
-              PrimitiveTy{.id   = word1,
-                          .type = (sign ? Primitive_t::I16 : Primitive_t::U16)};
+              PrimitiveTy{.id = word1, .type = (sign ? Primitive_t::I16 : Primitive_t::U16)};
         else if (word2 == 32)
           primitive_types[word1] =
-              PrimitiveTy{.id   = word1,
-                          .type = (sign ? Primitive_t::I32 : Primitive_t::U32)};
+              PrimitiveTy{.id = word1, .type = (sign ? Primitive_t::I32 : Primitive_t::U32)};
         else if (word2 == 64)
           primitive_types[word1] =
-              PrimitiveTy{.id   = word1,
-                          .type = (sign ? Primitive_t::I64 : Primitive_t::U64)};
+              PrimitiveTy{.id = word1, .type = (sign ? Primitive_t::I64 : Primitive_t::U64)};
         else {
           UNIMPLEMENTED;
         }
@@ -3956,19 +3630,15 @@ struct Spirv_Builder {
           type.member_builtins.push_back(spv::BuiltIn::BuiltInMax);
         }
         ito(type.member_types.size()) {
-          if (has_member_decoration(spv::Decoration::DecorationBuiltIn, type.id,
-                                    i)) {
+          if (has_member_decoration(spv::Decoration::DecorationBuiltIn, type.id, i)) {
             type.is_builtin = true;
             type.member_builtins[i] =
-                (spv::BuiltIn)find_member_decoration(
-                    spv::Decoration::DecorationBuiltIn, type.id, i)
+                (spv::BuiltIn)find_member_decoration(spv::Decoration::DecorationBuiltIn, type.id, i)
                     .param1;
           } else {
             ASSERT_ALWAYS(type.is_builtin == false);
             type.member_offsets[i] =
-                find_member_decoration(spv::Decoration::DecorationOffset,
-                                       type.id, i)
-                    .param1;
+                find_member_decoration(spv::Decoration::DecorationOffset, type.id, i).param1;
           }
         }
         type.size           = 0;
@@ -4498,8 +4168,7 @@ struct Spirv_Builder {
       case spv::Op::OpTypeAvcImeDualReferenceStreaminINTEL:
       case spv::Op::OpTypeAvcRefResultINTEL:
       case spv::Op::OpTypeAvcSicResultINTEL:
-      case spv::Op::
-          OpSubgroupAvcMceGetDefaultInterBaseMultiReferencePenaltyINTEL:
+      case spv::Op::OpSubgroupAvcMceGetDefaultInterBaseMultiReferencePenaltyINTEL:
       case spv::Op::OpSubgroupAvcMceSetInterBaseMultiReferencePenaltyINTEL:
       case spv::Op::OpSubgroupAvcMceGetDefaultInterShapePenaltyINTEL:
       case spv::Op::OpSubgroupAvcMceSetInterShapePenaltyINTEL:
@@ -4516,10 +4185,8 @@ struct Spirv_Builder {
       case spv::Op::OpSubgroupAvcMceGetDefaultIntraChromaModeBasePenaltyINTEL:
       case spv::Op::OpSubgroupAvcMceSetAcOnlyHaarINTEL:
       case spv::Op::OpSubgroupAvcMceSetSourceInterlacedFieldPolarityINTEL:
-      case spv::Op::
-          OpSubgroupAvcMceSetSingleReferenceInterlacedFieldPolarityINTEL:
-      case spv::Op::
-          OpSubgroupAvcMceSetDualReferenceInterlacedFieldPolaritiesINTEL:
+      case spv::Op::OpSubgroupAvcMceSetSingleReferenceInterlacedFieldPolarityINTEL:
+      case spv::Op::OpSubgroupAvcMceSetDualReferenceInterlacedFieldPolaritiesINTEL:
       case spv::Op::OpSubgroupAvcMceConvertToImePayloadINTEL:
       case spv::Op::OpSubgroupAvcMceConvertToImeResultINTEL:
       case spv::Op::OpSubgroupAvcMceConvertToRefPayloadINTEL:
@@ -4534,8 +4201,7 @@ struct Spirv_Builder {
       case spv::Op::OpSubgroupAvcMceGetInterDirectionsINTEL:
       case spv::Op::OpSubgroupAvcMceGetInterMotionVectorCountINTEL:
       case spv::Op::OpSubgroupAvcMceGetInterReferenceIdsINTEL:
-      case spv::Op::
-          OpSubgroupAvcMceGetInterReferenceInterlacedFieldPolaritiesINTEL:
+      case spv::Op::OpSubgroupAvcMceGetInterReferenceInterlacedFieldPolaritiesINTEL:
       case spv::Op::OpSubgroupAvcImeInitializeINTEL:
       case spv::Op::OpSubgroupAvcImeSetSingleReferenceINTEL:
       case spv::Op::OpSubgroupAvcImeSetDualReferenceINTEL:
@@ -4559,22 +4225,15 @@ struct Spirv_Builder {
       case spv::Op::OpSubgroupAvcImeGetDualReferenceStreaminINTEL:
       case spv::Op::OpSubgroupAvcImeStripSingleReferenceStreamoutINTEL:
       case spv::Op::OpSubgroupAvcImeStripDualReferenceStreamoutINTEL:
-      case spv::Op::
-          OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeMotionVectorsINTEL:
-      case spv::Op::
-          OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeDistortionsINTEL:
-      case spv::Op::
-          OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeReferenceIdsINTEL:
-      case spv::Op::
-          OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeMotionVectorsINTEL:
-      case spv::Op::
-          OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeDistortionsINTEL:
-      case spv::Op::
-          OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeReferenceIdsINTEL:
+      case spv::Op::OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeMotionVectorsINTEL:
+      case spv::Op::OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeDistortionsINTEL:
+      case spv::Op::OpSubgroupAvcImeGetStreamoutSingleReferenceMajorShapeReferenceIdsINTEL:
+      case spv::Op::OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeMotionVectorsINTEL:
+      case spv::Op::OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeDistortionsINTEL:
+      case spv::Op::OpSubgroupAvcImeGetStreamoutDualReferenceMajorShapeReferenceIdsINTEL:
       case spv::Op::OpSubgroupAvcImeGetBorderReachedINTEL:
       case spv::Op::OpSubgroupAvcImeGetTruncatedSearchIndicationINTEL:
-      case spv::Op::
-          OpSubgroupAvcImeGetUnidirectionalEarlySearchTerminationINTEL:
+      case spv::Op::OpSubgroupAvcImeGetUnidirectionalEarlySearchTerminationINTEL:
       case spv::Op::OpSubgroupAvcImeGetWeightingPatternMinimumMotionVectorINTEL:
       case spv::Op::OpSubgroupAvcImeGetWeightingPatternMinimumDistortionINTEL:
       case spv::Op::OpSubgroupAvcFmeInitializeINTEL:
@@ -4654,17 +4313,14 @@ struct Spirv_Builder {
       ASSERT_ALWAYS(size != 0);
       return size;
     };
-    std::function<size_t(uint32_t)> get_size =
-        [&](uint32_t member_type_id) -> size_t {
+    std::function<size_t(uint32_t)> get_size = [&](uint32_t member_type_id) -> size_t {
       size_t size = 0;
-      ASSERT_ALWAYS(decl_types_table.find(member_type_id) !=
-                    decl_types_table.end());
+      ASSERT_ALWAYS(decl_types_table.find(member_type_id) != decl_types_table.end());
       DeclTy decl_type = decl_types_table.find(member_type_id)->second;
       // Limit to primitives and vectors and arrays
-      ASSERT_ALWAYS(
-          decl_type == DeclTy::PrimitiveTy || decl_type == DeclTy::ArrayTy ||
-          decl_type == DeclTy::MatrixTy ||
-          decl_type == DeclTy::RuntimeArrayTy || decl_type == DeclTy::VectorTy);
+      ASSERT_ALWAYS(decl_type == DeclTy::PrimitiveTy || decl_type == DeclTy::ArrayTy ||
+                    decl_type == DeclTy::MatrixTy || decl_type == DeclTy::RuntimeArrayTy ||
+                    decl_type == DeclTy::VectorTy);
       bool is_void = false;
       switch (decl_type) {
       case DeclTy::RuntimeArrayTy: {
@@ -4710,14 +4366,11 @@ struct Spirv_Builder {
       ASSERT_ALWAYS(size != 0);
       return size;
     };
-    std::function<VkFormat(uint32_t)> get_format =
-        [&](uint32_t member_type_id) -> VkFormat {
-      ASSERT_ALWAYS(decl_types_table.find(member_type_id) !=
-                    decl_types_table.end());
+    std::function<VkFormat(uint32_t)> get_format = [&](uint32_t member_type_id) -> VkFormat {
+      ASSERT_ALWAYS(decl_types_table.find(member_type_id) != decl_types_table.end());
       DeclTy decl_type = decl_types_table.find(member_type_id)->second;
       // Limit to primitives and vectors and arrays
-      ASSERT_ALWAYS(decl_type == DeclTy::PrimitiveTy ||
-                    decl_type == DeclTy::VectorTy);
+      ASSERT_ALWAYS(decl_type == DeclTy::PrimitiveTy || decl_type == DeclTy::VectorTy);
       switch (decl_type) {
       case DeclTy::PrimitiveTy: {
         ASSERT_ALWAYS(contains(primitive_types, member_type_id));
@@ -4767,17 +4420,13 @@ struct Spirv_Builder {
       switch (item.second) {
       case DeclTy::FunTy: type_sizes[type_id] = 0; break;
       case DeclTy::PtrTy:
-      case DeclTy::RuntimeArrayTy:
-        type_sizes[type_id] = get_pointer_size();
-        break;
+      case DeclTy::RuntimeArrayTy: type_sizes[type_id] = get_pointer_size(); break;
       case DeclTy::StructTy: {
         ASSERT_HAS(struct_types);
         StructTy type = struct_types.find(type_id)->second;
         ASSERT_ALWAYS(type.member_offsets.size() > 0);
-        uint32_t last_member_offset =
-            type.member_offsets[type.member_offsets.size() - 1];
-        type.size =
-            last_member_offset + (uint32_t)get_size(type.member_types.back());
+        uint32_t last_member_offset = type.member_offsets[type.member_offsets.size() - 1];
+        type.size           = last_member_offset + (uint32_t)get_size(type.member_types.back());
         type_sizes[type_id] = type.size;
         break;
       }
@@ -4804,8 +4453,7 @@ struct Spirv_Builder {
           Variable var = variables[item.first];
           ASSERT_ALWAYS(var.id > 0);
           // Skip builtins here
-          if (has_decoration(spv::Decoration::DecorationBuiltIn, var.id))
-            continue;
+          if (has_decoration(spv::Decoration::DecorationBuiltIn, var.id)) continue;
           if (decl_types_table[var.type_id] == DeclTy::PtrTy) {
             PtrTy ptr_ty = ptr_types[var.type_id];
             if (decl_types_table[ptr_ty.target_id] == DeclTy::StructTy) {
@@ -4816,18 +4464,14 @@ struct Spirv_Builder {
             }
           }
           if (var.storage == spv::StorageClass::StorageClassInput) {
-            uint32_t location =
-                find_decoration(spv::Decoration::DecorationLocation, var.id)
-                    .param1;
+            uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
             if (inputs.size() <= location) {
               inputs.resize(location + 1);
             }
             inputs[location]   = var.id;
             max_input_location = std::max(max_input_location, location);
           } else if (var.storage == spv::StorageClass::StorageClassOutput) {
-            uint32_t location =
-                find_decoration(spv::Decoration::DecorationLocation, var.id)
-                    .param1;
+            uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
             if (outputs.size() <= location) {
               outputs.resize(location + 1);
             }
@@ -4846,10 +4490,8 @@ struct Spirv_Builder {
       output_formats.resize(max_output_location + 1);
       for (uint32_t id : inputs) {
         if (id > 0) {
-          Variable var = variables[id];
-          uint32_t location =
-              find_decoration(spv::Decoration::DecorationLocation, var.id)
-                  .param1;
+          Variable var      = variables[id];
+          uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
           // Align to 16 bytes
           if ((input_offset & 0xf) != 0) {
             input_offset = (input_offset + 0xf) & (~0xfu);
@@ -4863,10 +4505,8 @@ struct Spirv_Builder {
       }
       for (uint32_t id : outputs) {
         if (id > 0) {
-          Variable var = variables[id];
-          uint32_t location =
-              find_decoration(spv::Decoration::DecorationLocation, var.id)
-                  .param1;
+          Variable var      = variables[id];
+          uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
           // Align to 16 bytes
           if ((output_offset & 0xf) != 0) {
             output_offset = (output_offset + 0xf) & (~0xfu);
@@ -4930,8 +4570,8 @@ void *compile_spirv(uint32_t const *pCode, size_t code_size) {
   llvm::orc::ThreadSafeModule bundle = builder.build_llvm_module_vectorized();
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
-//  llvm::InitializeAllTargetMCs();
-//  llvm::InitializeAllDisassemblers();
+  //  llvm::InitializeAllTargetMCs();
+  //  llvm::InitializeAllDisassemblers();
 
   llvm::ExitOnError ExitOnErr;
 
@@ -4943,8 +4583,7 @@ void *compile_spirv(uint32_t const *pCode, size_t code_size) {
         llvm::orc::LLJITBuilder()
             .setCompileFunctionCreator(
                 [&](llvm::orc::JITTargetMachineBuilder JTMB)
-                    -> llvm::Expected<std::unique_ptr<
-                        llvm::orc::IRCompileLayer::IRCompiler>> {
+                    -> llvm::Expected<std::unique_ptr<llvm::orc::IRCompileLayer::IRCompiler>> {
                   auto TM = JTMB.createTargetMachine();
                   if (!TM) return TM.takeError();
                   return std::make_unique<llvm::orc::TMOwningSimpleCompiler>(
@@ -4957,8 +4596,7 @@ void *compile_spirv(uint32_t const *pCode, size_t code_size) {
   ExitOnErr(J->addIRModule(std::move(bundle)));
 
   jitted_shader->jit = std::move(J);
-  jitted_shader->init(builder.code_hash, builder.opt_debug_info,
-                      builder.opt_dump);
+  jitted_shader->init(builder.code_hash, builder.opt_debug_info, builder.opt_dump);
   return (void *)jitted_shader;
 }
 
@@ -4976,8 +4614,7 @@ Shader_Symbols *get_shader_symbols(void *ptr) {
 int main(int argc, char **argv) {
   ASSERT_ALWAYS(argc == 3);
   uint32_t subgroup_size = (uint32_t)atoi(argv[2]);
-  ASSERT_ALWAYS(subgroup_size == 1 || subgroup_size == 4 ||
-                subgroup_size == 64);
+  ASSERT_ALWAYS(subgroup_size == 1 || subgroup_size == 4 || subgroup_size == 64);
   size_t size;
   auto * bytes = read_file(argv[1], &size);
   defer(tl_free(bytes));

@@ -176,6 +176,7 @@ struct VkImage_Impl {
     return mem->ptr + this->offset + array_offsets[array_elem] +
            mip_offsets[mip_level];
   }
+  void dump();
   void release() {
     if (--refcnt == 0) {
       mem->release();

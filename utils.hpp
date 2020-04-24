@@ -23,6 +23,9 @@
 #define ASSERT_DEBUG(x) ASSERT_ALWAYS(x)
 #define NOTNULL(x) ASSERT_ALWAYS((x) != NULL)
 
+#define DLL_EXPORT __attribute__((visibility("default")))
+#define ATTR_USED __attribute__((used))
+
 #undef MIN
 #undef MAX
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -375,6 +378,72 @@ static void dump_file(char const *path, void const *data, size_t size) {
   FILE *file = fopen(path, "wb");
   ASSERT_ALWAYS(file);
   fwrite(data, 1, size, file);
+  fclose(file);
+}
+
+static void ATTR_USED write_image_2d_i32_ppm(const char *file_name, void *data, uint32_t pitch,
+                            uint32_t width, uint32_t height) {
+  FILE *file = fopen(file_name, "wb");
+  ASSERT_ALWAYS(file);
+  fprintf(file, "P6\n");
+  fprintf(file, "%d %d\n", width, height);
+  fprintf(file, "255\n");
+  ito(height) {
+    jto(width) {
+      uint32_t pixel =
+          *(uint32_t *)(void *)(((uint8_t *)data) + i * pitch + j * 4);
+      uint8_t r = ((pixel >> 0) & 0xff);
+      uint8_t g = ((pixel >> 8) & 0xff);
+      uint8_t b = ((pixel >> 16) & 0xff);
+      uint8_t a = ((pixel >> 24) & 0xff);
+      if (a == 0) {
+        r = ((i & 1) ^ (j & 1)) * 127;
+        g = ((i & 1) ^ (j & 1)) * 127;
+        b = ((i & 1) ^ (j & 1)) * 127;
+      }
+      fputc(r, file);
+      fputc(g, file);
+      fputc(b, file);
+    }
+  }
+  fclose(file);
+}
+
+static void ATTR_USED write_image_2d_i24_ppm(const char *file_name, void *data, uint32_t pitch,
+                            uint32_t width, uint32_t height) {
+  FILE *file = fopen(file_name, "wb");
+  ASSERT_ALWAYS(file);
+  fprintf(file, "P6\n");
+  fprintf(file, "%d %d\n", width, height);
+  fprintf(file, "255\n");
+  ito(height) {
+    jto(width) {
+      uint8_t r = *(uint8_t *)(void *)(((uint8_t *)data) + i * pitch + j * 3 + 0);
+      uint8_t g = *(uint8_t *)(void *)(((uint8_t *)data) + i * pitch + j * 3 + 1);
+      uint8_t b = *(uint8_t *)(void *)(((uint8_t *)data) + i * pitch + j * 3 + 2);
+      fputc(r, file);
+      fputc(g, file);
+      fputc(b, file);
+    }
+  }
+  fclose(file);
+}
+
+static void ATTR_USED write_image_2d_i8_ppm(const char *file_name, void *data, uint32_t pitch,
+                           uint32_t width, uint32_t height) {
+  FILE *file = fopen(file_name, "wb");
+  ASSERT_ALWAYS(file);
+  fprintf(file, "P6\n");
+  fprintf(file, "%d %d\n", width, height);
+  fprintf(file, "255\n");
+  ito(height) {
+    jto(width) {
+      uint8_t r = *(uint8_t *)(void *)(((uint8_t *)data) + i * pitch + j);
+      fputc(r, file);
+      fputc(r, file);
+      fputc(r, file);
+    }
+  }
   fclose(file);
 }
 
