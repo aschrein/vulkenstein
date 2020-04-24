@@ -13,7 +13,7 @@ void printf_flush(char const *fmt, ...) {
 #include "spv_stdlib/spv_stdlib.cpp"
 enum class Impl_Mode_t { NONE = 0, REF, OPT };
 Impl_Mode_t                impl_mode = Impl_Mode_t::REF;
-static Temporary_Storage<> ts = Temporary_Storage<>::create(64 * (1 << 20));
+static Temporary_Storage<> ts = Temporary_Storage<>::create(256 * (1 << 20));
 
 #ifdef RASTER_EXE
 #include "utils.hpp"
@@ -2244,145 +2244,101 @@ uint32_t rgba32f_to_rgba8(float4 in) {
          ((uint32_t)a << 24);
 }
 
-// struct Draw_Call {
-//  // State
-//  vki::cmd::GPU_State *state;
-//  uint32_t indexCount;
-//  uint32_t instanceCount;
-//  uint32_t firstIndex;
-//  int32_t vertexOffset;
-//  uint32_t firstInstance;
-//  // Helper methods
-//  void vs_stage() {}
-//  void begin_draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
-//                          uint32_t instanceCount, uint32_t firstIndex,
-//                          int32_t vertexOffset, uint32_t firstInstance) {
-//    this->state         = state;
-//    this->indexCount    = indexCount;
-//    this->instanceCount = instanceCount;
-//    this->firstIndex    = firstIndex;
-//    this->vertexOffset  = vertexOffset;
-//    this->firstInstance = firstInstance;
-//    ts.enter_scope();
-//  }
-//  void end_draw() { ts.exit_scope(); }
-//};
+struct Draw_Call {
+  // Common state for each stage
+  vki::cmd::GPU_State * state         = NULL;
+  uint32_t              indexCount    = 0;
+  uint32_t              instanceCount = 0;
+  uint32_t              firstIndex    = 0;
+  int32_t               vertexOffset  = 0;
+  uint32_t              firstInstance = 0;
+  Shader_Symbols *      vs_symbols    = NULL;
+  Shader_Symbols *      ps_symbols    = NULL;
+  Invocation_Info       info          = {};
+  vki::VkPipeline_Impl *pipeline      = NULL;
 
-void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
-                  uint32_t instanceCount, uint32_t firstIndex,
-                  int32_t vertexOffset, uint32_t firstInstance) {
-  ts.enter_scope();
-  defer(ts.exit_scope());
-  Shader_Symbols *vs_symbols =
-      get_shader_symbols(state->graphics_pipeline->vs->jitted_code);
-  Shader_Symbols *ps_symbols =
-      get_shader_symbols(state->graphics_pipeline->ps->jitted_code);
-  NOTNULL(vs_symbols);
-  NOTNULL(ps_symbols);
+  ////////////////////////////
+  // Input Assembly outptut //
+  ////////////////////////////
+  struct Attribute_Desc {
+    uint8_t *src;
+    uint32_t src_stride;
+    uint32_t size;
+    VkFormat format;
+    bool     per_vertex_rate;
+  };
+  struct IA {
 
-  Invocation_Info info                  = {};
-  void **         descriptor_sets[0x10] = {};
-  defer(ito(0x10) {
-    if (descriptor_sets[i] != NULL) free(descriptor_sets[i]);
-  });
+    VkVertexInputBindingDescription vertex_bindings[0x10] = {};
+    Attribute_Desc                  attribute_descs[0x10] = {};
+    uint16_t *                      index_src_i16         = NULL;
+    uint32_t *                      index_src_i32         = NULL;
+    VkIndexType                     index_type        = VK_INDEX_TYPE_NONE_KHR;
+    uint8_t *                       attributes        = NULL;
+    size_t                          sizeof_attributes = 0;
+
+    size_t get_index(uint32_t i) {
+      switch (index_type) {
+      case VkIndexType::VK_INDEX_TYPE_NONE_KHR: return (size_t)i;
+      case VkIndexType::VK_INDEX_TYPE_UINT16: return (size_t)index_src_i16[i];
+      case VkIndexType::VK_INDEX_TYPE_UINT32: return (size_t)index_src_i32[i];
+      default: UNIMPLEMENTED;
+      }
+      UNIMPLEMENTED;
+    }
+  } ia;
+
+  ///////////////////////////
+  // Vertex shading output //
+  ///////////////////////////
+  struct {
+    uint8_t *vs_output           = NULL;
+    size_t   sizeof_vs_output    = 0;
+    float4 * vs_vertex_positions = NULL;
+  } vs;
+
+  ////////////////////////
+  // Primitive Assembly //
+  ////////////////////////
+  struct {
+    uint8_t *vertex_data                = NULL;
+    float4 * screenspace_positions      = NULL;
+    uint32_t rasterizer_triangles_count = 0;
+  } assembly;
+
+  ////////////////////////////////////////////
+  // Hacky handle pools for descriptor sets //
+  ////////////////////////////////////////////
 #define TMP_POOL(type, name)                                                   \
   type     name[0x100];                                                        \
   uint32_t num_##name = 0;
 #define ALLOC_TMP(name)                                                        \
   &name[num_##name++];                                                         \
   ASSERT_ALWAYS(num_##name < 0x100);
-  TMP_POOL(Combined_Image, combined_images);
-  TMP_POOL(Image, images2d);
-  TMP_POOL(Sampler, samplers);
-  TMP_POOL(uint64_t, handle_slots);
 
-  ito(0x10) {
-    if (state->descriptor_sets[i] != NULL) {
-      descriptor_sets[i] = (void **)malloc(
-          sizeof(void *) * state->descriptor_sets[i]->slot_count);
-      jto(state->descriptor_sets[i]->slot_count) {
-        switch (state->descriptor_sets[i]->slots[j].type) {
-        case VkDescriptorType::VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
-          vki::VkBuffer_Impl *buffer =
-              state->descriptor_sets[i]->slots[j].buffer;
-          NOTNULL(buffer);
-          descriptor_sets[i][j] =
-              buffer->get_ptr() + state->descriptor_sets[i]->slots[j].offset;
-          break;
-        }
-        case VkDescriptorType::VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
-          ASSERT_ALWAYS(num_combined_images < 0x100);
-          Combined_Image *ci  = ALLOC_TMP(combined_images);
-          Image *         img = ALLOC_TMP(images2d);
-          Sampler *       s   = ALLOC_TMP(samplers);
-          s->address_mode     = Sampler::Address_Mode::ADDRESS_MODE_REPEAT;
-          s->filter           = Sampler::Filter::NEAREST;
-          s->mipmap_mode      = Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR;
+  TMP_POOL(Combined_Image, combined_images)
+  TMP_POOL(Image, images2d)
+  TMP_POOL(Sampler, samplers)
+  TMP_POOL(uint64_t, handle_slots)
 
-          vki::VkImageView_Impl *image_view =
-              state->descriptor_sets[i]->slots[j].image_view;
-          NOTNULL(image_view);
-          vki::VkSampler_Impl *sampler =
-              state->descriptor_sets[i]->slots[j].sampler;
-          NOTNULL(sampler);
-          vki::VkImage_Impl *image = image_view->img;
-          NOTNULL(image);
-          img->array_layers = image->arrayLayers;
-          img->bpp          = vki::get_format_bpp(image_view->format);
-          img->data         = image->get_ptr(0, 0);
-          img->width        = image->extent.width;
-          img->height       = image->extent.height;
-          img->depth        = image->extent.depth;
-          img->mip_levels   = image->mipLevels;
-          img->pitch        = image->extent.width * img->bpp;
-          kto(img->array_layers) img->array_offsets[k] =
-              image->array_offsets[k];
-          kto(img->mip_levels) img->mip_offsets[k] = image->mip_offsets[k];
-          ci->image_handle                         = (uint64_t)img;
-          ci->sampler_handle                       = (uint64_t)s;
-          uint64_t *slot                           = ALLOC_TMP(handle_slots);
-          *slot                                    = (uint64_t)ci;
-          descriptor_sets[i][j]                    = slot;
-          break;
-        }
-        default: UNIMPLEMENTED;
-        }
-      }
-    }
-  }
-  ito(0x10) info.descriptor_sets[i] = descriptor_sets[i];
-#undef ALLOC_TMP
-#undef TMP_POOL
-
-  // Vertex shading
-  uint8_t *             vs_output           = NULL;
-  size_t                sizeof_vs_output    = 0;
-  float4 *              vs_vertex_positions = NULL;
-  vki::VkPipeline_Impl *pipeline            = state->graphics_pipeline;
-  {
-    struct Attribute_Desc {
-      uint8_t *src;
-      uint32_t src_stride;
-      uint32_t size;
-      VkFormat format;
-      bool     per_vertex_rate;
-    };
-    VkVertexInputBindingDescription vertex_bindings[0x10] = {};
-    Attribute_Desc                  attribute_descs[0x10] = {};
-
+  void **descriptor_sets[0x10];
+  // Helper methods
+  void IA_stage() {
     ASSERT_ALWAYS(pipeline->IA_bindings.vertexBindingDescriptionCount < 0x10);
     ASSERT_ALWAYS(pipeline->IA_bindings.vertexAttributeDescriptionCount < 0x10);
+    // Buffers(bindings) info
     ito(pipeline->IA_bindings.vertexBindingDescriptionCount) {
       VkVertexInputBindingDescription desc =
           pipeline->IA_bindings.pVertexBindingDescriptions[i];
-      vertex_bindings[desc.binding] = desc;
+      ia.vertex_bindings[desc.binding] = desc;
     }
+    // Attribute info
     ito(pipeline->IA_bindings.vertexAttributeDescriptionCount) {
       VkVertexInputAttributeDescription desc =
           pipeline->IA_bindings.pVertexAttributeDescriptions[i];
       Attribute_Desc                  attribute_desc;
       VkVertexInputBindingDescription binding_desc =
-          vertex_bindings[desc.binding];
+          ia.vertex_bindings[desc.binding];
       attribute_desc.format = desc.format;
       attribute_desc.src =
           state->vertex_buffers[desc.binding]->get_ptr() + desc.offset;
@@ -2390,51 +2346,41 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
       attribute_desc.per_vertex_rate =
           binding_desc.inputRate ==
           VkVertexInputRate::VK_VERTEX_INPUT_RATE_VERTEX;
-      attribute_desc.size            = vki::get_format_bpp(desc.format);
-      attribute_descs[desc.location] = attribute_desc;
+      attribute_desc.size               = vki::get_format_bpp(desc.format);
+      ia.attribute_descs[desc.location] = attribute_desc;
     }
-    ASSERT_ALWAYS(pipeline->IA_topology ==
-                  VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     uint32_t subgroup_size   = vs_symbols->subgroup_size;
     uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
     uint32_t total_data_units_needed = num_invocations * subgroup_size;
-    uint8_t *attributes =
-        (uint8_t *)ts.alloc(total_data_units_needed * vs_symbols->input_stride);
-    sizeof_vs_output    = total_data_units_needed * vs_symbols->output_stride;
-    vs_output           = (uint8_t *)ts.alloc(sizeof_vs_output);
-    vs_vertex_positions = (float4 *)ts.alloc(total_data_units_needed * 16);
-    uint32_t *index_src_i32 =
-        (uint32_t *)(((size_t)state->index_buffer->get_ptr() +
-                      state->index_buffer_offset) &
-                     (~0b11ull));
-    uint16_t *index_src_i16 =
-        (uint16_t *)(((size_t)state->index_buffer->get_ptr() +
-                      state->index_buffer_offset) &
-                     (~0b1ull));
-    //    ASSERT_ALWAYS(state->index_type ==
-    //    VkIndexType::VK_INDEX_TYPE_UINT32);
-    auto get_index = [&](uint32_t i) {
-      switch (state->index_type) {
-      case VkIndexType::VK_INDEX_TYPE_UINT16: return (size_t)index_src_i16[i];
-      case VkIndexType::VK_INDEX_TYPE_UINT32: return (size_t)index_src_i32[i];
-      default: UNIMPLEMENTED;
-      }
+    ia.sizeof_attributes = total_data_units_needed * vs_symbols->input_stride;
+    ia.attributes        = (uint8_t *)ts.alloc_align(ia.sizeof_attributes, 32);
+    ia.index_type        = state->index_type;
+    if (state->index_type == VK_INDEX_TYPE_UINT32) {
+      ia.index_src_i32 = (uint32_t *)(((size_t)state->index_buffer->get_ptr() +
+                                       state->index_buffer_offset) &
+                                      (~0b11ull));
+    } else if (state->index_type == VK_INDEX_TYPE_UINT16) {
+      ia.index_src_i16 = (uint16_t *)(((size_t)state->index_buffer->get_ptr() +
+                                       state->index_buffer_offset) &
+                                      (~0b1ull));
+    } else {
       UNIMPLEMENTED;
-    };
+    }
+    // Prepare VS input, perform format transformations
     kto(indexCount) {
       uint32_t index =
-          (uint32_t)((int32_t)get_index(k + firstIndex) + vertexOffset);
+          (uint32_t)((int32_t)ia.get_index(k + firstIndex) + vertexOffset);
       ito(vs_symbols->input_item_count) {
         auto           item           = vs_symbols->input_slots[i];
-        Attribute_Desc attribute_desc = attribute_descs[item.location];
+        Attribute_Desc attribute_desc = ia.attribute_descs[item.location];
         ASSERT_ALWAYS(attribute_desc.per_vertex_rate);
 
         if ((VkFormat)item.format == VkFormat::VK_FORMAT_R32G32B32A32_SFLOAT &&
             attribute_desc.format == VkFormat::VK_FORMAT_R32G32B32_SFLOAT) {
           float4 tmp = (float4){1.0f, 1.0f, 1.0f, 1.0f};
-          memcpy(attributes + k * vs_symbols->input_stride + item.offset, &tmp,
-                 16);
-          memcpy(attributes + k * vs_symbols->input_stride + item.offset,
+          memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset,
+                 &tmp, 16);
+          memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset,
                  attribute_desc.src + attribute_desc.src_stride * index,
                  attribute_desc.size);
         } else if ((VkFormat)item.format ==
@@ -2449,24 +2395,386 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
           tmp.y = ((float)((uint8_t)((unorm >> 8) & 0xff))) / 255.0f;
           tmp.z = ((float)((uint8_t)((unorm >> 16) & 0xff))) / 255.0f;
           tmp.w = ((float)((uint8_t)((unorm >> 24) & 0xff))) / 255.0f;
-          memcpy(attributes + k * vs_symbols->input_stride + item.offset, &tmp,
-                 16);
+          memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset,
+                 &tmp, 16);
 
-        } else {
+        } else { // Formats are equal just copy
           ASSERT_ALWAYS(item.format == attribute_desc.format);
-          //          float4 tmp = (float4){(k % 1000) / 1000.0f, 0.1f,
-          //          0.9f, 1.0f};
-          memcpy(attributes + k * vs_symbols->input_stride + item.offset,
-                 //                 &tmp,
+          memcpy(ia.attributes + k * vs_symbols->input_stride + item.offset,
                  attribute_desc.src + attribute_desc.src_stride * index,
                  attribute_desc.size);
         }
       }
     }
+  }
+  void VS_stage() {
+    // Attributes are setup and ready for consumption
+    uint32_t subgroup_size   = vs_symbols->subgroup_size;
+    uint32_t num_invocations = (indexCount + subgroup_size - 1) / subgroup_size;
+    uint32_t total_data_units_needed = num_invocations * subgroup_size;
+    vs.sizeof_vs_output = total_data_units_needed * vs_symbols->output_stride;
+    vs.vs_output        = (uint8_t *)ts.alloc_align(vs.sizeof_vs_output, 32);
+    vs.vs_vertex_positions = (float4 *)ts.alloc_align(total_data_units_needed * 16, 32);
+    ito(num_invocations) {
+      info.work_group_size  = (uint3){subgroup_size, 1, 1};
+      info.invocation_count = (uint3){num_invocations, 1, 1};
+      info.subgroup_size    = (uint3){subgroup_size, 1, 1};
+      info.wave_width       = vs_symbols->subgroup_size;
+      info.invocation_id    = (uint3){i, 0, 0};
+      info.input = ia.attributes + i * subgroup_size * vs_symbols->input_stride;
+      info.output =
+          vs.vs_output + i * subgroup_size * vs_symbols->output_stride;
+      // Assume there's only gl_Position
+      info.builtin_output = vs.vs_vertex_positions + i * subgroup_size;
+      vs_symbols->spv_main(&info, (~0));
+    }
+  }
+  // Primitive assembly:
+  //  culling
+  //  perspective division
+  void PA_stage() {
+    ASSERT_ALWAYS(pipeline->IA_topology ==
+                  VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    ASSERT_ALWAYS(indexCount % 3 == 0);
+    // so the triangle could be split in up to 6 vertices per triangle after
+    // culling
+    assembly.screenspace_positions =
+        (float4 *)ts.alloc_align(sizeof(float4) * indexCount * 6, 32);
+    assembly.rasterizer_triangles_count = 0;
+    // TODO: culling
+    // for now just pass through the vertex output
+    assembly.vertex_data = vs.vs_output;
+    ito(indexCount / 3) {
+      float4 v0 = vs.vs_vertex_positions[i * 3 + 0];
+      float4 v1 = vs.vs_vertex_positions[i * 3 + 1];
+      float4 v2 = vs.vs_vertex_positions[i * 3 + 2];
+      // TODO: culling
+      v0.xyz                                    = v0.xyz / v0.w;
+      v1.xyz                                    = v1.xyz / v1.w;
+      v2.xyz                                    = v2.xyz / v2.w;
+      assembly.screenspace_positions[i * 3 + 0] = v0;
+      assembly.screenspace_positions[i * 3 + 1] = v1;
+      assembly.screenspace_positions[i * 3 + 2] = v2;
+      assembly.rasterizer_triangles_count++;
+    }
+  }
+  // Pixel shading and output merging
+  // two stages in one function because of tiling
+  void PS_OM_stage() {
+    ASSERT_ALWAYS(state->framebuffer->attachmentCount == 2);
+    vki::VkImageView_Impl *rt    = NULL;
+    vki::VkImageView_Impl *depth = NULL;
+    ASSERT_ALWAYS(state->render_pass->subpassCount == 1);
+    uint32_t num_color_attachments = 0;
+    ito(state->render_pass->pSubpasses[0].colorAttachmentCount) {
+      rt = state->framebuffer->pAttachments[state->render_pass->pSubpasses[0]
+                                                .pColorAttachments[i]
+                                                .attachment];
+      num_color_attachments++;
+    }
+    if (state->render_pass->pSubpasses[0].has_depth_stencil_attachment) {
+      depth = state->framebuffer
+                  ->pAttachments[state->render_pass->pSubpasses[0]
+                                     .pDepthStencilAttachment.attachment];
+    }
+    NOTNULL(depth);
+    NOTNULL(rt);
+    ASSERT_ALWAYS(rt->format == VkFormat::VK_FORMAT_R8G8B8A8_SRGB);
+    uint32_t x_num_tiles = (rt->img->extent.width + 255) / 256;
+    uint32_t y_num_tiles = (rt->img->extent.height + 255) / 256;
+    struct Pixel_Invocation_Info {
+      uint32_t triangle_id;
+      // Barycentric coordinates
+      float    b_0, b_1, b_2;
+      uint32_t x, y;
+    };
+    uint32_t               max_pixel_invocations = 256 * 256 * 4;
+    Pixel_Invocation_Info *pinfos =
+        (Pixel_Invocation_Info *)ts.alloc_page_aligned(
+            sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
+    Classified_Tile *tiles =
+        (Classified_Tile *)ts.alloc_align(sizeof(Classified_Tile) * (1 << 20), 32);
+    yto(y_num_tiles) {
+      xto(x_num_tiles) {
+        ts.enter_scope();
+        defer(ts.exit_scope());
+        // So like we're covering the screen with 256x256 tiles and do
+        // rasterization on them and then apply that to the screen
+        //
+        // |-----|-----|-----|
+        //  _____________
+        // ||    |       |
+        // ||____|  ...  |
+        // |     .       |
+        // |_____._______|
+        //
+        // Rastrization
 
-    info.work_group_size   = (uint3){subgroup_size, 1, 1};
-    info.invocation_count  = (uint3){num_invocations, 1, 1};
-    info.subgroup_size     = (uint3){subgroup_size, 1, 1};
+        float    tile_x = ((float)x * 256.0f) / (float)rt->img->extent.width;
+        float    tile_y = ((float)y * 256.0f) / (float)rt->img->extent.height;
+        float    tile_size_x           = 256.0f / (float)rt->img->extent.width;
+        float    tile_size_y           = 256.0f / (float)rt->img->extent.height;
+        uint32_t num_pixel_invocations = 0;
+        // Run the rasterizer
+        kto(assembly.rasterizer_triangles_count) {
+          float4 v0  = assembly.screenspace_positions[k * 3 + 0];
+          float4 v1  = assembly.screenspace_positions[k * 3 + 1];
+          float4 v2  = assembly.screenspace_positions[k * 3 + 2];
+          float  x0  = (v0.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+          float  y0  = (v0.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+          float  x1  = (v1.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+          float  y1  = (v1.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+          float  x2  = (v2.x * 0.5f + 0.5f - tile_x) / tile_size_x;
+          float  y2  = (v2.y * 0.5f + 0.5f - tile_y) / tile_size_y;
+          x0         = x0 * 256.0f;
+          y0         = y0 * 256.0f;
+          x1         = x1 * 256.0f;
+          y1         = y1 * 256.0f;
+          x2         = x2 * 256.0f;
+          y2         = y2 * 256.0f;
+          float n0_x = -(y1 - y0);
+          float n0_y = (x1 - x0);
+          float n1_x = -(y2 - y1);
+          float n1_y = (x2 - x1);
+          float n2_x = -(y0 - y2);
+          float n2_y = (x0 - x2);
+          float area = (x1 - x0) * (y1 + y0) + //
+                       (x2 - x1) * (y2 + y1) + //
+                       (x0 - x2) * (y0 + y2);
+          bool cull = pipeline->RS_state.cullMode !=
+                      VkCullModeFlagBits::VK_CULL_MODE_NONE;
+          float cull_sign = pipeline->RS_state.frontFace ==
+                                    VkFrontFace::VK_FRONT_FACE_CLOCKWISE
+                                ? -1.0f
+                                : 1.0f;
+          if (pipeline->RS_state.cullMode ==
+              VkCullModeFlagBits::VK_CULL_MODE_BACK_BIT) {
+            cull_sign *= cull_sign;
+          }
+          if (cull && area * cull_sign > 0.0f) {
+            continue;
+          }
+          uint32_t tile_count = 0;
+          if (area > 0.0f) {
+            n0_x = -n0_x;
+            n0_y = -n0_y;
+            n1_x = -n1_x;
+            n1_y = -n1_y;
+            n2_x = -n2_x;
+            n2_y = -n2_y;
+            rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+                x2, y2,                                     //
+                x1, y1,                                     //
+                x0, y0,                                     //
+                n2_x, n2_y,                                 //
+                n1_x, n1_y,                                 //
+                n0_x, n0_y,                                 //
+                tiles, &tile_count);
+          } else {
+            rasterize_triangle_tiled_1x1_256x256_defer_ref( //
+                x0, y0,                                     //
+                x1, y1,                                     //
+                x2, y2,                                     //
+                n0_x, n0_y,                                 //
+                n1_x, n1_y,                                 //
+                n2_x, n2_y,                                 //
+                tiles, &tile_count);
+          }
+
+          ito(tile_count) {
+            Classified_Tile tile = tiles[i];
+
+            for (uint32_t sub_y = 0; sub_y < 4; sub_y++) {
+              for (uint32_t sub_x = 0; sub_x < 4; sub_x++) {
+                if (tile.mask & (1 << (sub_x | (sub_y << 2)))) {
+                  float b2;
+                  float b0;
+                  float b1;
+
+                  b2 = tile.e_0 + n0_x * sub_x + n0_y * sub_y;
+                  b0 = tile.e_1 + n1_x * sub_x + n1_y * sub_y;
+                  b1 = tile.e_2 + n2_x * sub_x + n2_y * sub_y;
+                  //                if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f)
+                  //                  TRAP;
+                  // TODO: fixe the precision issues
+                  b0        = b0 < 0.0f ? 0.0f : b0;
+                  b1        = b1 < 0.0f ? 0.0f : b1;
+                  b2        = b2 < 0.0f ? 0.0f : b2;
+                  float sum = b0 + b1 + b2;
+                  b0 /= sum;
+                  b1 /= sum;
+                  b2 /= sum;
+                  if (area > 0.0f) {
+                    SWAP(b1, b2);
+                  }
+
+                  float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
+                  b0       = b0 / v0.w / bw;
+                  b1       = b1 / v1.w / bw;
+                  b2       = b2 / v2.w / bw;
+
+                  pinfos[num_pixel_invocations++] = Pixel_Invocation_Info{
+                      .triangle_id = k,
+                      .b_0         = b0,
+                      .b_1         = b1,
+                      .b_2         = b2,
+                      .x           = x * 256 + (uint32_t)tile.x * 4 + sub_x,
+                      .y           = y * 256 + (uint32_t)tile.y * 4 + sub_y};
+                }
+              }
+            }
+          }
+        }
+
+        float4 *pixel_output          = NULL;
+        float * pixel_depth_output    = NULL;
+        float4 *pixel_positions_input = NULL;
+        // Spawn pixel shaders
+        if (num_pixel_invocations != 0) {
+          uint32_t subgroup_size = ps_symbols->subgroup_size;
+          uint32_t num_invocations =
+              (num_pixel_invocations + subgroup_size - 1) / subgroup_size;
+          // Allocate storage space for render target output
+          pixel_output = (float4 *)ts.alloc_align(sizeof(float4) * num_invocations *
+                                            subgroup_size, 32);
+          pixel_positions_input = (float4 *)ts.alloc_align(
+              sizeof(float4) * num_invocations * subgroup_size * 3, 32);
+          pixel_depth_output = (float *)ts.alloc_align(
+              sizeof(float) * num_invocations * subgroup_size, 32);
+          // Allocate pixel shader input storage and
+          // Perform relocation of data for vs->ps
+          uint8_t *pixel_input = NULL;
+          pixel_input = (uint8_t *)ts.alloc(3 * ps_symbols->input_stride *
+                                            num_invocations * subgroup_size);
+          ito(num_pixel_invocations) {
+            Pixel_Invocation_Info info = pinfos[i];
+
+            jto(ps_symbols->input_item_count) {
+              // We push 3 attributes for each vertex of the triangle
+              // they're interpolated inside the pixel shader
+              Shader_Symbols::Varying_Slot input_slot =
+                  ps_symbols->input_slots[j];
+              Shader_Symbols::Varying_Slot output_slot = {};
+              // find the corresponding slot in the vertex outputs
+              kto(vs_symbols->output_item_count) {
+                if (vs_symbols->output_slots[k].location ==
+                    input_slot.location) {
+                  output_slot = vs_symbols->output_slots[k];
+                }
+              }
+              ASSERT_ALWAYS(input_slot.format == output_slot.format);
+              size_t slot_size =
+                  vki::get_format_bpp((VkFormat)input_slot.format);
+
+              kto(3) {
+                memcpy(                                          //
+                    pixel_input +                                //
+                        ps_symbols->input_stride * (i * 3 + k) + //
+                        input_slot.offset,                       //
+                    assembly.vertex_data +                       //
+                        output_slot.offset +                     //
+                        vs_symbols->output_stride *
+                            (info.triangle_id * 3 + k), //
+                    slot_size);
+              }
+            }
+            kto(3) pixel_positions_input[i * 3 + k] =
+                assembly.screenspace_positions[info.triangle_id * 3 + k];
+          }
+
+          info.work_group_size   = (uint3){subgroup_size, 1, 1};
+          info.invocation_count  = (uint3){num_invocations, 1, 1};
+          info.subgroup_size     = (uint3){subgroup_size, 1, 1};
+          info.subgroup_x_bits   = 0xff;
+          info.subgroup_x_offset = 0x0;
+          info.subgroup_y_bits   = 0x0;
+          info.subgroup_y_offset = 0x0;
+          info.subgroup_z_bits   = 0x0;
+          info.subgroup_z_offset = 0x0;
+          info.input             = NULL;
+          info.output            = NULL;
+          info.builtin_output    = NULL;
+          info.push_constants    = state->push_constants;
+          info.print_fn          = (void *)printf;
+          ito(num_invocations) {
+            float barycentrics[0x100] = {};
+            jto(subgroup_size) {
+              Pixel_Invocation_Info pinfo = pinfos[j + i * subgroup_size];
+              barycentrics[j * 3 + 0]     = pinfo.b_0;
+              barycentrics[j * 3 + 1]     = pinfo.b_1;
+              barycentrics[j * 3 + 2]     = pinfo.b_2;
+            }
+            info.work_group_size  = (uint3){subgroup_size, 1, 1};
+            info.invocation_count = (uint3){num_invocations, 1, 1};
+            info.subgroup_size    = (uint3){subgroup_size, 1, 1};
+            info.barycentrics     = barycentrics;
+            info.invocation_id    = (uint3){i, 0, 0};
+            info.input =
+                pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
+            info.output = pixel_output + i * subgroup_size;
+            // Assume there's only gl_Position
+            info.builtin_output = pixel_depth_output + i * subgroup_size;
+            info.pixel_positions =
+                pixel_positions_input + i * subgroup_size * 3;
+            info.wave_width = ps_symbols->subgroup_size;
+            ps_symbols->spv_main(&info, (~0));
+          }
+          ito(num_pixel_invocations) {
+            Pixel_Invocation_Info info = pinfos[i];
+            uint32_t *            dst  = ((uint32_t *)rt->img->get_ptr());
+            if (info.x >= rt->img->extent.width) continue;
+            if (info.y >= rt->img->extent.height) continue;
+            float   depth_value = 1.0f;
+            float2 *depth_src   = (float2 *)depth->img->get_ptr() +
+                                info.y * rt->img->extent.width + info.x;
+            if (state->graphics_pipeline->DS_state.depthTestEnable == VK_TRUE) {
+              depth_value = (*depth_src).x;
+              if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                  VK_COMPARE_OP_LESS) {
+                if (pixel_depth_output[i] > depth_value) continue;
+              } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                         VK_COMPARE_OP_LESS_OR_EQUAL) {
+                if (pixel_depth_output[i] >= depth_value) continue;
+              } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                         VK_COMPARE_OP_GREATER) {
+                if (pixel_depth_output[i] < depth_value) continue;
+              } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
+                         VK_COMPARE_OP_GREATER_OR_EQUAL) {
+                if (pixel_depth_output[i] <= depth_value) continue;
+              } else {
+                UNIMPLEMENTED;
+              }
+            }
+            if (state->graphics_pipeline->DS_state.depthWriteEnable ==
+                VK_TRUE) {
+              *depth_src = (float2){pixel_depth_output[i], 0};
+            }
+            dst[info.y * rt->img->extent.width + info.x] =
+                rgba32f_to_rgba8(pixel_output[i]);
+          }
+        }
+      }
+    }
+  }
+  void begin_draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
+                          uint32_t instanceCount, uint32_t firstIndex,
+                          int32_t vertexOffset, uint32_t firstInstance) {
+    ts.enter_scope();
+    this->state         = state;
+    this->indexCount    = indexCount;
+    this->instanceCount = instanceCount;
+    this->firstIndex    = firstIndex;
+    this->vertexOffset  = vertexOffset;
+    this->firstInstance = firstInstance;
+    this->vs_symbols =
+        get_shader_symbols(state->graphics_pipeline->vs->jitted_code);
+    this->ps_symbols =
+        get_shader_symbols(state->graphics_pipeline->ps->jitted_code);
+    this->pipeline = state->graphics_pipeline;
+    NOTNULL(vs_symbols);
+    NOTNULL(ps_symbols);
+    // some default values for invocation info
+    info                   = {};
     info.subgroup_x_bits   = 0xff;
     info.subgroup_x_offset = 0x0;
     info.subgroup_y_bits   = 0x0;
@@ -2480,572 +2788,83 @@ void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
     info.print_fn          = (void *)printf_flush;
     info.trap_fn           = (void *)abort;
 
-    if (0) {
-      ito(indexCount) {
-        //        fprintf(stdout, "v%i\n", i);
-        // Debug
+    /////////////////////////////
+    // Setup descriptor tables //
+    /////////////////////////////
+    ito(0x10) {
+      if (state->descriptor_sets[i] != NULL) {
+        descriptor_sets[i] = (void **)ts.alloc(
+            sizeof(void *) * state->descriptor_sets[i]->slot_count);
+        jto(state->descriptor_sets[i]->slot_count) {
+          switch (state->descriptor_sets[i]->slots[j].type) {
+          case VkDescriptorType::VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
+            vki::VkBuffer_Impl *buffer =
+                state->descriptor_sets[i]->slots[j].buffer;
+            NOTNULL(buffer);
+            descriptor_sets[i][j] =
+                buffer->get_ptr() + state->descriptor_sets[i]->slots[j].offset;
+            break;
+          }
+          case VkDescriptorType::VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: {
+            ASSERT_ALWAYS(num_combined_images < 0x100);
+            Combined_Image *ci  = ALLOC_TMP(combined_images);
+            Image *         img = ALLOC_TMP(images2d);
+            Sampler *       s   = ALLOC_TMP(samplers);
+            s->address_mode     = Sampler::Address_Mode::ADDRESS_MODE_REPEAT;
+            s->filter           = Sampler::Filter::NEAREST;
+            s->mipmap_mode      = Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR;
 
-        //        jto(vs_symbols->input_item_count) {
-        Shader_Symbols::Varying_Slot input = vs_symbols->input_slots[1];
-        *(float3 *)(attributes + i * vs_symbols->input_stride + input.offset) =
-            (float3){(i % 1000) / 1000.0f, 0.4f, 0.3f};
-        //          fprintf(stdout, "  in attrib: %i\n", j);
-        //          switch ((VkFormat)input.format) {
-        //          case VK_FORMAT_R32G32_SFLOAT: {
-        //            float2 attrib =
-        //                *(float2 *)(attributes + i * vs_symbols->input_stride
-        //                +
-        //                            input.offset);
-        //            fprintf(stdout, "    <%f, %f>\n", attrib.x, attrib.y);
-        //            break;
-        //          }
-        //          case VK_FORMAT_R32G32B32_SFLOAT: {
-        //            float3 attrib =
-        //                *(float3 *)(attributes + i * vs_symbols->input_stride
-        //                +
-        //                            input.offset);
-        //            fprintf(stdout, "    <%f, %f, %f>\n", attrib.x, attrib.y,
-        //            attrib.z); break;
-        //          }
-        //          case VK_FORMAT_R32G32B32A32_SFLOAT: {
-        //            float4 attrib =
-        //                *(float4 *)(attributes + i * vs_symbols->input_stride
-        //                +
-        //                            input.offset);
-        //            fprintf(stdout, "    <%f, %f, %f, %f>\n", attrib.x,
-        //            attrib.y,
-        //                    attrib.z, attrib.w);
-        //            break;
-        //          }
-        //          default:
-        //            TRAP;
-        //          }
-        //        }
-      }
-    }
-
-    ito(num_invocations) {
-      info.wave_width    = vs_symbols->subgroup_size;
-      info.invocation_id = (uint3){i, 0, 0};
-      info.input  = attributes + i * subgroup_size * vs_symbols->input_stride;
-      info.output = vs_output + i * subgroup_size * vs_symbols->output_stride;
-      // Assume there's only gl_Position
-      info.builtin_output = vs_vertex_positions + i * subgroup_size;
-      vs_symbols->spv_main(&info, (~0));
-    }
-
-    // Debug
-    if (0) {
-      ito(indexCount) {
-        fprintf(stdout, "v%i\n", i);
-        // Debug
-
-        jto(vs_symbols->input_item_count) {
-          Shader_Symbols::Varying_Slot input = vs_symbols->input_slots[j];
-          fprintf(stdout, "  in attrib: %i\n", j);
-          switch ((VkFormat)input.format) {
-          case VK_FORMAT_R32G32_SFLOAT: {
-            float2 attrib =
-                *(float2 *)(attributes + i * vs_symbols->input_stride +
-                            input.offset);
-            fprintf(stdout, "    <%f, %f>\n", attrib.x, attrib.y);
+            vki::VkImageView_Impl *image_view =
+                state->descriptor_sets[i]->slots[j].image_view;
+            NOTNULL(image_view);
+            vki::VkSampler_Impl *sampler =
+                state->descriptor_sets[i]->slots[j].sampler;
+            NOTNULL(sampler);
+            vki::VkImage_Impl *image = image_view->img;
+            NOTNULL(image);
+            img->array_layers = image->arrayLayers;
+            img->bpp          = vki::get_format_bpp(image_view->format);
+            img->data         = image->get_ptr(0, 0);
+            img->width        = image->extent.width;
+            img->height       = image->extent.height;
+            img->depth        = image->extent.depth;
+            img->mip_levels   = image->mipLevels;
+            img->pitch        = image->extent.width * img->bpp;
+            kto(img->array_layers) img->array_offsets[k] =
+                image->array_offsets[k];
+            kto(img->mip_levels) img->mip_offsets[k] = image->mip_offsets[k];
+            ci->image_handle                         = (uint64_t)img;
+            ci->sampler_handle                       = (uint64_t)s;
+            uint64_t *slot                           = ALLOC_TMP(handle_slots);
+            *slot                                    = (uint64_t)ci;
+            descriptor_sets[i][j]                    = slot;
             break;
           }
-          case VK_FORMAT_R32G32B32_SFLOAT: {
-            float3 attrib =
-                *(float3 *)(attributes + i * vs_symbols->input_stride +
-                            input.offset);
-            fprintf(stdout, "    <%f, %f, %f>\n", attrib.x, attrib.y, attrib.z);
-            break;
-          }
-          case VK_FORMAT_R32G32B32A32_SFLOAT: {
-            float4 attrib =
-                *(float4 *)(attributes + i * vs_symbols->input_stride +
-                            input.offset);
-            fprintf(stdout, "    <%f, %f, %f, %f>\n", attrib.x, attrib.y,
-                    attrib.z, attrib.w);
-            break;
-          }
-          default: TRAP;
-          }
-        }
-
-        jto(vs_symbols->output_item_count) {
-          Shader_Symbols::Varying_Slot output = vs_symbols->output_slots[j];
-          fprintf(stdout, "  out attrib: %i\n", j);
-          switch ((VkFormat)output.format) {
-          case VK_FORMAT_R32G32_SFLOAT: {
-            float2 attrib =
-                *(float2 *)(attributes + i * vs_symbols->output_stride +
-                            output.offset);
-            fprintf(stdout, "    <%f, %f>\n", attrib.x, attrib.y);
-            break;
-          }
-          case VK_FORMAT_R32G32B32_SFLOAT: {
-            float3 attrib =
-                *(float3 *)(vs_output + i * vs_symbols->output_stride +
-                            output.offset);
-            fprintf(stdout, "    <%f, %f, %f>\n", attrib.x, attrib.y, attrib.z);
-            break;
-          }
-          case VK_FORMAT_R32G32B32A32_SFLOAT: {
-            float4 attrib =
-                *(float4 *)(vs_output + i * vs_symbols->output_stride +
-                            output.offset);
-            fprintf(stdout, "    <%f, %f, %f, %f>\n", attrib.x, attrib.y,
-                    attrib.z, attrib.w);
-            break;
-          }
-          default: TRAP;
+          default: UNIMPLEMENTED;
           }
         }
       }
     }
+    ito(0x10) info.descriptor_sets[i] = descriptor_sets[i];
+
+    IA_stage();
+    VS_stage();
+    PA_stage();
+    PS_OM_stage();
+
   }
+  void end_draw() { ts.exit_scope(); }
+#undef TMP_POOL
+#undef ALLOC_TMPf
+};
 
-  // Assemble triangles
-  ASSERT_ALWAYS(state->graphics_pipeline->IA_topology ==
-                VkPrimitiveTopology::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-  ASSERT_ALWAYS(indexCount % 3 == 0);
-  // so the triangle could be split in up to 6 vertices per triangle after
-  // culling
-  float4 *screenspace_positions =
-      (float4 *)ts.alloc(sizeof(float4) * indexCount * 6);
-  uint32_t rasterizer_triangles_count = 0;
-  ito(indexCount / 3) {
-    float4 v0 = vs_vertex_positions[i * 3 + 0];
-    float4 v1 = vs_vertex_positions[i * 3 + 1];
-    float4 v2 = vs_vertex_positions[i * 3 + 2];
-    // TODO: culling
-    v0.xyz                           = v0.xyz / v0.w;
-    v1.xyz                           = v1.xyz / v1.w;
-    v2.xyz                           = v2.xyz / v2.w;
-    screenspace_positions[i * 3 + 0] = v0;
-    screenspace_positions[i * 3 + 1] = v1;
-    screenspace_positions[i * 3 + 2] = v2;
-    rasterizer_triangles_count++;
-  }
-  // Pixel shading
-  ASSERT_ALWAYS(state->framebuffer->attachmentCount == 2);
-  vki::VkImageView_Impl *rt    = NULL; // state->framebuffer->pAttachments[0];
-  vki::VkImageView_Impl *depth = NULL; // state->framebuffer->pAttachments[0];
-  ASSERT_ALWAYS(state->render_pass->subpassCount == 1);
-  uint32_t num_color_attachments = 0;
-  ito(state->render_pass->pSubpasses[0].colorAttachmentCount) {
-    rt =
-        state->framebuffer->pAttachments
-            [state->render_pass->pSubpasses[0].pColorAttachments[i].attachment];
-    num_color_attachments++;
-  }
-  if (state->render_pass->pSubpasses[0].has_depth_stencil_attachment) {
-    depth = state->framebuffer
-                ->pAttachments[state->render_pass->pSubpasses[0]
-                                   .pDepthStencilAttachment.attachment];
-  }
-  NOTNULL(depth);
-  NOTNULL(rt);
-  ASSERT_ALWAYS(rt->format == VkFormat::VK_FORMAT_R8G8B8A8_SRGB);
-
-  uint32_t x_num_tiles = (rt->img->extent.width + 255) / 256;
-  uint32_t y_num_tiles = (rt->img->extent.height + 255) / 256;
-  struct Pixel_Invocation_Info {
-    uint32_t triangle_id;
-    // Barycentric coordinates
-    float    b_0, b_1, b_2;
-    uint32_t x, y;
-  };
-  uint32_t               max_pixel_invocations = 256 * 256 * 4;
-  Pixel_Invocation_Info *pinfos =
-      (Pixel_Invocation_Info *)ts.alloc_page_aligned(
-          sizeof(Pixel_Invocation_Info) * max_pixel_invocations);
-  Classified_Tile *tiles =
-      (Classified_Tile *)ts.alloc(sizeof(Classified_Tile) * (1 << 20));
-
-  //                    void *vs_output_shadow = vs_output;
-  //                  vs_output = ts.alloc_page_aligned(
-  //                      sizeof_vs_output);
-  //                  memcpy(vs_output, vs_output_shadow,
-  //                         sizeof_vs_output);
-  //                  unmap_pages(pinfos_shadow,
-  //                  get_num_pages(sizeof(Pixel_Invocation_Info) *
-  //                                                           max_pixel_invocations));
-
-  //  float *depth_tile_buffer = (float *)ts.alloc(4 * 256 * 256);
-  yto(y_num_tiles) {
-    xto(x_num_tiles) {
-      ts.enter_scope();
-      defer(ts.exit_scope());
-      //      ito(256 * 256) depth_tile_buffer[i] = 1.0f;
-      // So like we're covering the screen with 256x256 tiles and do
-      // rasterization on them and then apply that to the screen
-      //
-      // |-----|-----|-----|
-      //  _____________
-      // ||    |       |
-      // ||____|  ...  |
-      // |     .       |
-      // |_____._______|
-      //
-      // Rastrization
-
-      float    tile_x = ((float)x * 256.0f) / (float)rt->img->extent.width;
-      float    tile_y = ((float)y * 256.0f) / (float)rt->img->extent.height;
-      float    tile_size_x           = 256.0f / (float)rt->img->extent.width;
-      float    tile_size_y           = 256.0f / (float)rt->img->extent.height;
-      uint32_t num_pixel_invocations = 0;
-      // Run the rasterizer
-      kto(rasterizer_triangles_count) {
-        float4 v0  = screenspace_positions[k * 3 + 0];
-        float4 v1  = screenspace_positions[k * 3 + 1];
-        float4 v2  = screenspace_positions[k * 3 + 2];
-        float  x0  = (v0.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-        float  y0  = (v0.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-        float  x1  = (v1.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-        float  y1  = (v1.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-        float  x2  = (v2.x * 0.5f + 0.5f - tile_x) / tile_size_x;
-        float  y2  = (v2.y * 0.5f + 0.5f - tile_y) / tile_size_y;
-        x0         = x0 * 256.0f;
-        y0         = y0 * 256.0f;
-        x1         = x1 * 256.0f;
-        y1         = y1 * 256.0f;
-        x2         = x2 * 256.0f;
-        y2         = y2 * 256.0f;
-        float n0_x = -(y1 - y0);
-        float n0_y = (x1 - x0);
-        float n1_x = -(y2 - y1);
-        float n1_y = (x2 - x1);
-        float n2_x = -(y0 - y2);
-        float n2_y = (x0 - x2);
-        float area = (x1 - x0) * (y1 + y0) + //
-                     (x2 - x1) * (y2 + y1) + //
-                     (x0 - x2) * (y0 + y2);
-        bool cull = pipeline->RS_state.cullMode !=
-                    VkCullModeFlagBits::VK_CULL_MODE_NONE;
-        float cull_sign =
-            pipeline->RS_state.frontFace == VkFrontFace::VK_FRONT_FACE_CLOCKWISE
-                ? -1.0f
-                : 1.0f;
-        if (pipeline->RS_state.cullMode ==
-            VkCullModeFlagBits::VK_CULL_MODE_BACK_BIT) {
-          cull_sign *= cull_sign;
-        }
-        if (cull && area * cull_sign > 0.0f) {
-          continue;
-        }
-        uint32_t tile_count = 0;
-        if (area > 0.0f) {
-          n0_x = -n0_x;
-          n0_y = -n0_y;
-          n1_x = -n1_x;
-          n1_y = -n1_y;
-          n2_x = -n2_x;
-          n2_y = -n2_y;
-          rasterize_triangle_tiled_1x1_256x256_defer_ref( //
-              x2, y2,                                     //
-              x1, y1,                                     //
-              x0, y0,                                     //
-              n2_x, n2_y,                                 //
-              n1_x, n1_y,                                 //
-              n0_x, n0_y,                                 //
-              tiles, &tile_count);
-        } else {
-          rasterize_triangle_tiled_1x1_256x256_defer_ref( //
-              x0, y0,                                     //
-              x1, y1,                                     //
-              x2, y2,                                     //
-              n0_x, n0_y,                                 //
-              n1_x, n1_y,                                 //
-              n2_x, n2_y,                                 //
-              tiles, &tile_count);
-        }
-
-        ito(tile_count) {
-          Classified_Tile tile = tiles[i];
-
-          for (uint32_t sub_y = 0; sub_y < 4; sub_y++) {
-            for (uint32_t sub_x = 0; sub_x < 4; sub_x++) {
-              if (tile.mask & (1 << (sub_x | (sub_y << 2)))) {
-                float b2;
-                float b0;
-                float b1;
-
-                b2 = tile.e_0 + n0_x * sub_x + n0_y * sub_y;
-                b0 = tile.e_1 + n1_x * sub_x + n1_y * sub_y;
-                b1 = tile.e_2 + n2_x * sub_x + n2_y * sub_y;
-                //                if (b0 < 0.0f || b1 < 0.0f || b2 < 0.0f)
-                //                  TRAP;
-                // TODO: fixe the precision issues
-                b0        = b0 < 0.0f ? 0.0f : b0;
-                b1        = b1 < 0.0f ? 0.0f : b1;
-                b2        = b2 < 0.0f ? 0.0f : b2;
-                float sum = b0 + b1 + b2;
-                b0 /= sum;
-                b1 /= sum;
-                b2 /= sum;
-                if (area > 0.0f) {
-                  SWAP(b1, b2);
-                }
-
-                float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
-                b0       = b0 / v0.w / bw;
-                b1       = b1 / v1.w / bw;
-                b2       = b2 / v2.w / bw;
-
-                pinfos[num_pixel_invocations++] = Pixel_Invocation_Info{
-                    .triangle_id = k,
-                    .b_0         = b0,
-                    .b_1         = b1,
-                    .b_2         = b2,
-                    .x           = x * 256 + (uint32_t)tile.x * 4 + sub_x,
-                    .y           = y * 256 + (uint32_t)tile.y * 4 + sub_y};
-              }
-            }
-          }
-        }
-      }
-
-      //      ts.alloc_page_aligned(1 << 20);
-      float4 *pixel_output          = NULL;
-      float * pixel_depth_output    = NULL;
-      float4 *pixel_positions_input = NULL;
-      // Spawn pixel shaders
-      if (num_pixel_invocations != 0) {
-        uint32_t subgroup_size = ps_symbols->subgroup_size;
-        uint32_t num_invocations =
-            (num_pixel_invocations + subgroup_size - 1) / subgroup_size;
-        // Allocate storage space for render target output
-        pixel_output = (float4 *)ts.alloc(sizeof(float4) * num_invocations *
-                                          subgroup_size);
-        pixel_positions_input = (float4 *)ts.alloc(
-            sizeof(float4) * num_invocations * subgroup_size * 3);
-        pixel_depth_output =
-            (float *)ts.alloc(sizeof(float) * num_invocations * subgroup_size);
-        // Allocate pixel shader input storage and
-        // Perform relocation of data for vs->ps
-        uint8_t *pixel_input = NULL;
-        pixel_input = (uint8_t *)ts.alloc(3 * ps_symbols->input_stride *
-                                          num_invocations * subgroup_size);
-        //                {
-        //                  float *pixel_input_f = (float *)pixel_input;
-        //                  ito(3 * ps_symbols->input_stride * num_invocations *
-        //                  subgroup_size /
-        //                      4) {
-        //                    pixel_input_f[i] = 1.0f;
-        //                  }
-        //                }
-        ito(num_pixel_invocations) {
-          Pixel_Invocation_Info info = pinfos[i];
-
-          jto(ps_symbols->input_item_count) {
-            // We push 3 attributes for each vertex of the triangle
-            // they're interpolated inside the pixel shader
-            Shader_Symbols::Varying_Slot input_slot =
-                ps_symbols->input_slots[j];
-            Shader_Symbols::Varying_Slot output_slot = {};
-            // find the corresponding slot in the vertex outputs
-            kto(vs_symbols->output_item_count) {
-              if (vs_symbols->output_slots[k].location == input_slot.location) {
-                output_slot = vs_symbols->output_slots[k];
-              }
-            }
-            ASSERT_ALWAYS(input_slot.format == output_slot.format);
-            size_t slot_size = vki::get_format_bpp((VkFormat)input_slot.format);
-
-            kto(3) {
-              memcpy(                                                         //
-                  pixel_input +                                               //
-                      ps_symbols->input_stride * (i * 3 + k) +                //
-                      input_slot.offset,                                      //
-                  vs_output +                                                 //
-                      output_slot.offset +                                    //
-                      vs_symbols->output_stride * (info.triangle_id * 3 + k), //
-                  slot_size);
-            }
-            //            kto(1) {
-            //              float3 tmp = (float3){k / 3.0f, 0.5f, 0.0f};
-            //              memcpy(                                          //
-            //                  pixel_input +                                //
-            //                      ps_symbols->input_stride * (i * 3 + k) + //
-            //                      input_slot.offset,                       //
-            //                  &tmp, slot_size);
-            //            }
-          }
-          kto(3) pixel_positions_input[i * 3 + k] =
-              screenspace_positions[info.triangle_id * 3 + k];
-        }
-
-        // Debug
-        if (0) {
-          ito(num_pixel_invocations) {
-            Pixel_Invocation_Info info = pinfos[i];
-            //            fprintf(stdout, "frag %i\n", i);
-            // Debug
-
-            jto(ps_symbols->input_item_count) {
-
-              Shader_Symbols::Varying_Slot input = ps_symbols->input_slots[j];
-              kto(3) * (float3 *)(pixel_input +
-                                  (i * 3 + k) * ps_symbols->input_stride +
-                                  input.offset) =
-                  (float3){((j + i + k * 33) % 10) / 10.0f, 0.5f, 0.0f};
-              //              break;
-              //              fprintf(stdout, "  in attrib: %i\n", j);
-              //              kto(3) {
-              //                fprintf(stdout, "    v: %i\n", k);
-              //                switch ((VkFormat)input.format) {
-              //                case VK_FORMAT_R32G32_SFLOAT: {
-              //                  float2 attrib =
-              //                      *(float2 *)(pixel_input + (i * 3 + k) *
-              //                      ps_symbols->input_stride +
-              //                                  input.offset);
-              //                  fprintf(stdout, "      <%f, %f>\n",
-              //                  attrib.x, attrib.y); break;
-              //                }
-              //                case VK_FORMAT_R32G32B32_SFLOAT: {
-              //                  float3 attrib =
-              //                      *(float3 *)(pixel_input + (i * 3 + k) *
-              //                      ps_symbols->input_stride +
-              //                                  input.offset);
-              //                  fprintf(stdout, "      <%f, %f, %f>\n",
-              //                  attrib.x, attrib.y,
-              //                          attrib.z);
-              //                  break;
-              //                }
-              //                case VK_FORMAT_R32G32B32A32_SFLOAT: {
-              //                  float4 attrib =
-              //                      *(float4 *)(pixel_input + (i * 3 + k) *
-              //                      ps_symbols->input_stride +
-              //                                  input.offset);
-              //                  fprintf(stdout, "      <%f, %f, %f, %f>\n",
-              //                  attrib.x, attrib.y,
-              //                          attrib.z, attrib.w);
-              //                  break;
-              //                }
-              //                default:
-              //                  TRAP;
-              //                }
-              //              }
-            }
-          }
-        }
-
-        info.work_group_size   = (uint3){subgroup_size, 1, 1};
-        info.invocation_count  = (uint3){num_invocations, 1, 1};
-        info.subgroup_size     = (uint3){subgroup_size, 1, 1};
-        info.subgroup_x_bits   = 0xff;
-        info.subgroup_x_offset = 0x0;
-        info.subgroup_y_bits   = 0x0;
-        info.subgroup_y_offset = 0x0;
-        info.subgroup_z_bits   = 0x0;
-        info.subgroup_z_offset = 0x0;
-        info.input             = NULL;
-        info.output            = NULL;
-        info.builtin_output    = NULL;
-        info.push_constants    = state->push_constants;
-        info.print_fn          = (void *)printf;
-        ito(num_invocations) {
-          float barycentrics[0x100] = {};
-          jto(subgroup_size) {
-            Pixel_Invocation_Info pinfo = pinfos[j + i * subgroup_size];
-            barycentrics[j * 3 + 0]     = pinfo.b_0;
-            barycentrics[j * 3 + 1]     = pinfo.b_1;
-            barycentrics[j * 3 + 2]     = pinfo.b_2;
-          }
-          info.barycentrics  = barycentrics;
-          info.invocation_id = (uint3){i, 0, 0};
-          info.input =
-              pixel_input + i * subgroup_size * ps_symbols->input_stride * 3;
-          info.output = pixel_output + i * subgroup_size;
-          // Assume there's only gl_Position
-          info.builtin_output  = pixel_depth_output + i * subgroup_size;
-          info.pixel_positions = pixel_positions_input + i * subgroup_size * 3;
-          info.wave_width      = ps_symbols->subgroup_size;
-          ps_symbols->spv_main(&info, (~0));
-        }
-        ito(num_pixel_invocations) {
-          Pixel_Invocation_Info info = pinfos[i];
-          uint32_t *            dst  = ((uint32_t *)rt->img->get_ptr());
-          if (info.x >= rt->img->extent.width) continue;
-          if (info.y >= rt->img->extent.height) continue;
-          float   depth_value = 1.0f;
-          float2 *depth_src   = (float2 *)depth->img->get_ptr() +
-                              info.y * rt->img->extent.width + info.x;
-          if (state->graphics_pipeline->DS_state.depthTestEnable == VK_TRUE) {
-            depth_value = (*depth_src).x;
-            if (state->graphics_pipeline->DS_state.depthCompareOp ==
-                VK_COMPARE_OP_LESS) {
-              if (pixel_depth_output[i] > depth_value) continue;
-            } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
-                       VK_COMPARE_OP_LESS_OR_EQUAL) {
-              if (pixel_depth_output[i] >= depth_value) continue;
-            } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
-                       VK_COMPARE_OP_GREATER) {
-              if (pixel_depth_output[i] < depth_value) continue;
-            } else if (state->graphics_pipeline->DS_state.depthCompareOp ==
-                       VK_COMPARE_OP_GREATER_OR_EQUAL) {
-              if (pixel_depth_output[i] <= depth_value) continue;
-            } else {
-              UNIMPLEMENTED;
-            }
-          }
-          if (state->graphics_pipeline->DS_state.depthWriteEnable == VK_TRUE) {
-            *depth_src = (float2){pixel_depth_output[i], 0};
-          }
-          dst[info.y * rt->img->extent.width + info.x] =
-              rgba32f_to_rgba8(pixel_output[i]);
-        }
-      }
-
-      //      map_pages(pinfos_shadow,
-      //      get_num_pages(sizeof(Pixel_Invocation_Info) *
-      //                                             max_pixel_invocations));
-      //      ito(tile_count) {
-      //        uint32_t subtile_x = (uint32_t)tiles[i].x * 4 + x * 256;
-      //        uint32_t subtile_y = (uint32_t)tiles[i].y * 4 + y * 256;
-      //        kto(4) {
-      //          jto(4) {
-      //            uint32_t texel_y = (subtile_y + k);
-      //            uint32_t texel_x = (subtile_x + j);
-      //            if (texel_x >= rt->img->extent.width)
-      //              break;
-      //            if (texel_y >= rt->img->extent.height)
-      //              break;
-      //            ((uint32_t *)rt->img
-      //                 ->get_ptr())[texel_y * rt->img->extent.width + texel_x]
-      //                 |=
-      //                (tiles[i].mask & (1 << ((k << 2) | j))) == 0 ? 0x0 :
-      //                0xff0000ff;
-      //          }
-      //        }
-      //        //      ito(tile_count) {
-      //        //        uint32_t x = ((uint32_t)tiles[i].x * 4 *
-      //        //        rt->img->extent.width) / 256; uint32_t y =
-      //        //        ((uint32_t)tiles[i].y * 4 * rt->img->extent.height) /
-      //        256;
-      //        //        kto((4 * rt->img->extent.height + 255) / 256) {
-      //        //          jto((4 * rt->img->extent.width + 255) / 256) {
-      //        //            ((uint32_t *)rt->img
-      //        //                 ->get_ptr())[(y + k) * rt->img->extent.width
-      //        + (x +
-      //        //                 j)] =
-      //        //                0xff0000ff;
-      //        //          }
-      //        //        }
-      //      }
-    }
-  }
-  //  ito(256) {
-  //    jto(256) {
-  //      uint32_t offset = tile_coord(j, i, 8, 2);
-  //      uint8_t r = *(uint8_t *)(void *)(((uint8_t *)image_i8) + offset);
-
-  //    }
-  //  }
-
-  //    ito(4) fprintf(stdout, "%f %f %f %f\n", vs_vertex_positions[i].x,
-  //                   vs_vertex_positions[i].y, vs_vertex_positions[i].z,
-  //                   vs_vertex_positions[i].w);
-  //    fprintf(stdout, "#################\n");
+void draw_indexed(vki::cmd::GPU_State *state, uint32_t indexCount,
+                  uint32_t instanceCount, uint32_t firstIndex,
+                  int32_t vertexOffset, uint32_t firstInstance) {
+  Draw_Call dc;
+  dc.begin_draw_indexed(state, indexCount, instanceCount, firstIndex,
+                        vertexOffset, firstInstance);
+  dc.end_draw();
 }
 
 #ifdef RASTER_EXE

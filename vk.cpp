@@ -431,6 +431,7 @@ void GPU_State::execute_commands(VkCommandBuffer_Impl *cmd_buf) {
     }
     case Cmd_t::BindDescriptorSets: {
       cmd::BindDescriptorSets cmd = cmd_buf->consume<cmd::BindDescriptorSets>();
+      ASSERT_ALWAYS(cmd.pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS);
       ASSERT_ALWAYS(cmd.dynamicOffsetCount == 0);
       ito(cmd.descriptorSetCount) {
         descriptor_sets[i + cmd.firstSet] = cmd.pDescriptorSets[i];

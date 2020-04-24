@@ -479,7 +479,7 @@ struct Spirv_Builder {
   //////////////////////
   uint32_t opt_subgroup_size  = 4;
   bool     opt_debug_comments = false;
-  bool     opt_debug_info     = false;
+  bool     opt_debug_info     = true;
   bool     opt_dump           = true;
   //  bool opt_deinterleave_attributes = false;
 

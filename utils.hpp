@@ -162,6 +162,12 @@ template <typename T = uint8_t> struct Temporary_Storage {
     return ptr;
   }
 
+  T *alloc_align(size_t size, size_t alignment) {
+    T *ptr = alloc(size + alignment);
+    ptr = (T*)(((size_t)ptr + alignment - 1)  & (~(alignment-1)));
+    return ptr;
+  }
+
   T *alloc_page_aligned(size_t size) {
     ASSERT_DEBUG(size != 0);
     size   = page_align_up(size) + get_page_size();
