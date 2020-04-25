@@ -13,7 +13,7 @@ struct UBO
   float4 viewMatrix[4];
 } ubo;
 
-void spv_main(void *);
+void spv_main(void *, uint64_t);
 
 void test_launch(void *_printf) {
   #pragma pack(push,1)
@@ -70,6 +70,8 @@ void test_launch(void *_printf) {
   info.input = &attributes;
   info.output = &colors;
   info.builtin_output = &gl_PerVertex;
+      info.print_fn = _printf;
+    info.wave_width = WAVE_WIDTH;
   void *descriptor_set_0[] = {NULL};
   descriptor_set_0[0] = &ubo;
   info.descriptor_sets[0] = descriptor_set_0;
@@ -80,7 +82,7 @@ void test_launch(void *_printf) {
     info.input = &attributes[i * WAVE_WIDTH];
     info.output = &colors[i * WAVE_WIDTH];
     info.builtin_output = &gl_PerVertex[i * WAVE_WIDTH];
-    spv_main(&info);
+    spv_main(&info, 0b1111);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {

@@ -4,7 +4,7 @@ r"""
 
 extern "C"{
 
-const uint32_t NUM_INVOCATIONS = 1024;
+const uint32_t NUM_INVOCATIONS = 128;
 
 void spv_main(void *, uint64_t);
 
@@ -12,8 +12,7 @@ void test_launch(void *_printf) {
   uint32_t g_buf_0[NUM_INVOCATIONS];
   uint32_t g_buf_1[NUM_INVOCATIONS];
   for (uint32_t i = 1; i < NUM_INVOCATIONS; i++) {
-    g_buf_1[i] = ((i << (g_buf_1[i] + 1)) ^ g_buf_1[i - 1]) ^ 1;
-    // ((printf_t)_printf)("[%i %i]\n", g_buf_0[i], g_buf_1[i]);
+    g_buf_1[i] = i & 1;
   }
   Invocation_Info info;
   for (uint32_t i = 1; i < sizeof(info); i++)
@@ -49,7 +48,7 @@ void test_launch(void *_printf) {
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
-    TEST_EQ(g_buf_0[i], g_buf_1[i]);
+    TEST_EQ(g_buf_0[i], i & 1);
   }
   ((printf_t)_printf)("[SUCCESS]\n");
 }
@@ -60,10 +59,13 @@ shader = \
 r"""
 [[vk::binding(0, 0)]] RWBuffer <uint> g_buf_0;
 [[vk::binding(1, 0)]] RWBuffer <uint> g_buf_1;
-[numthreads(64, 1, 1)]
+[numthreads(4, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
 {
-    g_buf_0[tid.x] = g_buf_1[tid.x];
+  if (g_buf_1[tid.x] > 0)
+    g_buf_0[tid.x] = 1;
+  else
+    g_buf_0[tid.x] = 0;
 }
 """
 shader_filename = "shader.comp.hlsl"

@@ -27,7 +27,7 @@ message(STATUS "LLVM_LIBRARY_LIST:" ${LLVM_LIBRARY_LIST})
 add_custom_command(
 OUTPUT llvm_stdlib_1.h
 DEPENDS ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp
-COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -march=skylake ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -g -march=skylake ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
         python3 ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll 1 > llvm_stdlib_1.ll &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_1.ll -o llvm_stdlib_1.bc &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as spv_stdlib.ll -o spv_stdlib.bc &&
@@ -51,7 +51,7 @@ COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -g -march=skylake ${CMAKE_SOURCE_DIR}/spv
 add_custom_command(
 OUTPUT llvm_stdlib_64.h
 DEPENDS ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp
-COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -march=skylake ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -g -march=skylake ${CMAKE_SOURCE_DIR}/spv_stdlib/spv_stdlib.cpp -S -emit-llvm &&
         python3 ${CMAKE_SOURCE_DIR}/spv_stdlib/stdlibgen.py ${CMAKE_SOURCE_DIR}/spv_stdlib/default_stdlib.ll 64 > llvm_stdlib_64.ll &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as llvm_stdlib_64.ll -o llvm_stdlib_64.bc &&
         ${LLVM_TOOLS_BINARY_DIR}/llvm-as spv_stdlib.ll -o spv_stdlib.bc &&
@@ -119,6 +119,6 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=skylake -Werror -ferror-limit=1 
 target_compile_definitions(vk PRIVATE ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(s2l PRIVATE "-DS2L_EXE " ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(raster PRIVATE "-DRASTER_EXE " ${LLVM_COMPILE_FLAGS})
-target_link_libraries(s2l ${LLVM_LIBRARY_LIST} pthread ncurses z dl)
+target_link_libraries(s2l ${LLVM_LIBRARY_LIST} ${VULKAN_SDK}/lib/libSPIRV-Tools-shared.so SPIRV-Tools pthread ncurses z dl)
 target_link_libraries(vk ${LLVM_LIBRARY_LIST} ${VULKAN_SDK}/lib/libSPIRV-Tools-shared.so SPIRV-Tools pthread ncurses z dl xcb-image X11)
 target_link_libraries(raster SDL2 OpenGL pthread)

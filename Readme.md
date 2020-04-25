@@ -7,7 +7,10 @@ python3 tests/run_all_tests.py
 ```
 
 ## Build
-### LLVM Version: commit 0d3149f43173967d6f4e4c5c904a05e1022071d4
+### LLVM Version: 11.* commit 0d3149f43173967d6f4e4c5c904a05e1022071d4
+* Used for JIT code generation
+### Vulkan SDK: 1.2.135.0
+* Used for headers, spirv disassembly
 ### LibPFC
 ```console
 cd 3rdparty/libpfc

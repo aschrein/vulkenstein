@@ -40,6 +40,11 @@ struct Invocation_Info {
   void *   trap_fn;
   float *  barycentrics;
   void **  descriptor_sets[0x10];
+  uint8_t *is_front_face;
+  // if we take paths with lowest popcnt we don't need
+  // more than logN depth
+  uint64_t mask_stack[6];
+  uint32_t mask_top;
 };
 
 typedef int (*printf_t)(const char *__restrict __format, ...);
@@ -84,6 +89,7 @@ struct Combined_Image {
 #else
 #define FNATTR
 #endif
+#define PURE __attribute__ ((pure))
 FNATTR uint32_t morton(uint32_t x, uint32_t y) {
   uint32_t x_dep = _pdep_u32(x, 0b01'01'01'01'01'01'01'01'01'01'01'01'01'01'01'01);
   uint32_t y_dep = _pdep_u32(y, 0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10);
@@ -95,12 +101,28 @@ FNATTR void unmorton(uint32_t address, uint32_t *x, uint32_t *y) {
   *y = _pext_u32(address, 0b10'10'10'10'10'10'10'10'10'10'10'10'10'10'10'10);
 }
 
+FNATTR bool spv_is_front_face(Invocation_Info *state, uint32_t lane_id) {
+  return state->is_front_face[lane_id] == 1;
+}
+
 FNATTR float4 get_pixel_position(Invocation_Info *state, uint32_t lane_id, float b0, float b1,
                                  float b2) {
   float4 v0 = ((float4 *)state->pixel_positions)[lane_id * 3 + 0];
   float4 v1 = ((float4 *)state->pixel_positions)[lane_id * 3 + 1];
   float4 v2 = ((float4 *)state->pixel_positions)[lane_id * 3 + 2];
   return v0 * b0 + v1 * b1 + v2 * b2;
+}
+
+FNATTR void spv_push_mask(Invocation_Info *state, uint64_t mask) {
+  state->mask_stack[state->mask_top++] = mask;
+}
+
+FNATTR uint64_t spv_pop_mask(Invocation_Info *state) {
+  return state->mask_stack[--state->mask_top];
+}
+
+FNATTR bool PURE spv_get_lane_mask(uint64_t mask, uint32_t lane_id) {
+  return ((mask >> lane_id) & 1) == 1;
 }
 
 FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id, float d) {
@@ -244,7 +266,9 @@ FNATTR uint32_t spv_image_read_1d_i32(uint64_t handle, uint32_t coord) {
   return *(uint32_t *)&ptr->data[coord * ptr->bpp];
 }
 
-FNATTR void spv_image_write_1d_i32(uint64_t handle, uint32_t coord, uint32_t val) {
+FNATTR void spv_image_write_1d_i32(uint64_t handle, uint32_t coord, uint32_t val, bool write_mask) {
+  if (!write_mask)
+    return;
   Image *ptr                                  = (Image *)(void *)(size_t)handle;
   *(uint32_t *)(&ptr->data[coord * ptr->bpp]) = val;
 }
@@ -378,39 +402,38 @@ FNATTR float4 spv_lerp_f4(float4 a, float4 b, float t) {
   return a * (1.0f - t) + b * t;
 }
 
-FNATTR float spv_wraparound(float a) {
-  return a - floor(a);
-}
+FNATTR float spv_wraparound(float a) { return a - floor(a); }
 
-FNATTR float4 spv_image_sample_2d_lod(uint64_t handle, float coordx, float coordy, uint32_t mip_level) {
-  Image *image = (Image *)(void *)(size_t)handle;
-  float u = image->width * spv_wraparound(spv_fract(coordx));
-  float v = image->height * spv_wraparound(spv_fract(coordy));
-  uint32_t x0 = (uint32_t)(u);
-  uint32_t y0 = (uint32_t)(v);
-  uint32_t x1 = (uint32_t)(u + 1.0f);
-  uint32_t y1 = (uint32_t)(v + 1.0f);
-  float4 s00 = spv_image_read_2d_lod(handle, (uint2){x0, y0}, mip_level);
-  float4 s01 = spv_image_read_2d_lod(handle, (uint2){x1, y0}, mip_level);
-  float4 s10 = spv_image_read_2d_lod(handle, (uint2){x0, y1}, mip_level);
-  float4 s11 = spv_image_read_2d_lod(handle, (uint2){x1, y1}, mip_level);
-  float l0 = spv_fract(u);
-  float l1 = spv_fract(v);
+FNATTR float4 spv_image_sample_2d_lod(uint64_t handle, float coordx, float coordy,
+                                      uint32_t mip_level) {
+  Image *  image = (Image *)(void *)(size_t)handle;
+  float    u     = image->width * spv_wraparound(spv_fract(coordx));
+  float    v     = image->height * spv_wraparound(spv_fract(coordy));
+  uint32_t x0    = (uint32_t)(u);
+  uint32_t y0    = (uint32_t)(v);
+  uint32_t x1    = (uint32_t)(u + 1.0f);
+  uint32_t y1    = (uint32_t)(v + 1.0f);
+  float4   s00   = spv_image_read_2d_lod(handle, (uint2){x0, y0}, mip_level);
+  float4   s01   = spv_image_read_2d_lod(handle, (uint2){x1, y0}, mip_level);
+  float4   s10   = spv_image_read_2d_lod(handle, (uint2){x0, y1}, mip_level);
+  float4   s11   = spv_image_read_2d_lod(handle, (uint2){x1, y1}, mip_level);
+  float    l0    = spv_fract(u);
+  float    l1    = spv_fract(v);
   return spv_lerp_f4(spv_lerp_f4(s00, s01, l0), spv_lerp_f4(s10, s11, l0), l1);
 }
 FNATTR float4 spv_image_sample_2d_float4(uint64_t image_handle, uint64_t sampler_handle,
                                          float coordx, float coordy, float dudx, float dudy,
                                          float dvdx, float dvdy) {
-//      return (float4){coordx, coordy, 0.0f, 1.0f};
+  //      return (float4){coordx, coordy, 0.0f, 1.0f};
   Image *  image   = (Image *)(void *)(size_t)image_handle;
   Sampler *sampler = (Sampler *)(void *)(size_t)sampler_handle;
-//  return spv_image_sample_2d_lod(
-//      image_handle,
-//      coordx, coordy,
-//      0);
-  float u = image->width * spv_wraparound(spv_fract(coordx));
-  float v = image->height * spv_wraparound(spv_fract(coordy));
-  uint32_t x = (uint32_t)(u );
+  //  return spv_image_sample_2d_lod(
+  //      image_handle,
+  //      coordx, coordy,
+  //      0);
+  float    u = image->width * spv_wraparound(spv_fract(coordx));
+  float    v = image->height * spv_wraparound(spv_fract(coordy));
+  uint32_t x = (uint32_t)(u);
   uint32_t y = (uint32_t)(v);
   return spv_image_read_2d_lod(image_handle, (uint2){x, y}, 0);
   //_______________
@@ -469,6 +492,9 @@ FNATTR void dump_float(Invocation_Info *state, float m) {
 FNATTR void dump_string(Invocation_Info *state, char const *str) {
   ((printf_t)state->print_fn)("%s\n", str);
 }
-
+FNATTR void dump_mask(Invocation_Info *state, uint64_t mask) {
+  for (int i = 0; i < state->wave_width; i++) ((printf_t)state->print_fn)("%i", ((mask >> i) & 1));
+  ((printf_t)state->print_fn)("\n");
+}
 }
 #endif

@@ -6,7 +6,7 @@ extern "C"{
 
 const uint32_t NUM_INVOCATIONS = 128;
 
-void spv_main(void *);
+void spv_main(void *, uint64_t);
 
 void test_launch(void *_printf) {
   #pragma pack(push,1)
@@ -35,6 +35,8 @@ void test_launch(void *_printf) {
   info.subgroup_z_bits    = 0x0;
   info.subgroup_z_offset  = 0x0;
 
+  float dummy[0x100];
+
   for (uint32_t i = 0; i < NUM_INVOCATIONS/WAVE_WIDTH; i++) {
     float barycentrics[WAVE_WIDTH * 3] = {};
     for (uint32_t j = 0; j < WAVE_WIDTH; j++) {
@@ -47,7 +49,12 @@ void test_launch(void *_printf) {
     info.input = &attributes[3 * i * WAVE_WIDTH];
     info.output = &pixel_out[i * WAVE_WIDTH];
     info.barycentrics = barycentrics;
-    spv_main(&info);
+    info.pixel_positions = (uint8_t*)(void*)dummy;
+    info.is_front_face = (uint8_t*)(void*)dummy;
+    info.builtin_output = (uint8_t*)(void*)dummy;
+    info.print_fn = _printf;
+    info.wave_width = WAVE_WIDTH;
+    spv_main(&info, 0b1111);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {

@@ -2201,6 +2201,7 @@ struct Draw_Call {
     // Barycentric coordinates
     float    b_0, b_1, b_2;
     uint32_t x, y;
+    bool is_front_face;
   };
   struct {
     Pixel_Invocation_Info *pinfos                = NULL;
@@ -2557,8 +2558,10 @@ struct Draw_Call {
               b0 /= sum;
               b1 /= sum;
               b2 /= sum;
+              bool is_front_face = true;
               if (area > 0.0f) {
                 SWAP(b1, b2);
+                is_front_face = false;
               }
 
               float bw = b0 / v0.w + b1 / v1.w + b2 / v2.w;
@@ -2572,7 +2575,8 @@ struct Draw_Call {
                                         .b_1         = b1,
                                         .b_2         = b2,
                                         .x = cur_tile.x * 256 + (uint32_t)tile.x * 4 + sub_x,
-                                        .y = cur_tile.y * 256 + (uint32_t)tile.y * 4 + sub_y};
+                                        .y = cur_tile.y * 256 + (uint32_t)tile.y * 4 + sub_y,
+                                        .is_front_face = is_front_face};
             }
           }
         }
@@ -2687,11 +2691,13 @@ struct Draw_Call {
       info.print_fn          = (void *)printf;
       ito(num_invocations) {
         float barycentrics[0x100] = {};
+        uint8_t is_front_face[0x100] = {};
         jto(subgroup_size) {
           Pixel_Invocation_Info pinfo = cur_tile.pinfos[j + i * subgroup_size];
           barycentrics[j * 3 + 0]     = pinfo.b_0;
           barycentrics[j * 3 + 1]     = pinfo.b_1;
           barycentrics[j * 3 + 2]     = pinfo.b_2;
+          is_front_face[j] = pinfo.is_front_face;
         }
         info.work_group_size  = (uint3){subgroup_size, 1, 1};
         info.invocation_count = (uint3){num_invocations, 1, 1};
@@ -2704,6 +2710,7 @@ struct Draw_Call {
         info.builtin_output  = cur_tile.pixel_depth_output + i * subgroup_size;
         info.pixel_positions = cur_tile.pixel_positions_input + i * subgroup_size * 3;
         info.wave_width      = ps_symbols->subgroup_size;
+        info.is_front_face = &is_front_face[0];
         ps_symbols->spv_main(&info, (~0));
       }
     }
