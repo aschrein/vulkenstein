@@ -41,10 +41,12 @@ struct Invocation_Info {
   float *  barycentrics;
   void **  descriptor_sets[0x10];
   uint8_t *is_front_face;
-  // if we take paths with lowest popcnt we don't need
-  // more than logN depth
-  uint64_t mask_stack[6];
-  uint32_t mask_top;
+  uint64_t enabled_lanes;
+  uint64_t discarded_lanes;
+//  // if we take paths with lowest popcnt we don't need
+//  // more than logN depth
+//  uint64_t mask_stack[6];
+//  uint32_t mask_top;
 };
 
 typedef int (*printf_t)(const char *__restrict __format, ...);
@@ -113,16 +115,31 @@ FNATTR float4 get_pixel_position(Invocation_Info *state, uint32_t lane_id, float
   return v0 * b0 + v1 * b1 + v2 * b2;
 }
 
-FNATTR void spv_push_mask(Invocation_Info *state, uint64_t mask) {
-  state->mask_stack[state->mask_top++] = mask;
+//FNATTR void spv_push_mask(Invocation_Info *state, uint64_t mask) {
+//  state->mask_stack[state->mask_top++] = mask;
+//}
+
+//FNATTR uint64_t spv_pop_mask(Invocation_Info *state) {
+//  return state->mask_stack[--state->mask_top];
+//}
+
+FNATTR bool PURE spv_get_lane_mask(Invocation_Info *state, uint64_t mask, uint32_t lane_id) {
+  return (((state->enabled_lanes & mask) >> lane_id) & 1) == 1;
 }
 
-FNATTR uint64_t spv_pop_mask(Invocation_Info *state) {
-  return state->mask_stack[--state->mask_top];
+// Disable unmasked lanes
+// returns true if all lanes are disabled
+FNATTR bool spv_disable_lanes(Invocation_Info *state, uint64_t lane_mask) {
+  state->enabled_lanes &= ~lane_mask;
+  return state->enabled_lanes == 0;
 }
 
-FNATTR bool PURE spv_get_lane_mask(uint64_t mask, uint32_t lane_id) {
-  return ((mask >> lane_id) & 1) == 1;
+// Discard unmasked lanes
+// returns true if all lanes are disabled
+FNATTR bool spv_discard_lanes(Invocation_Info *state, uint64_t lane_mask) {
+  state->discarded_lanes &= ~lane_mask;
+  state->enabled_lanes &= ~lane_mask;
+  return state->enabled_lanes == 0;
 }
 
 FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id, float d) {

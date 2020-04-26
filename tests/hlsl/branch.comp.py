@@ -62,10 +62,16 @@ r"""
 [numthreads(4, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
 {
-  if (g_buf_1[tid.x] > 0)
-    g_buf_0[tid.x] = 1;
-  else
-    g_buf_0[tid.x] = 0;
+  int val = 666;
+  if (g_buf_1[tid.x] > 0) {
+    val = 1;
+    for (uint i = 0; i < g_buf_1[tid.x]; i++) {
+      val += g_buf_1[tid.x + i];
+    }
+  } else {
+    val = 0;
+  }
+  g_buf_0[tid.x] = val;
 }
 """
 shader_filename = "shader.comp.hlsl"
