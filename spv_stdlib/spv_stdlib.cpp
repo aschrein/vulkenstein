@@ -7,7 +7,17 @@
 #include <x86intrin.h>
 
 extern "C" {
-
+using u64 = uint64_t;
+using u32 = uint32_t;
+using u16 = uint16_t;
+using u8  = uint8_t;
+using i64 = int64_t;
+using i32 = int32_t;
+using i16 = int16_t;
+using i8  = int8_t;
+using i32 = int32_t;
+using f32 = float;
+using f64 = double;
 typedef float    float4 __attribute__((ext_vector_type(4))) __attribute__((aligned(16)));
 typedef float    float3 __attribute__((ext_vector_type(3))) __attribute__((aligned(4)));
 typedef float    float2 __attribute__((ext_vector_type(2))) __attribute__((aligned(4)));
@@ -145,6 +155,15 @@ FNATTR bool spv_discard_lanes(Invocation_Info *state, uint64_t lane_mask) {
 FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id, float d) {
   ((float *)state->builtin_output)[lane_id] = d;
 }
+
+FNATTR u64 spv_get_enabled_lanes(Invocation_Info *state) {
+  return state->enabled_lanes;
+}
+
+FNATTR void spv_set_enabled_lanes(Invocation_Info *state, u64 mask) {
+  state->enabled_lanes = mask;
+}
+
 // For pixel shaders we follow morton curve order
 // There are a number of configurations employed in this implementation
 // 1: 2x2

@@ -81,6 +81,9 @@ target_include_directories(raster
   ${CMAKE_BINARY_DIR}
   ${LLVM_INCLUDE_DIRS}
 )
+add_executable(uedit
+uedit.cpp
+)
 add_library(vk SHARED
 vk.cpp
 raster.cpp
@@ -122,3 +125,4 @@ target_compile_definitions(raster PRIVATE "-DRASTER_EXE " ${LLVM_COMPILE_FLAGS})
 target_link_libraries(s2l ${LLVM_LIBRARY_LIST} ${VULKAN_SDK}/lib/libSPIRV-Tools-shared.so SPIRV-Tools pthread ncurses z dl)
 target_link_libraries(vk ${LLVM_LIBRARY_LIST} ${VULKAN_SDK}/lib/libSPIRV-Tools-shared.so SPIRV-Tools pthread ncurses z dl xcb-image X11)
 target_link_libraries(raster SDL2 OpenGL pthread)
+target_link_libraries(uedit SDL2 OpenGL pthread)

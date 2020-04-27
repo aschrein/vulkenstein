@@ -12,13 +12,13 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define ASSERT_ALWAYS(x)                                                       \
-  {                                                                            \
-    if (!(x)) {                                                                \
-      fprintf(stderr, "%s:%i [FAIL] at %s\n", __FILE__, __LINE__, #x);         \
-      (void)(*(volatile int *)(NULL) = 0);                                     \
-      abort();                                                                 \
-    }                                                                          \
+#define ASSERT_ALWAYS(x)                                                                           \
+  {                                                                                                \
+    if (!(x)) {                                                                                    \
+      fprintf(stderr, "%s:%i [FAIL] at %s\n", __FILE__, __LINE__, #x);                             \
+      (void)(*(volatile int *)(NULL) = 0);                                                         \
+      abort();                                                                                     \
+    }                                                                                              \
   }
 #define ASSERT_DEBUG(x) ASSERT_ALWAYS(x)
 #define NOTNULL(x) ASSERT_ALWAYS((x) != NULL)
@@ -31,16 +31,28 @@
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
+using u64 = uint64_t;
+using u32 = uint32_t;
+using u16 = uint16_t;
+using u8  = uint8_t;
+using i64 = int64_t;
+using i32 = int32_t;
+using i16 = int16_t;
+using i8  = int8_t;
+using i32 = int32_t;
+using f32 = float;
+using f64 = double;
+
 template <typename T> T copy(T const &in) { return in; }
 
 template <typename M, typename K> bool contains(M const &in, K const &key) {
   return in.find(key) != in.end();
 }
 
-#define UNIMPLEMENTED_(s)                                                      \
-  {                                                                            \
-    fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);        \
-    abort();                                                                   \
+#define UNIMPLEMENTED_(s)                                                                          \
+  {                                                                                                \
+    fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);                            \
+    abort();                                                                                       \
   }
 
 #define UNIMPLEMENTED UNIMPLEMENTED_("")
@@ -73,14 +85,14 @@ template <typename F> __Defer__<F> defer_func(F f) { return __Defer__<F>(f); }
 #define PERF_ENTER(name)
 #define PERF_EXIT(name)
 #define OK_FALLTHROUGH (void)0;
-#define TMP_STORAGE_SCOPE                                                      \
-  tl_alloc_tmp_enter();                                                        \
+#define TMP_STORAGE_SCOPE                                                                          \
+  tl_alloc_tmp_enter();                                                                            \
   defer(tl_alloc_tmp_exit(););
-#define SWAP(x, y)                                                             \
-  {                                                                            \
-    auto tmp = x;                                                              \
-    x        = y;                                                              \
-    y        = tmp;                                                            \
+#define SWAP(x, y)                                                                                 \
+  {                                                                                                \
+    auto tmp = x;                                                                                  \
+    x        = y;                                                                                  \
+    y        = tmp;                                                                                \
   }
 
 static size_t get_page_size() { return sysconf(_SC_PAGE_SIZE); }
@@ -93,17 +105,12 @@ static size_t page_align_up(size_t n) {
   return (n - get_page_size() - 1) & (~(get_page_size() - 1));
 }
 
-static size_t page_align_down(size_t n) {
-  return (n) & (~(get_page_size() - 1));
-}
+static size_t page_align_down(size_t n) { return (n) & (~(get_page_size() - 1)); }
 
-static size_t get_num_pages(size_t size) {
-  return page_align_up(size) / get_page_size();
-}
+static size_t get_num_pages(size_t size) { return page_align_up(size) / get_page_size(); }
 
 static void unprotect_pages(void *ptr, size_t num_pages, bool exec = false) {
-  mprotect(ptr, num_pages * get_page_size(),
-           PROT_WRITE | PROT_READ | (exec ? PROT_EXEC : 0));
+  mprotect(ptr, num_pages * get_page_size(), PROT_WRITE | PROT_READ | (exec ? PROT_EXEC : 0));
 }
 
 static void unmap_pages(void *ptr, size_t num_pages) {
@@ -112,8 +119,8 @@ static void unmap_pages(void *ptr, size_t num_pages) {
 }
 
 static void map_pages(void *ptr, size_t num_pages) {
-  void *new_ptr = mmap(ptr, num_pages * get_page_size(), PROT_READ | PROT_WRITE,
-                       MAP_ANON | MAP_PRIVATE, -1, 0);
+  void *new_ptr =
+      mmap(ptr, num_pages * get_page_size(), PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
   ASSERT_ALWAYS((size_t)new_ptr == (size_t)ptr);
 }
 
@@ -129,10 +136,9 @@ template <typename T = uint8_t> struct Temporary_Storage {
     ASSERT_DEBUG(capacity > 0);
     Temporary_Storage out;
     size_t            STACK_CAPACITY = 0x100 * sizeof(size_t);
-    out.mem_length =
-        get_num_pages(STACK_CAPACITY + capacity * sizeof(T)) * get_page_size();
-    out.ptr = (uint8_t *)mmap(NULL, out.mem_length, PROT_READ | PROT_WRITE,
-                              MAP_ANON | MAP_PRIVATE, -1, 0);
+    out.mem_length = get_num_pages(STACK_CAPACITY + capacity * sizeof(T)) * get_page_size();
+    out.ptr = (uint8_t *)mmap(NULL, out.mem_length, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE,
+                              -1, 0);
     ;
     out.capacity       = capacity;
     out.cursor         = 0;
@@ -142,7 +148,7 @@ template <typename T = uint8_t> struct Temporary_Storage {
   }
 
   void release() {
-    munmap(this->ptr, mem_length);
+    if (this->ptr) munmap(this->ptr, mem_length);
     memset(this, 0, sizeof(Temporary_Storage));
   }
 
@@ -153,9 +159,7 @@ template <typename T = uint8_t> struct Temporary_Storage {
 
   bool has_items() { return this->cursor > 0; }
 
-  T *at(uint32_t i) {
-    return (T *)(this->ptr + this->stack_capacity + i * sizeof(T));
-  }
+  T *at(uint32_t i) { return (T *)(this->ptr + this->stack_capacity + i * sizeof(T)); }
 
   T *alloc(size_t size) {
     ASSERT_DEBUG(size != 0);
@@ -167,16 +171,15 @@ template <typename T = uint8_t> struct Temporary_Storage {
 
   T *alloc_align(size_t size, size_t alignment) {
     T *ptr = alloc(size + alignment);
-    ptr = (T*)(((size_t)ptr + alignment - 1)  & (~(alignment-1)));
+    ptr    = (T *)(((size_t)ptr + alignment - 1) & (~(alignment - 1)));
     return ptr;
   }
 
   T *alloc_page_aligned(size_t size) {
     ASSERT_DEBUG(size != 0);
-    size   = page_align_up(size) + get_page_size();
-    T *ptr = (T *)(this->ptr + this->stack_capacity + this->cursor * sizeof(T));
-    T *aligned_ptr =
-        (T *)(void *)page_align_down((size_t)ptr + get_page_size());
+    size           = page_align_up(size) + get_page_size();
+    T *ptr         = (T *)(this->ptr + this->stack_capacity + this->cursor * sizeof(T));
+    T *aligned_ptr = (T *)(void *)page_align_down((size_t)ptr + get_page_size());
     this->cursor += size;
     ASSERT_DEBUG(this->cursor < this->capacity);
     return aligned_ptr;
@@ -226,15 +229,12 @@ void tl_alloc_tmp_exit();
 struct string_ref {
   const char *ptr;
   size_t      len;
-  string_ref  substr(size_t offset, size_t new_len) {
-    return string_ref{ptr + offset, new_len};
-  }
+  string_ref  substr(size_t offset, size_t new_len) { return string_ref{ptr + offset, new_len}; }
 };
 
 static bool operator==(string_ref a, string_ref b) {
   if (a.ptr == NULL || b.ptr == NULL) return false;
-  return a.len != b.len ? false
-                        : strncmp(a.ptr, b.ptr, a.len) == 0 ? true : false;
+  return a.len != b.len ? false : strncmp(a.ptr, b.ptr, a.len) == 0 ? true : false;
 }
 
 static uint64_t hash_of(uint64_t u) {
@@ -248,6 +248,8 @@ static uint64_t hash_of(uint64_t u) {
   v ^= v << 5;
   return v;
 }
+
+template <typename T> static uint64_t hash_of(T *ptr) { return hash_of((u64)ptr); }
 
 static uint64_t hash_of(string_ref a) {
   uint64_t        len         = a.len;
@@ -358,8 +360,7 @@ static int32_t stref_find_last(string_ref a, string_ref b, size_t start = 0) {
   int32_t cursor   = stref_find(a, b, start);
   while (cursor >= 0) {
     last_pos = cursor;
-    if ((size_t)cursor + 1 < a.len)
-      cursor = stref_find_last(a, b, (size_t)(cursor + 1));
+    if ((size_t)cursor + 1 < a.len) cursor = stref_find_last(a, b, (size_t)(cursor + 1));
   }
   return last_pos;
 }
@@ -382,7 +383,7 @@ static void dump_file(char const *path, void const *data, size_t size) {
 }
 
 static void ATTR_USED write_image_2d_i32_ppm(const char *file_name, void *data, uint32_t pitch,
-                            uint32_t width, uint32_t height) {
+                                             uint32_t width, uint32_t height) {
   FILE *file = fopen(file_name, "wb");
   ASSERT_ALWAYS(file);
   fprintf(file, "P6\n");
@@ -390,12 +391,11 @@ static void ATTR_USED write_image_2d_i32_ppm(const char *file_name, void *data, 
   fprintf(file, "255\n");
   ito(height) {
     jto(width) {
-      uint32_t pixel =
-          *(uint32_t *)(void *)(((uint8_t *)data) + i * pitch + j * 4);
-      uint8_t r = ((pixel >> 0) & 0xff);
-      uint8_t g = ((pixel >> 8) & 0xff);
-      uint8_t b = ((pixel >> 16) & 0xff);
-      uint8_t a = ((pixel >> 24) & 0xff);
+      uint32_t pixel = *(uint32_t *)(void *)(((uint8_t *)data) + i * pitch + j * 4);
+      uint8_t  r     = ((pixel >> 0) & 0xff);
+      uint8_t  g     = ((pixel >> 8) & 0xff);
+      uint8_t  b     = ((pixel >> 16) & 0xff);
+      uint8_t  a     = ((pixel >> 24) & 0xff);
       if (a == 0) {
         r = ((i & 1) ^ (j & 1)) * 127;
         g = ((i & 1) ^ (j & 1)) * 127;
@@ -410,7 +410,7 @@ static void ATTR_USED write_image_2d_i32_ppm(const char *file_name, void *data, 
 }
 
 static void ATTR_USED write_image_2d_i24_ppm(const char *file_name, void *data, uint32_t pitch,
-                            uint32_t width, uint32_t height) {
+                                             uint32_t width, uint32_t height) {
   FILE *file = fopen(file_name, "wb");
   ASSERT_ALWAYS(file);
   fprintf(file, "P6\n");
@@ -430,7 +430,7 @@ static void ATTR_USED write_image_2d_i24_ppm(const char *file_name, void *data, 
 }
 
 static void ATTR_USED write_image_2d_i8_ppm(const char *file_name, void *data, uint32_t pitch,
-                           uint32_t width, uint32_t height) {
+                                            uint32_t width, uint32_t height) {
   FILE *file = fopen(file_name, "wb");
   ASSERT_ALWAYS(file);
   fprintf(file, "P6\n");
@@ -454,8 +454,7 @@ struct Allocator {
   static Allocator *get_default() {
     struct _Allocator : public Allocator {
       virtual void *alloc(size_t size) override { return tl_alloc(size); }
-      virtual void *realloc(void *ptr, size_t old_size,
-                            size_t new_size) override {
+      virtual void *realloc(void *ptr, size_t old_size, size_t new_size) override {
         return tl_realloc(ptr, old_size, new_size);
       }
       virtual void free(void *ptr) override { tl_free(ptr); }
@@ -480,8 +479,7 @@ template <typename T> struct Array {
   size_t     capacity;
   Allocator *allocator;
   size_t     grow_k;
-  Array(uint32_t capacity = 0, Allocator *allocator = NULL,
-        size_t grow_k = 0x100) {
+  Array(uint32_t capacity = 0, Allocator *allocator = NULL, size_t grow_k = 0x100) {
     if (allocator == NULL) allocator = Allocator::get_default();
     if (capacity != 0)
       ptr = (T *)allocator->alloc(sizeof(T) * capacity);
@@ -492,6 +490,8 @@ template <typename T> struct Array {
     this->capacity  = capacity;
     this->grow_k    = grow_k;
   }
+  u32  get_size() { return this->size; }
+  u32  has_items() { return get_size() != 0; }
   void release() {
     if (ptr != NULL) {
       allocator->free(ptr);
@@ -501,9 +501,8 @@ template <typename T> struct Array {
   void resize(size_t new_size) {
     if (new_size > capacity) {
       uint64_t new_capacity = new_size;
-      ptr                   = (T *)allocator->realloc(ptr, sizeof(T) * capacity,
-                                    sizeof(T) * new_capacity);
-      capacity              = new_capacity;
+      ptr      = (T *)allocator->realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
+      capacity = new_capacity;
     }
     ASSERT_DEBUG(capacity >= size + 1);
     ASSERT_DEBUG(ptr != NULL);
@@ -528,9 +527,8 @@ template <typename T> struct Array {
   void push(T elem) {
     if (size + 1 > capacity) {
       uint64_t new_capacity = capacity + grow_k;
-      ptr                   = (T *)allocator->realloc(ptr, sizeof(T) * capacity,
-                                    sizeof(T) * new_capacity);
-      capacity              = new_capacity;
+      ptr      = (T *)allocator->realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
+      capacity = new_capacity;
     }
     ASSERT_DEBUG(capacity >= size + 1);
     ASSERT_DEBUG(ptr != NULL);
@@ -544,9 +542,8 @@ template <typename T> struct Array {
     T elem = ptr[size - 1];
     if (size + grow_k < capacity) {
       uint64_t new_capacity = capacity - grow_k;
-      ptr                   = (T *)allocator->realloc(ptr, sizeof(T) * capacity,
-                                    sizeof(T) * new_capacity);
-      capacity              = new_capacity;
+      ptr      = (T *)allocator->realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
+      capacity = new_capacity;
     }
     ASSERT_DEBUG(size != 0);
     size -= 1;
@@ -554,25 +551,21 @@ template <typename T> struct Array {
   }
 };
 
-template <typename K, typename V> struct Hash_Pair {
-  K        key;
-  V        value;
-  uint64_t hash;
-};
+template <typename K> struct Hash_Set {
+  struct Hash_Pair {
+    K        key;
+    uint64_t hash;
+  };
+  Array<Hash_Pair> arr;
+  size_t    item_count = 0;
+  size_t    grow_k     = 16;
+  uint32_t  attempts   = 16;
 
-template <typename K, typename V> struct HashArray {
-  using HP = Hash_Pair<K, V>;
-  Array<HP> arr;
-  size_t    item_count;
-  size_t    grow_k;
-  uint32_t  attempts;
-
-  HashArray() { memset(this, 0, sizeof(*this)); }
   void release() {
     arr.release();
     item_count = 0;
   }
-  bool push(K key, V value) {
+  bool insert(K key) {
     {
       uint32_t attempts = attempts;
       uint64_t hash     = hash_of(key);
@@ -582,16 +575,15 @@ template <typename K, typename V> struct HashArray {
         arr.memzero();
         size = arr.capacity;
       }
-      HP pair;
+      Hash_Pair pair;
       pair.key            = key;
-      pair.value          = value;
       uint32_t attempt_id = 0;
       for (; attempt_id < attempts; ++attempt_id) {
         uint64_t id = hash % size;
         if (hash != 0) {
           pair.hash = hash;
           if (arr.ptr[id].hash == 0) {
-            memcpy(arr.ptr + id, &pair, sizeof(HP));
+            memcpy(arr.ptr + id, &pair, sizeof(Hash_Pair));
             item_count += 1;
             return true;
           }
@@ -600,9 +592,9 @@ template <typename K, typename V> struct HashArray {
       }
     }
     {
-      Array<HP> old_arr = arr;
+      Array<Hash_Pair> old_arr = arr;
       {
-        Array<HP> new_arr(0);
+        Array<Hash_Pair> new_arr(0);
         new_arr.resize(&new_arr, old_arr.capacity + grow_k);
         new_arr.memzero(&new_arr);
         arr        = new_arr;
@@ -610,30 +602,29 @@ template <typename K, typename V> struct HashArray {
       }
       uint32_t i = 0;
       for (; i < old_arr.capacity; ++i) {
-        HP pair = old_arr.ptr[i];
+        Hash_Pair pair = old_arr.ptr[i];
         if (pair.hash != 0) {
-          push(pair.key, pair.value);
+          push(pair.key);
         }
       }
       old_arr.release();
-      bool res = push(key, value);
+      bool res = push(key);
       ASSERT_DEBUG(res == true);
       return true;
     }
     ASSERT_DEBUG(false && "unreachable");
   }
 
-  bool get(K key, V *value) {
+  bool contains(K key) {
     uint64_t hash = hash_of(key);
     uint64_t size = arr.capacity;
     if (size == 0) return false;
-    Array<HP> *arr        = &arr;
+    Array<Hash_Pair> *arr        = &arr;
     uint32_t   attempt_id = 0;
     for (; attempt_id < attempts; ++attempt_id) {
       uint64_t id = hash % size;
       if (hash != 0) {
         if (arr->ptr[id].key == key) {
-          if (value != NULL) *value = arr->ptr[id].value;
           return true;
         }
       }
@@ -641,9 +632,91 @@ template <typename K, typename V> struct HashArray {
     }
     return false;
   }
-
-  bool has(K key) { return get(key, NULL); }
 };
+
+//template <typename K, typename V> struct HashArray {
+//  using HP = Hash_Pair<K, V>;
+//  Array<HP> arr;
+//  size_t    item_count = 0;
+//  size_t    grow_k     = 16;
+//  uint32_t  attempts   = 16;
+
+//  void release() {
+//    arr.release();
+//    item_count = 0;
+//  }
+//  bool push(K key, V value) {
+//    {
+//      uint32_t attempts = attempts;
+//      uint64_t hash     = hash_of(key);
+//      uint64_t size     = arr.capacity;
+//      if (size == 0) {
+//        arr.resize(grow_k);
+//        arr.memzero();
+//        size = arr.capacity;
+//      }
+//      HP pair;
+//      pair.key            = key;
+//      pair.value          = value;
+//      uint32_t attempt_id = 0;
+//      for (; attempt_id < attempts; ++attempt_id) {
+//        uint64_t id = hash % size;
+//        if (hash != 0) {
+//          pair.hash = hash;
+//          if (arr.ptr[id].hash == 0) {
+//            memcpy(arr.ptr + id, &pair, sizeof(HP));
+//            item_count += 1;
+//            return true;
+//          }
+//        }
+//        hash = hash_of(hash);
+//      }
+//    }
+//    {
+//      Array<HP> old_arr = arr;
+//      {
+//        Array<HP> new_arr(0);
+//        new_arr.resize(&new_arr, old_arr.capacity + grow_k);
+//        new_arr.memzero(&new_arr);
+//        arr        = new_arr;
+//        item_count = 0;
+//      }
+//      uint32_t i = 0;
+//      for (; i < old_arr.capacity; ++i) {
+//        HP pair = old_arr.ptr[i];
+//        if (pair.hash != 0) {
+//          push(pair.key, pair.value);
+//        }
+//      }
+//      old_arr.release();
+//      bool res = push(key, value);
+//      ASSERT_DEBUG(res == true);
+//      return true;
+//    }
+//    ASSERT_DEBUG(false && "unreachable");
+//  }
+
+//  bool get(K key, V *value) {
+//    uint64_t hash = hash_of(key);
+//    uint64_t size = arr.capacity;
+//    if (size == 0) return false;
+//    Array<HP> *arr        = &arr;
+//    uint32_t   attempt_id = 0;
+//    for (; attempt_id < attempts; ++attempt_id) {
+//      uint64_t id = hash % size;
+//      if (hash != 0) {
+//        if (arr->ptr[id].key == key) {
+//          if (value != NULL) *value = arr->ptr[id].value;
+//          return true;
+//        }
+//      }
+//      hash = hash_of(hash);
+//    }
+//    return false;
+//  }
+
+//  bool has(K key) { return get(key, NULL); }
+//};
 
 #endif
 
@@ -669,9 +742,7 @@ Thread_Local *get_tl() {
   return &g_tl;
 }
 
-void *tl_alloc_tmp(size_t size) {
-  return get_tl()->temporal_storage.alloc(size);
-}
+void *tl_alloc_tmp(size_t size) { return get_tl()->temporal_storage.alloc(size); }
 
 void tl_alloc_tmp_enter() { get_tl()->temporal_storage.enter_scope(); }
 void tl_alloc_tmp_exit() { get_tl()->temporal_storage.exit_scope(); }

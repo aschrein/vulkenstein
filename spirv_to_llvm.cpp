@@ -111,11 +111,11 @@ public:
     std::unique_ptr<llvm::MemoryBuffer> getObject(const llvm::Module *M) override {
       return nullptr;
     }
-    bool     dump = false;
-    uint64_t code_hash;
+    bool dump = false;
+    u64  code_hash;
   };
 
-  void init(uint64_t code_hash, bool debug_info = true, bool dump = false) {
+  void init(u64 code_hash, bool debug_info = true, bool dump = false) {
     obj_cache.dump      = dump;
     obj_cache.code_hash = code_hash;
     llvm::ExitOnError ExitOnErr;
@@ -264,12 +264,12 @@ public:
     LOOKUP(get_subgroup_size)
 #undef LOOKUP
     symbols.input_item_count = symbols.get_input_count();
-    symbols.get_input_slots((uint32_t *)&symbols.input_slots[0]);
+    symbols.get_input_slots((u32 *)&symbols.input_slots[0]);
     symbols.output_item_count = symbols.get_output_count();
     symbols.input_stride      = symbols.get_input_stride();
     symbols.output_stride     = symbols.get_output_stride();
     symbols.subgroup_size     = symbols.get_subgroup_size();
-    symbols.get_output_slots((uint32_t *)&symbols.output_slots[0]);
+    symbols.get_output_slots((u32 *)&symbols.output_slots[0]);
     symbols.private_storage_size = symbols.get_private_size();
     symbols.export_count         = symbols.get_export_count();
     symbols.get_export_items(&symbols.export_items[0]);
@@ -290,122 +290,122 @@ public:
 // Meta data structures //
 //////////////////////////
 struct FunTy {
-  uint32_t              id;
-  std::vector<uint32_t> params;
-  uint32_t              ret;
+  u32              id;
+  std::vector<u32> params;
+  u32              ret;
 };
 struct ImageTy {
-  uint32_t             id;
-  uint32_t             sampled_type;
+  u32                  id;
+  u32                  sampled_type;
   spv::Dim             dim;
   bool                 depth;
   bool                 arrayed;
   bool                 ms;
-  uint32_t             sampled;
+  u32                  sampled;
   spv::ImageFormat     format;
   spv::AccessQualifier access;
 };
 struct Sampled_ImageTy {
-  uint32_t id;
-  uint32_t sampled_image;
+  u32 id;
+  u32 sampled_image;
 };
 struct SamplerTy {
-  uint32_t id;
+  u32 id;
 };
 struct Decoration {
-  uint32_t        target_id;
+  u32             target_id;
   spv::Decoration type;
-  uint32_t        param1;
-  uint32_t        param2;
-  uint32_t        param3;
-  uint32_t        param4;
+  u32             param1;
+  u32             param2;
+  u32             param3;
+  u32             param4;
 };
 struct Member_Decoration {
-  uint32_t        target_id;
-  uint32_t        member_id;
+  u32             target_id;
+  u32             member_id;
   spv::Decoration type;
-  uint32_t        param1;
-  uint32_t        param2;
-  uint32_t        param3;
-  uint32_t        param4;
+  u32             param1;
+  u32             param2;
+  u32             param3;
+  u32             param4;
 };
 enum class Primitive_t { I1, I8, I16, I32, I64, U8, U16, U32, U64, F8, F16, F32, F64, Void };
 struct PrimitiveTy {
-  uint32_t    id;
+  u32         id;
   Primitive_t type;
 };
 struct VectorTy {
-  uint32_t id;
+  u32 id;
   // Must be primitive?
-  uint32_t member_id;
+  u32 member_id;
   // the number of rows
-  uint32_t width;
+  u32 width;
 };
 struct Constant {
-  uint32_t id;
-  uint32_t type;
+  u32 id;
+  u32 type;
   union {
-    uint32_t i32_val;
-    float    f32_val;
+    u32   i32_val;
+    float f32_val;
   };
 };
 struct ConstantComposite {
-  uint32_t              id;
-  uint32_t              type;
-  std::vector<uint32_t> components;
+  u32              id;
+  u32              type;
+  std::vector<u32> components;
 };
 struct ArrayTy {
-  uint32_t id;
+  u32 id;
   // could be anything?
-  uint32_t member_id;
+  u32 member_id;
   // constants[width_id]
-  uint32_t width_id;
+  u32 width_id;
 };
 struct MatrixTy {
-  uint32_t id;
+  u32 id;
   // vector_types[vector_id] : column type
-  uint32_t vector_id;
+  u32 vector_id;
   // the number of columns
-  uint32_t width;
+  u32 width;
 };
 struct StructTy {
-  uint32_t              id;
-  bool                  is_builtin;
-  std::vector<uint32_t> member_types;
-  std::vector<uint32_t> member_offsets;
+  u32              id;
+  bool             is_builtin;
+  std::vector<u32> member_types;
+  std::vector<u32> member_offsets;
   // Apparently there could be stuff like that
   // out gl_PerVertex
   // {
   //    vec4 gl_Position;
   // };
   std::vector<spv::BuiltIn> member_builtins;
-  uint32_t                  size;
+  u32                       size;
 };
 struct PtrTy {
-  uint32_t          id;
-  uint32_t          target_id;
+  u32               id;
+  u32               target_id;
   spv::StorageClass storage_class;
 };
 struct Variable {
-  uint32_t id;
+  u32 id;
   // Must be a pointer
-  uint32_t          type_id;
+  u32               type_id;
   spv::StorageClass storage;
   // Optional
-  uint32_t init_id;
+  u32 init_id;
 };
 struct FunctionParameter {
-  uint32_t id;
-  uint32_t type_id;
+  u32 id;
+  u32 type_id;
 };
 struct Function {
-  uint32_t                       id;
-  uint32_t                       result_type;
+  u32                            id;
+  u32                            result_type;
   spv::FunctionControlMask       control;
-  uint32_t                       function_type;
+  u32                            function_type;
   std::vector<FunctionParameter> params;
   // Debug mapping
-  uint32_t spirv_line;
+  u32 spirv_line;
 };
 enum class DeclTy {
   PrimitiveTy,
@@ -426,13 +426,13 @@ enum class DeclTy {
   Unknown
 };
 struct Entry {
-  uint32_t            id;
+  u32                 id;
   spv::ExecutionModel execution_model;
   std::string         name;
 };
 struct Parsed_Op {
-  spv::Op               op;
-  std::vector<uint32_t> args;
+  spv::Op          op;
+  std::vector<u32> args;
 };
 #include "spv_dump.hpp"
 
@@ -440,62 +440,62 @@ struct Spirv_Builder {
   //////////////////////
   //     Options      //
   //////////////////////
-  uint32_t opt_subgroup_size  = 4;
-  bool     opt_debug_comments = false;
-  bool     opt_debug_info     = false;
-  bool     opt_dump           = true;
+  u32  opt_subgroup_size  = 4;
+  bool opt_debug_comments = false;
+  bool opt_debug_info     = false;
+  bool opt_dump           = true;
   //  bool opt_deinterleave_attributes = false;
 
   //////////////////////
   // Meta information //
   //////////////////////
-  std::map<uint32_t, PrimitiveTy>                    primitive_types;
-  std::map<uint32_t, Variable>                       variables;
-  std::map<uint32_t, Function>                       functions;
-  std::map<uint32_t, PtrTy>                          ptr_types;
-  std::map<uint32_t, VectorTy>                       vector_types;
-  std::map<uint32_t, Constant>                       constants;
-  std::map<uint32_t, ConstantComposite>              constants_composite;
-  std::map<uint32_t, ArrayTy>                        array_types;
-  std::map<uint32_t, ImageTy>                        images;
-  std::map<uint32_t, SamplerTy>                      samplers;
-  std::map<uint32_t, Sampled_ImageTy>                combined_images;
-  std::map<uint32_t, std::vector<Decoration>>        decorations;
-  std::map<uint32_t, std::vector<Member_Decoration>> member_decorations;
-  std::map<uint32_t, FunTy>                          functypes;
-  std::map<uint32_t, MatrixTy>                       matrix_types;
-  std::map<uint32_t, StructTy>                       struct_types;
-  std::map<uint32_t, size_t>                         type_sizes;
+  std::map<u32, PrimitiveTy>                    primitive_types;
+  std::map<u32, Variable>                       variables;
+  std::map<u32, Function>                       functions;
+  std::map<u32, PtrTy>                          ptr_types;
+  std::map<u32, VectorTy>                       vector_types;
+  std::map<u32, Constant>                       constants;
+  std::map<u32, ConstantComposite>              constants_composite;
+  std::map<u32, ArrayTy>                        array_types;
+  std::map<u32, ImageTy>                        images;
+  std::map<u32, SamplerTy>                      samplers;
+  std::map<u32, Sampled_ImageTy>                combined_images;
+  std::map<u32, std::vector<Decoration>>        decorations;
+  std::map<u32, std::vector<Member_Decoration>> member_decorations;
+  std::map<u32, FunTy>                          functypes;
+  std::map<u32, MatrixTy>                       matrix_types;
+  std::map<u32, StructTy>                       struct_types;
+  std::map<u32, size_t>                         type_sizes;
   // function_id -> [var_id...]
-  std::map<uint32_t, std::vector<uint32_t>> local_variables;
-  std::vector<uint32_t>                     global_variables;
+  std::map<u32, std::vector<u32>> local_variables;
+  std::vector<u32>                global_variables;
   // function_id -> [inst*...]
-  std::map<uint32_t, std::vector<uint32_t const *>>    instructions;
-  std::map<uint32_t, std::string>                      names;
-  std::map<std::pair<uint32_t, uint32_t>, std::string> member_names;
-  std::map<uint32_t, Entry>                            entries;
+  std::map<u32, std::vector<u32 const *>>    instructions;
+  std::map<u32, std::string>                 names;
+  std::map<std::pair<u32, u32>, std::string> member_names;
+  std::map<u32, Entry>                       entries;
   // Declaration order pairs
-  std::vector<std::pair<uint32_t, DeclTy>> decl_types;
-  std::map<uint32_t, DeclTy>               decl_types_table;
+  std::vector<std::pair<u32, DeclTy>> decl_types;
+  std::map<u32, DeclTy>               decl_types_table;
   // Offsets for private variables
-  std::map<uint32_t, uint32_t> private_offsets;
-  uint32_t                     private_storage_size = 0;
+  std::map<u32, u32> private_offsets;
+  u32                private_storage_size = 0;
   // Offsets for input variables
-  std::vector<uint32_t> input_sizes;
-  std::vector<uint32_t> input_offsets;
+  std::vector<u32>      input_sizes;
+  std::vector<u32>      input_offsets;
   std::vector<VkFormat> input_formats;
-  uint32_t              input_storage_size = 0;
+  u32                   input_storage_size = 0;
   // Offsets for ouput variables
-  std::vector<uint32_t> output_sizes;
-  std::vector<uint32_t> output_offsets;
+  std::vector<u32>      output_sizes;
+  std::vector<u32>      output_offsets;
   std::vector<VkFormat> output_formats;
-  uint32_t              output_storage_size = 0;
+  u32                   output_storage_size = 0;
   // Lifetime must be long enough
-  uint32_t const *code;
-  size_t          code_size;
-  uint64_t        code_hash;
-  char            shader_dump_path[0x100];
-  int ATTR_USED   dump_spirv_module() const {
+  u32 const *   code;
+  size_t        code_size;
+  u64           code_hash;
+  char          shader_dump_path[0x100];
+  int ATTR_USED dump_spirv_module() const {
     FILE *file = fopen("shader_dump.spv", "wb");
     fwrite(code, 1, code_size * 4, file);
     fclose(file);
@@ -505,7 +505,7 @@ struct Spirv_Builder {
   //          METHODS         //
   //////////////////////////////
 
-  auto has_decoration(spv::Decoration spv_dec, uint32_t val_id) -> bool {
+  auto has_decoration(spv::Decoration spv_dec, u32 val_id) -> bool {
     if (!contains(decorations, val_id)) return false;
     auto &decs = decorations[val_id];
     for (auto &dec : decs) {
@@ -513,7 +513,7 @@ struct Spirv_Builder {
     }
     return false;
   }
-  auto find_decoration(spv::Decoration spv_dec, uint32_t val_id) -> Decoration {
+  auto find_decoration(spv::Decoration spv_dec, u32 val_id) -> Decoration {
     ASSERT_ALWAYS(contains(decorations, val_id));
     auto &decs = decorations[val_id];
     for (auto &dec : decs) {
@@ -521,8 +521,7 @@ struct Spirv_Builder {
     }
     UNIMPLEMENTED;
   }
-  auto has_member_decoration(spv::Decoration spv_dec, uint32_t type_id, uint32_t member_id)
-      -> bool {
+  auto has_member_decoration(spv::Decoration spv_dec, u32 type_id, u32 member_id) -> bool {
     ASSERT_ALWAYS(contains(member_decorations, type_id));
     for (auto &item : member_decorations[type_id]) {
       if (item.type == spv_dec && item.member_id == member_id) {
@@ -531,7 +530,7 @@ struct Spirv_Builder {
     }
     return false;
   }
-  auto find_member_decoration(spv::Decoration spv_dec, uint32_t type_id, uint32_t member_id)
+  auto find_member_decoration(spv::Decoration spv_dec, u32 type_id, u32 member_id)
       -> Member_Decoration {
     ASSERT_ALWAYS(contains(member_decorations, type_id));
     for (auto &item : member_decorations[type_id]) {
@@ -618,16 +617,16 @@ struct Spirv_Builder {
 
     /////////////////////////////
     llvm::install_fatal_error_handler(&llvm_fatal);
-    auto llvm_get_constant_i32 = [&c](uint32_t a) {
+    auto llvm_get_constant_i32 = [&c](u32 a) {
       return llvm::ConstantInt::get(llvm::IntegerType::getInt32Ty(c), a);
     };
-    auto llvm_get_constant_i64 = [&c](uint64_t a) {
+    auto llvm_get_constant_i64 = [&c](u64 a) {
       return llvm::ConstantInt::get(llvm::IntegerType::getInt64Ty(c), a);
     };
-    const uint32_t *pCode = this->code;
+    const u32 *pCode = this->code;
     // The maximal number of IDs in this module
-    const uint32_t ID_bound     = pCode[3];
-    auto           get_spv_name = [this](uint32_t id) -> std::string {
+    const u32 ID_bound     = pCode[3];
+    auto      get_spv_name = [this](u32 id) -> std::string {
       if (names.find(id) == names.end()) {
         names[id] = "spv_" + std::to_string(id);
       }
@@ -644,8 +643,8 @@ struct Spirv_Builder {
     };
     auto llvm_matrix_transpose = [&](llvm::Value *matrix, llvm::IRBuilder<> *llvm_builder) {
       llvm::Type *elem_type       = llvm_vec_elem_type(matrix->getType()->getArrayElementType());
-      uint32_t    matrix_row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
-      uint32_t    matrix_col_size = (uint32_t)matrix->getType()->getArrayNumElements();
+      u32         matrix_row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
+      u32         matrix_col_size = (u32)matrix->getType()->getArrayNumElements();
       llvm::Type *matrix_t_type =
           llvm::ArrayType::get(llvm::VectorType::get(elem_type, matrix_col_size), matrix_row_size);
       llvm::Value *                       result = llvm::UndefValue::get(matrix_t_type);
@@ -665,7 +664,7 @@ struct Spirv_Builder {
                         llvm::IRBuilder<> *llvm_builder) {
       llvm::Type * elem_type   = llvm_vec_elem_type(vector_0->getType());
       llvm::Value *result      = llvm::ConstantFP::get(elem_type, 0.0);
-      uint32_t     vector_size = llvm_vec_num_elems(vector_0->getType());
+      u32          vector_size = llvm_vec_num_elems(vector_0->getType());
       ASSERT_ALWAYS(llvm_vec_num_elems(vector_1->getType()) ==
                     llvm_vec_num_elems(vector_0->getType()));
       jto(vector_size) {
@@ -731,7 +730,8 @@ struct Spirv_Builder {
     //    LOOKUP_FN(spv_pop_mask);
     LOOKUP_FN(spv_get_lane_mask);
     LOOKUP_FN(spv_disable_lanes);
-    LOOKUP_FN(spv_discard_lanes);
+    LOOKUP_FN(spv_set_enabled_lanes);
+    LOOKUP_FN(spv_get_enabled_lanes);
     LOOKUP_FN(dump_mask);
     std::map<std::string, llvm::GlobalVariable *> global_strings;
     auto                                          lookup_string = [&](std::string str) {
@@ -753,8 +753,8 @@ struct Spirv_Builder {
         "int3",     "float4"  ,
           // clang-format on
       };
-      uint32_t    dim           = 0;
-      uint32_t    components    = 0;
+      u32         dim           = 0;
+      u32         components    = 0;
       llvm::Type *llvm_res_type = res_type;
       if (res_type->isVectorTy()) {
         components    = llvm_vec_num_elems(llvm_res_type);
@@ -779,7 +779,7 @@ struct Spirv_Builder {
 
       ASSERT_ALWAYS(dim == 1 || dim == 2 || dim == 3 || dim == 4);
       ASSERT_ALWAYS(component_type == Primitive_t::F32 || component_type == Primitive_t::U32);
-      uint32_t    is_float = component_type == Primitive_t::F32 ? 1 : 0;
+      u32         is_float = component_type == Primitive_t::F32 ? 1 : 0;
       char const *type_str = type_names[components * 2 + is_float];
       snprintf(tmp_buf, sizeof(tmp_buf), "spv_image_%s_%id_%s", (read ? "read" : "write"), dim,
                type_str);
@@ -802,20 +802,20 @@ struct Spirv_Builder {
     // Structure member offsets for GEP
     // SPIRV has ways of setting the member offset
     // So in LLVM IR we need to manually insert paddings
-    std::map<llvm::Type *, std::vector<uint32_t>> member_reloc;
+    std::map<llvm::Type *, std::vector<u32>> member_reloc;
     // Matrices could be row/column. here we just default to row major and do
     // the trasnpose as needed
-    std::map<llvm::Type *, std::set<uint32_t>> member_transpose;
+    std::map<llvm::Type *, std::set<u32>> member_transpose;
     // Global type table
     std::vector<llvm::Type *> llvm_types(ID_bound);
     // Global value table (constants and global values)
     // Each function creates a copy that inherits the global
     // table
     std::vector<llvm::Value *> llvm_global_values(ID_bound);
-    auto                       get_global_const_i32 = [&llvm_global_values](uint32_t const_id) {
+    auto                       get_global_const_i32 = [&llvm_global_values](u32 const_id) {
       llvm::ConstantInt *co = llvm::dyn_cast<llvm::ConstantInt>(llvm_global_values[const_id]);
       NOTNULL(co);
-      return (uint32_t)co->getLimitedValue();
+      return (u32)co->getLimitedValue();
     };
     //    auto wave_local_t = [&](llvm::Type *ty) {
     //      return llvm::ArrayType::get(ty, opt_subgroup_size);
@@ -849,8 +849,10 @@ struct Spirv_Builder {
           llvm_types[type.id] = llvm::FunctionType::get(ret_type, args, false);
         else {
           // Append the pointer to the returned data as the last parameter
-          args.push_back(
-              llvm::PointerType::get(llvm::ArrayType::get(ret_type, opt_subgroup_size), 0));
+          kto(opt_subgroup_size) args.push_back(llvm::PointerType::get(ret_type, 0));
+          //          args.push_back(
+          //              llvm::PointerType::get(llvm::ArrayType::get(ret_type, opt_subgroup_size),
+          //              0));
           llvm_types[type.id] = llvm::FunctionType::get(llvm::Type::getVoidTy(c), args, false);
         }
         break;
@@ -988,10 +990,10 @@ struct Spirv_Builder {
         size_t                    offset = 0;
         // We manually insert padding bytes which offsets the structure members
         // for GEP instructions
-        std::vector<uint32_t> member_indices;
-        std::set<uint32_t>    this_member_transpose;
-        uint32_t              index_offset = 0;
-        for (uint32_t member_id = 0; member_id < type.member_types.size(); member_id++) {
+        std::vector<u32> member_indices;
+        std::set<u32>    this_member_transpose;
+        u32              index_offset = 0;
+        for (u32 member_id = 0; member_id < type.member_types.size(); member_id++) {
           llvm::Type *member_type = llvm_types[type.member_types[member_id]];
           ASSERT_ALWAYS(member_type != NULL && "Member types must be defined");
           if (!type.is_builtin && type.member_offsets[member_id] != offset) {
@@ -1013,8 +1015,8 @@ struct Spirv_Builder {
                                 .param1 == 16);
             }
           }
-          size_t   size           = 0;
-          uint32_t member_type_id = type.member_types[member_id];
+          size_t size           = 0;
+          u32    member_type_id = type.member_types[member_id];
           member_indices.push_back(index_offset);
           index_offset += 1;
           ASSERT_ALWAYS(contains(type_sizes, member_type_id));
@@ -1091,11 +1093,10 @@ struct Spirv_Builder {
       // Control flow specific tracking
       struct BranchCond {
         llvm::BasicBlock *bb;
-        spv::Op           op;
-        uint32_t          cond_id;
-        uint32_t          true_id;
-        uint32_t          false_id;
-        uint32_t          merge_id;
+        u32               cond_id;
+        u32               true_id;
+        u32               false_id;
+        u32               merge_id;
         int32_t           continue_id;
       };
       struct DeferredStore {
@@ -1105,26 +1106,26 @@ struct Spirv_Builder {
       int32_t cur_merge_id    = -1;
       int32_t cur_continue_id = -1;
       struct DeferredPhi {
-        llvm::BasicBlock *                                  bb;
-        llvm::SmallVector<std::pair<uint32_t, uint32_t>, 4> vars;
-        llvm::SmallVector<llvm::Value *, 64>                dummy_values;
-        llvm::Type *                                        result_type;
+        llvm::BasicBlock *                        bb;
+        llvm::SmallVector<std::pair<u32, u32>, 4> vars;
+        llvm::SmallVector<llvm::Value *, 64>      dummy_values;
+        llvm::Type *                              result_type;
       };
       struct WrappedBB {
-        llvm::BasicBlock *                                    bb;
-        llvm::Function *                                      fun;
-        llvm::SmallDenseMap<llvm::Instruction *, uint32_t, 8> in_args;
-        llvm::SmallDenseMap<llvm::Instruction *, uint32_t, 8> out_args;
+        llvm::BasicBlock *                               bb;
+        llvm::Function *                                 fun;
+        llvm::SmallDenseMap<llvm::Instruction *, u32, 8> in_args;
+        llvm::SmallDenseMap<llvm::Instruction *, u32, 8> out_args;
       };
-      std::vector<BranchCond>                              deferred_branches;
-      std::vector<std::pair<llvm::BasicBlock *, uint32_t>> deferred_jumps;
-      std::vector<DeferredStore>                           deferred_stores;
-      std::vector<DeferredPhi>                             deferred_phis;
-      std::map<uint32_t, llvm::BasicBlock *>               llvm_labels;
-      std::map<llvm::BasicBlock *, WrappedBB>              wrapped_bbs;
-      std::vector<llvm::BasicBlock *>                      bbs;
-      std::set<llvm::Value *>                              conditions;
-      std::map<llvm::BasicBlock *, llvm::Value *>          terminators;
+      std::vector<BranchCond> deferred_branches;
+      //      std::vector<std::pair<llvm::BasicBlock *, u32>> deferred_jumps;
+      std::vector<DeferredStore>              deferred_stores;
+      std::vector<DeferredPhi>                deferred_phis;
+      std::map<u32, llvm::BasicBlock *>       llvm_labels;
+      std::map<llvm::BasicBlock *, WrappedBB> wrapped_bbs;
+      std::vector<llvm::BasicBlock *>         bbs;
+      std::set<llvm::Value *>                 conditions;
+      std::set<llvm::BasicBlock *>            terminators;
 
       // stash for communication between basic blocks
       llvm::SmallDenseMap<llvm::Instruction *, llvm::Value *>         inst_hub;
@@ -1136,9 +1137,9 @@ struct Spirv_Builder {
       std::map<llvm::BasicBlock *, CFG_Node> bb_cfg;
 
       auto dump_cfg = [&]() {
-        std::map<llvm::BasicBlock *, uint32_t> bb_to_id;
+        std::map<llvm::BasicBlock *, u32> bb_to_id;
         {
-          uint32_t id = 1;
+          u32 id = 1;
           for (auto &bb : bbs) {
             bb_to_id[bb] = id++;
           }
@@ -1152,10 +1153,10 @@ struct Spirv_Builder {
           fprintf(dotgraph, "%i [label = \"%s\"];\n", bb_to_id[bb], bb->getName().str().c_str());
         }
         for (auto &bb : bbs) {
-          uint32_t  src_id = bb_to_id[bb];
+          u32       src_id = bb_to_id[bb];
           CFG_Node &node   = bb_cfg[bb];
           for (auto &dst_bb : node.out_bbs) {
-            uint32_t dst_id = bb_to_id[dst_bb];
+            u32 dst_id = bb_to_id[dst_bb];
             fprintf(dotgraph, "%i -> %i;\n", src_id, dst_id);
           }
         }
@@ -1164,11 +1165,11 @@ struct Spirv_Builder {
       };
       //      // inst -> [inst that uses this instruction, op_id]
       //      std::map<llvm::Instruction *, llvm::SmallVector<std::pair<llvm::Instruction *,
-      //      uint32_t>, 4>>
+      //      u32>, 4>>
       //          used_instructions;
       llvm::SmallDenseSet<llvm::Instruction *> shared_inst;
       ///////////////////////////////////////////////
-      uint32_t func_id         = item.first;
+      u32      func_id         = item.first;
       Function function        = functions[func_id];
       bool     is_entry        = contains(entries, func_id);
       bool     is_pixel_shader = is_entry && entries[func_id].execution_model ==
@@ -1176,11 +1177,13 @@ struct Spirv_Builder {
       NOTNULL(llvm_global_values[func_id]);
       llvm::Function *cur_fun = llvm::dyn_cast<llvm::Function>(llvm_global_values[func_id]);
       NOTNULL(cur_fun);
-      llvm::Value *       returned_data = NULL;
-      llvm::FunctionType *cur_fun_ty    = get_fn_ty(cur_fun);
+      llvm::SmallVector<llvm::Value *, 64> returned_values;
+      llvm::FunctionType *                 cur_fun_ty = get_fn_ty(cur_fun);
       if (!cur_fun_ty->getReturnType()->isVoidTy()) {
         // Usually it's an array
-        returned_data = llvm::UndefValue::get(cur_fun_ty->getReturnType());
+        // each parameter is duplicated opt_subgroup_size times + state + mask then returned valuse
+        kto(opt_subgroup_size) returned_values.push_back(
+            cur_fun->getArg(function.params.size() * opt_subgroup_size + 2 + k));
       }
       llvm::Value *state_ptr = cur_fun->getArg(0);
       state_ptr->setName("state_ptr");
@@ -1193,9 +1196,10 @@ struct Spirv_Builder {
       llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
       llvm::Value *cur_mask = llvm_builder->CreateAlloca(mask_t);
       llvm_builder->CreateStore(cur_fun->getArg(1), cur_mask);
-      auto get_lane_mask_bit = [&](uint32_t lane_id) {
+      auto get_lane_mask_bit = [&](u32 lane_id) {
         llvm::Value *mask = llvm_builder->CreateLoad(cur_mask);
-        return llvm_builder->CreateCall(spv_get_lane_mask, {state_ptr, mask, llvm_get_constant_i32(lane_id)});
+        return llvm_builder->CreateCall(spv_get_lane_mask,
+                                        {state_ptr, mask, llvm_get_constant_i32(lane_id)});
       };
       auto i1_vec_to_mask = [&](llvm::Value *i1vec) {
         llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(i1vec->getType());
@@ -1285,7 +1289,7 @@ struct Spirv_Builder {
             if (used_inst != NULL && used_inst->getParent() != bb &&
                 !contains(used_foreign_instructions, used_inst)) {
               args.push_back(used_inst->getType());
-              wbb.in_args[used_inst] = (uint32_t)args.size() - 1;
+              wbb.in_args[used_inst] = (u32)args.size() - 1;
               used_foreign_instructions.insert(used_inst);
               shared_inst.insert(used_inst);
             }
@@ -1298,13 +1302,13 @@ struct Spirv_Builder {
           //            if (used_inst->getParent() != bb &&
           //                !contains(used_foreign_instructions, used_inst)) {
           //              args.push_back(used_inst->getType());
-          //              val_to_arg_id.push_back({.val = used_inst, .arg_id = (uint32_t)args.size()
+          //              val_to_arg_id.push_back({.val = used_inst, .arg_id = (u32)args.size()
           //              - 1}); used_foreign_instructions.insert(used_inst);
           //            }
           //          }
         }
 
-        uint32_t out_args_begin = args.size();
+        u32 out_args_begin = args.size();
         // allocate arguments for local instructions that are used outside
         for (llvm::Instruction &inst : *bb) {
           // if has users
@@ -1326,7 +1330,7 @@ struct Spirv_Builder {
           //          }
           if (has_foreign_users) {
             args.push_back(llvm::PointerType::get(inst.getType(), 0));
-            wbb.out_args[&inst] = (uint32_t)args.size() - 1;
+            wbb.out_args[&inst] = (u32)args.size() - 1;
             shared_inst.insert(&inst);
           }
         }
@@ -1342,7 +1346,7 @@ struct Spirv_Builder {
         for (auto &item : wbb.out_args) {
           new llvm::StoreInst(item.first, fun->getArg(item.second), bb);
         }
-        for (uint32_t i = out_args_begin; i < fun->arg_size(); ++i) {
+        for (u32 i = out_args_begin; i < fun->arg_size(); ++i) {
           fun->getArg(i)->setName("out");
         }
         for (auto &item : wbb.in_args) {
@@ -1384,8 +1388,19 @@ struct Spirv_Builder {
           llvm_builder->CreateStore(select, addresses[k]);
         }
       };
+      auto save_enabled_lanes_mask = [&]() {
+        llvm::Value *mask   = llvm_builder->CreateCall(spv_get_enabled_lanes, {state_ptr});
+        llvm::Value *alloca = llvm_builder->CreateAlloca(mask_t);
+        llvm_builder->CreateStore(mask, alloca);
+        return alloca;
+      };
+      auto restore_enabled_lanes_mask = [&](llvm::Value *alloca) {
+        llvm::Value *mask = llvm_builder->CreateLoad(alloca);
+        llvm_builder->CreateCall(spv_set_enabled_lanes, {state_ptr, mask});
+      };
+
       // Debug line number
-      uint32_t       cur_spirv_line = function.spirv_line;
+      u32            cur_spirv_line = function.spirv_line;
       llvm::DIScope *di_scope       = NULL;
       if (opt_debug_info) {
         llvm::DISubprogram *SP = llvm_di_builder->createFunction(
@@ -1403,11 +1418,11 @@ struct Spirv_Builder {
       // Copy global constants into each lane
       ito(opt_subgroup_size) llvm_values_per_lane[i] = copy(llvm_global_values);
       // Setup arguments
-      uint32_t cur_param_id = 2;
+      u32 cur_param_id = 2;
 
       for (auto &param : function.params) {
-        uint32_t res_type_id = param.type_id;
-        uint32_t res_id      = param.id;
+        u32 res_type_id = param.type_id;
+        u32 res_id      = param.id;
         kto(opt_subgroup_size) {
           llvm_values_per_lane[k][res_id] = cur_fun->getArg(cur_param_id++);
         }
@@ -1424,13 +1439,13 @@ struct Spirv_Builder {
           llvm::Value *b =
               llvm_builder->CreateCall(get_barycentrics, {state_ptr, llvm_get_constant_i32(i)});
           barycentrics.push_back(b);
-          llvm::Value *b_0 = llvm_builder->CreateExtractElement(b, (uint64_t)0);
-          llvm::Value *b_1 = llvm_builder->CreateExtractElement(b, (uint64_t)1);
-          llvm::Value *b_2 = llvm_builder->CreateExtractElement(b, (uint64_t)2);
+          llvm::Value *b_0 = llvm_builder->CreateExtractElement(b, (u64)0);
+          llvm::Value *b_1 = llvm_builder->CreateExtractElement(b, (u64)1);
+          llvm::Value *b_2 = llvm_builder->CreateExtractElement(b, (u64)2);
           llvm::Value *pos = llvm_builder->CreateCall(
               get_pixel_position, {state_ptr, llvm_get_constant_i32(i), b_0, b_1, b_2});
           pixel_positions.push_back(pos);
-          llvm::Value *depth = llvm_builder->CreateExtractElement(pos, (uint64_t)2);
+          llvm::Value *depth = llvm_builder->CreateExtractElement(pos, (u64)2);
           llvm_builder->CreateCall(pixel_store_depth, {state_ptr, llvm_get_constant_i32(i), depth});
         }
       }
@@ -1487,7 +1502,7 @@ struct Spirv_Builder {
         }
         // In case that's a vector type we'd try to deinterleave it(flatten into
         // one huge vector of floats/ints)
-        uint32_t    num_components = 0;
+        u32         num_components = 0;
         Primitive_t component_ty   = Primitive_t::Void;
         switch (pointee_decl_ty) {
         case DeclTy::PrimitiveTy: {
@@ -1513,7 +1528,7 @@ struct Spirv_Builder {
           ito(opt_subgroup_size) {
             llvm::Value *pc_ptr = llvm_builder->CreateCall(get_private_ptr, state_ptr);
             ASSERT_ALWAYS(contains(private_offsets, var_id));
-            uint32_t     offset = private_storage_size * i + private_offsets[var_id];
+            u32          offset = private_storage_size * i + private_offsets[var_id];
             llvm::Value *pc_ptr_offset =
                 llvm_builder->CreateGEP(pc_ptr, llvm::ConstantInt::get(c, llvm::APInt(32, offset)));
             llvm::Value *llvm_value =
@@ -1525,8 +1540,8 @@ struct Spirv_Builder {
         case spv::StorageClass::StorageClassUniformConstant:
         case spv::StorageClass::StorageClassStorageBuffer:
         case spv::StorageClass::StorageClassUniform: {
-          uint32_t set = find_decoration(spv::Decoration::DecorationDescriptorSet, var.id).param1;
-          uint32_t binding = find_decoration(spv::Decoration::DecorationBinding, var.id).param1;
+          u32 set     = find_decoration(spv::Decoration::DecorationDescriptorSet, var.id).param1;
+          u32 binding = find_decoration(spv::Decoration::DecorationBinding, var.id).param1;
           ASSERT_ALWAYS(set >= 0);
           ASSERT_ALWAYS(binding >= 0);
           llvm::Value *pc_ptr = llvm_builder->CreateCall(
@@ -1535,8 +1550,7 @@ struct Spirv_Builder {
                   ? get_uniform_const_ptr
                   : var.storage == spv::StorageClass::StorageClassUniform ? get_uniform_ptr
                                                                           : get_storage_ptr,
-              {state_ptr, llvm_builder->getInt32((uint32_t)set),
-               llvm_builder->getInt32((uint32_t)binding)});
+              {state_ptr, llvm_builder->getInt32((u32)set), llvm_builder->getInt32((u32)binding)});
           llvm::Value *llvm_value =
               llvm_builder->CreateBitCast(pc_ptr, llvm_type, get_spv_name(var.id));
           ito(opt_subgroup_size) { llvm_values_per_lane[i][var.id] = llvm_value; }
@@ -1559,7 +1573,7 @@ struct Spirv_Builder {
               llvm_values_per_lane[i][var.id] = offset;
             }
           } else {
-            uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
+            u32 location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
             ASSERT_ALWAYS(location >= 0);
             ASSERT_ALWAYS(llvm_type->isPointerTy());
             ito(opt_subgroup_size) {
@@ -1627,15 +1641,15 @@ struct Spirv_Builder {
                         (pointee_decl_ty == DeclTy::VectorTy &&
                          vector_types[ptr_type.target_id].width <= 4) ||
                         false);
-          uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
+          u32 location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
           ASSERT_ALWAYS(location >= 0);
           // For now just stupid array of structures
           ito(opt_subgroup_size) {
             // For pixel shader we need to interpolate pipeline inputs
             if (is_pixel_shader) {
-              llvm::Value *b_0   = llvm_builder->CreateExtractElement(barycentrics[i], (uint64_t)0);
-              llvm::Value *b_1   = llvm_builder->CreateExtractElement(barycentrics[i], (uint64_t)1);
-              llvm::Value *b_2   = llvm_builder->CreateExtractElement(barycentrics[i], (uint64_t)2);
+              llvm::Value *b_0   = llvm_builder->CreateExtractElement(barycentrics[i], (u64)0);
+              llvm::Value *b_1   = llvm_builder->CreateExtractElement(barycentrics[i], (u64)1);
+              llvm::Value *b_2   = llvm_builder->CreateExtractElement(barycentrics[i], (u64)2);
               llvm::Value *gep_0 = llvm_builder->CreateGEP(
                   input_ptr, llvm_get_constant_i32(input_storage_size * (i * 3 + 0) +
                                                    input_offsets[location]));
@@ -1659,7 +1673,7 @@ struct Spirv_Builder {
                   llvm_builder->CreateCall(dump_float, {state_ptr, b_2});
                 }
                 if (val_0->getType()->isVectorTy()) {
-                  uint32_t num_elems = llvm_vec_num_elems(val_0->getType());
+                  u32 num_elems = llvm_vec_num_elems(val_0->getType());
                   if
 
                       (num_elems == 3) {
@@ -1708,18 +1722,18 @@ struct Spirv_Builder {
           UNIMPLEMENTED;
         }
       }
-      for (uint32_t const *pCode : item.second) {
-        uint16_t WordCount = pCode[0] >> spv::WordCountShift;
-        spv::Op  opcode    = spv::Op(pCode[0] & spv::OpCodeMask);
-        uint32_t word1     = pCode[1];
-        uint32_t word2     = WordCount > 2 ? pCode[2] : 0;
-        uint32_t word3     = WordCount > 3 ? pCode[3] : 0;
-        uint32_t word4     = WordCount > 4 ? pCode[4] : 0;
-        uint32_t word5     = WordCount > 5 ? pCode[5] : 0;
-        uint32_t word6     = WordCount > 6 ? pCode[6] : 0;
-        uint32_t word7     = WordCount > 7 ? pCode[7] : 0;
-        uint32_t word8     = WordCount > 8 ? pCode[8] : 0;
-        uint32_t word9     = WordCount > 9 ? pCode[9] : 0;
+      for (u32 const *pCode : item.second) {
+        u16     WordCount = pCode[0] >> spv::WordCountShift;
+        spv::Op opcode    = spv::Op(pCode[0] & spv::OpCodeMask);
+        u32     word1     = pCode[1];
+        u32     word2     = WordCount > 2 ? pCode[2] : 0;
+        u32     word3     = WordCount > 3 ? pCode[3] : 0;
+        u32     word4     = WordCount > 4 ? pCode[4] : 0;
+        u32     word5     = WordCount > 5 ? pCode[5] : 0;
+        u32     word6     = WordCount > 6 ? pCode[6] : 0;
+        u32     word7     = WordCount > 7 ? pCode[7] : 0;
+        u32     word8     = WordCount > 8 ? pCode[8] : 0;
+        u32     word9     = WordCount > 9 ? pCode[9] : 0;
         if (cur_bb != NULL && opt_debug_comments) {
           static char                str_buf[0x100];
           std::vector<llvm::Type *>  AsmArgTypes;
@@ -1740,12 +1754,17 @@ struct Spirv_Builder {
 
         switch (opcode) {
         case spv::Op::OpLabel: {
-          uint32_t id = word1;
+          u32 id = word1;
           snprintf(name_buf, sizeof(name_buf), "label_%i", id);
           llvm::BasicBlock *new_bb = llvm::BasicBlock::Create(c, name_buf);
           new_bb->insertInto(cur_fun);
           if (cur_bb != NULL) {
-            deferred_jumps.push_back({cur_bb, id});
+            deferred_branches.push_back({.bb          = cur_bb,
+                                         .cond_id     = 0,
+                                         .true_id     = id,
+                                         .false_id    = 0,
+                                         .merge_id    = 0,
+                                         .continue_id = 0});
             //                        llvm::BranchInst::Create(new_bb, cur_bb);
           }
           cur_bb = new_bb;
@@ -1762,7 +1781,7 @@ struct Spirv_Builder {
 
             std::vector<llvm::Value *> indices = {};
 
-            for (uint32_t i = 4; i < WordCount; i++) {
+            for (u32 i = 4; i < WordCount; i++) {
               llvm::Value *index_val = llvm_values_per_lane[k][pCode[i]];
               ASSERT_ALWAYS(index_val != NULL);
               indices.push_back(index_val);
@@ -1782,23 +1801,23 @@ struct Spirv_Builder {
                 llvm::ConstantInt *integer = llvm::dyn_cast<llvm::ConstantInt>(index_val);
                 ASSERT_ALWAYS(integer != NULL &&
                               "Access chain index must be OpConstant for structures");
-                uint32_t cval             = (uint32_t)integer->getLimitedValue();
-                uint32_t struct_member_id = cval;
-                bool     transpose        = false;
+                u32  cval             = (u32)integer->getLimitedValue();
+                u32  struct_member_id = cval;
+                bool transpose        = false;
                 if (contains(member_transpose, struct_type) &&
                     contains(member_transpose[struct_type], struct_member_id)) {
                   transpose = true;
                 }
                 if (contains(member_reloc, pointee_type)) {
-                  std::vector<uint32_t> const &reloc_table = member_reloc[pointee_type];
-                  struct_member_id                         = reloc_table[cval];
+                  std::vector<u32> const &reloc_table = member_reloc[pointee_type];
+                  struct_member_id                    = reloc_table[cval];
                 }
                 llvm::Type *member_type = struct_type->getElementType(struct_member_id);
 
                 val = llvm_builder->CreateGEP(
-                    val, {llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), (uint32_t)0),
-                          llvm::ConstantInt::get(llvm::Type::getInt32Ty(c),
-                                                 (uint32_t)struct_member_id)});
+                    val,
+                    {llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), (u32)0),
+                     llvm::ConstantInt::get(llvm::Type::getInt32Ty(c), (u32)struct_member_id)});
                 if (transpose) {
                   llvm::Value *alloca = llvm_builder->CreateAlloca(member_type);
                   llvm_builder->CreateStore(
@@ -1862,7 +1881,12 @@ struct Spirv_Builder {
         case spv::Op::OpBranch: {
           // branches reference labels that haven't been created yet
           // So we just fix this up later
-          deferred_jumps.push_back({cur_bb, word1});
+          deferred_branches.push_back({.bb          = cur_bb,
+                                       .cond_id     = 0,
+                                       .true_id     = word1,
+                                       .false_id    = 0,
+                                       .merge_id    = 0,
+                                       .continue_id = 0});
           // Terminate current basic block
           cur_bb = NULL;
           llvm_builder.release();
@@ -1871,12 +1895,11 @@ struct Spirv_Builder {
         case spv::Op::OpBranchConditional: {
           ASSERT_ALWAYS(cur_merge_id >= 0);
           BranchCond bc;
-          bc.op          = opcode;
           bc.bb          = cur_bb;
           bc.cond_id     = word1;
           bc.true_id     = word2;
           bc.false_id    = word3;
-          bc.merge_id    = (uint32_t)cur_merge_id;
+          bc.merge_id    = (u32)cur_merge_id;
           bc.continue_id = cur_continue_id;
           // branches reference labels that haven't been created yet
           // So we just fix this up later
@@ -1891,14 +1914,14 @@ struct Spirv_Builder {
         }
         case spv::Op::OpGroupNonUniformBallot: {
           ASSERT_ALWAYS(WordCount == 5);
-          uint32_t           res_type_id = word1;
-          uint32_t           res_id      = word2;
-          uint32_t           scope_id    = word3;
+          u32                res_type_id = word1;
+          u32                res_id      = word2;
+          u32                scope_id    = word3;
           llvm::Value *      scope_val   = llvm_global_values[scope_id];
           llvm::ConstantInt *scope_const = llvm::dyn_cast<llvm::ConstantInt>(scope_val);
           NOTNULL(scope_const);
-          uint32_t scope        = (uint32_t)scope_const->getLimitedValue();
-          uint32_t predicate_id = word4;
+          u32 scope        = (u32)scope_const->getLimitedValue();
+          u32 predicate_id = word4;
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
           llvm::Type *result_type = llvm_types[res_type_id];
           ASSERT_ALWAYS(result_type->isVectorTy() && llvm_vec_num_elems(result_type) == 4 &&
@@ -1922,21 +1945,19 @@ struct Spirv_Builder {
               result_elem_1      = llvm_builder->CreateOr(shift, result_elem_1);
             }
           }
-          result_value =
-              llvm_builder->CreateInsertElement(result_value, result_elem_0, (uint64_t)0);
-          result_value =
-              llvm_builder->CreateInsertElement(result_value, result_elem_1, (uint64_t)1);
+          result_value = llvm_builder->CreateInsertElement(result_value, result_elem_0, (u64)0);
+          result_value = llvm_builder->CreateInsertElement(result_value, result_elem_1, (u64)1);
           kto(opt_subgroup_size) { llvm_values_per_lane[k][res_id] = result_value; }
           break;
         }
         case spv::Op::OpGroupNonUniformBallotBitCount: {
           ASSERT_ALWAYS(WordCount == 6);
-          uint32_t res_type_id = word1;
-          uint32_t res_id      = word2;
-          uint32_t scope_id    = word3;
-          uint32_t scope       = get_global_const_i32(scope_id);
-          uint32_t group_op    = word4;
-          uint32_t value_id    = word5;
+          u32 res_type_id = word1;
+          u32 res_id      = word2;
+          u32 scope_id    = word3;
+          u32 scope       = get_global_const_i32(scope_id);
+          u32 group_op    = word4;
+          u32 value_id    = word5;
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
           llvm::Type *result_type = llvm_types[res_type_id];
           NOTNULL(result_type);
@@ -1948,21 +1969,20 @@ struct Spirv_Builder {
             NOTNULL(val);
             ASSERT_ALWAYS(val->getType()->isVectorTy() && llvm_vec_num_elems(val->getType()) == 4 &&
                           llvm_vec_elem_type(val->getType())->isIntegerTy(32));
-            llvm::Value *lane_mask_i32 =
-                llvm_builder->CreateSExt(llvm_builder->CreateExtractElement(cur_mask, (uint64_t)k),
-                                         llvm::Type::getInt32Ty(c));
+            llvm::Value *lane_mask_i32 = llvm_builder->CreateSExt(
+                llvm_builder->CreateExtractElement(cur_mask, (u64)k), llvm::Type::getInt32Ty(c));
             llvm::Value *popcnt_0 = llvm_builder->CreateIntrinsic(
                 llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
-                {llvm_builder->CreateExtractElement(val, (uint64_t)0)});
+                {llvm_builder->CreateExtractElement(val, (u64)0)});
             llvm::Value *popcnt_1 = llvm_builder->CreateIntrinsic(
                 llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
-                {llvm_builder->CreateExtractElement(val, (uint64_t)1)});
+                {llvm_builder->CreateExtractElement(val, (u64)1)});
             llvm::Value *popcnt_2 = llvm_builder->CreateIntrinsic(
                 llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
-                {llvm_builder->CreateExtractElement(val, (uint64_t)2)});
+                {llvm_builder->CreateExtractElement(val, (u64)2)});
             llvm::Value *popcnt_3 = llvm_builder->CreateIntrinsic(
                 llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
-                {llvm_builder->CreateExtractElement(val, (uint64_t)3)});
+                {llvm_builder->CreateExtractElement(val, (u64)3)});
             llvm::Value *popcnt = llvm_builder->CreateAdd(
                 popcnt_0,
                 llvm_builder->CreateAdd(popcnt_1, llvm_builder->CreateAdd(popcnt_2, popcnt_3)));
@@ -1988,10 +2008,10 @@ struct Spirv_Builder {
         }
         case spv::Op::OpGroupNonUniformElect: {
           ASSERT_ALWAYS(WordCount == 4);
-          uint32_t res_type_id = word1;
-          uint32_t res_id      = word2;
-          uint32_t scope_id    = word3;
-          uint32_t scope       = get_global_const_i32(scope_id);
+          u32 res_type_id = word1;
+          u32 res_id      = word2;
+          u32 scope_id    = word3;
+          u32 scope       = get_global_const_i32(scope_id);
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
           llvm::Value *result = llvm_builder->CreateVectorSplat(
               opt_subgroup_size,
@@ -2016,11 +2036,11 @@ struct Spirv_Builder {
         }
         case spv::Op::OpGroupNonUniformBroadcastFirst: {
           ASSERT_ALWAYS(WordCount == 5);
-          uint32_t res_type_id = word1;
-          uint32_t res_id      = word2;
-          uint32_t scope_id    = word3;
-          uint32_t value_id    = word4;
-          uint32_t scope       = get_global_const_i32(scope_id);
+          u32 res_type_id = word1;
+          u32 res_id      = word2;
+          u32 scope_id    = word3;
+          u32 value_id    = word4;
+          u32 scope       = get_global_const_i32(scope_id);
           ASSERT_ALWAYS((spv::Scope)scope == spv::Scope::ScopeSubgroup);
           llvm::Type *result_type = llvm_types[res_type_id];
           NOTNULL(result_type);
@@ -2028,7 +2048,7 @@ struct Spirv_Builder {
           llvm::Value *    result     = llvm::UndefValue::get(result_arr);
           kto(opt_subgroup_size) {
             llvm::Value *lane_val = llvm_values_per_lane[k][value_id];
-            result = llvm_builder->CreateInsertValue(result, lane_val, {(uint32_t)k});
+            result                = llvm_builder->CreateInsertValue(result, lane_val, {(u32)k});
           }
           llvm::Value *cur_mask_packed =
               llvm_builder->CreateBitCast(cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
@@ -2046,14 +2066,14 @@ struct Spirv_Builder {
         case spv::Op::OpAtomicOr:
         case spv::Op::OpAtomicIAdd: {
           ASSERT_ALWAYS(WordCount == 7);
-          uint32_t res_type_id  = word1;
-          uint32_t res_id       = word2;
-          uint32_t pointer_id   = word3;
-          uint32_t scope_id     = word4;
-          uint32_t semantics_id = word5;
-          uint32_t value_id     = word6;
-          uint32_t scope        = get_global_const_i32(scope_id);
-          uint32_t semantics    = get_global_const_i32(semantics_id);
+          u32 res_type_id  = word1;
+          u32 res_id       = word2;
+          u32 pointer_id   = word3;
+          u32 scope_id     = word4;
+          u32 semantics_id = word5;
+          u32 value_id     = word6;
+          u32 scope        = get_global_const_i32(scope_id);
+          u32 semantics    = get_global_const_i32(semantics_id);
           // TODO(aschrein): implement memory semantics
           //          spv::MemorySemanticsMask::MemorySemantics
           llvm::Type *result_type = llvm_types[res_type_id];
@@ -2083,10 +2103,10 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpPhi: {
-          uint32_t res_type_id = word1;
-          uint32_t res_id      = word2;
+          u32 res_type_id = word1;
+          u32 res_id      = word2;
           // (var, parent_bb)
-          llvm::SmallVector<std::pair<uint32_t, uint32_t>, 4> vars;
+          llvm::SmallVector<std::pair<u32, u32>, 4> vars;
           ASSERT_ALWAYS((WordCount - 3) % 2 == 0);
           ito((WordCount - 3) / 2) { vars.push_back({pCode[3 + i * 2], pCode[3 + i * 2 + 1]}); }
           llvm::Type *result_type = llvm_types[res_type_id];
@@ -2094,7 +2114,7 @@ struct Spirv_Builder {
           llvm::SmallVector<llvm::Value *, 64> dummy_values;
           kto(opt_subgroup_size) {
             //            llvm::PHINode *llvm_phi = llvm_builder->CreatePHI(result_type,
-            //            (uint32_t)vars.size()); ito(vars.size()) {
+            //            (u32)vars.size()); ito(vars.size()) {
             //              llvm::Value *     value     = llvm_values_per_lane[k][vars[i].first];
             //              llvm::BasicBlock *parent_bb = llvm_labels[vars[i].second];
             //              NOTNULL(parent_bb);
@@ -2302,11 +2322,11 @@ struct Spirv_Builder {
 #undef SIMPLE_LLVM_OP
         case spv::Op::OpSelect: {
           ASSERT_ALWAYS(WordCount == 6);
-          uint32_t result_type_id = word1;
-          uint32_t result_id      = word2;
-          uint32_t cond_id        = word3;
-          uint32_t a_id           = word4;
-          uint32_t b_id           = word5;
+          u32 result_type_id = word1;
+          u32 result_id      = word2;
+          u32 cond_id        = word3;
+          u32 a_id           = word4;
+          u32 b_id           = word5;
           kto(opt_subgroup_size) {
             llvm::Value *cond = llvm_values_per_lane[k][cond_id];
             NOTNULL(cond);
@@ -2337,7 +2357,7 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpKill: {
-          llvm_builder->CreateCall(kill, {state_ptr, llvm_get_constant_i32((uint32_t)~0)});
+          llvm_builder->CreateCall(kill, {state_ptr, llvm_get_constant_i32((u32)~0)});
           break;
         }
         case spv::Op::OpVectorTimesScalar: {
@@ -2357,7 +2377,7 @@ struct Spirv_Builder {
             llvm::Value *src      = llvm_values_per_lane[k][word3];
             llvm::Type * src_type = src->getType();
             ASSERT_ALWAYS(WordCount > 4);
-            uint32_t     indices_count = WordCount - 4;
+            u32          indices_count = WordCount - 4;
             llvm::Value *val           = src;
             ito(indices_count) {
               if (val->getType()->isArrayTy()) {
@@ -2412,14 +2432,14 @@ struct Spirv_Builder {
             llvm::VectorType *vtype1 = llvm::dyn_cast<llvm::VectorType>(op1->getType());
             llvm::VectorType *vtype2 = llvm::dyn_cast<llvm::VectorType>(op2->getType());
             ASSERT_ALWAYS(vtype1 != NULL && vtype2 != NULL);
-            std::vector<uint32_t> indices;
-            for (uint16_t i = 5; i < WordCount; i++) indices.push_back(pCode[i]);
+            std::vector<u32> indices;
+            for (u16 i = 5; i < WordCount; i++) indices.push_back(pCode[i]);
             // In LLVM shufflevector must have both operands of the same type
             // In SPIRV operands may be of different types
             // Handle the different size case by creating one big vector and
             // construct the final vector by extracting elements from it
             if (llvm_vec_num_elems(vtype1) != llvm_vec_num_elems(vtype2)) {
-              uint32_t total_width = llvm_vec_num_elems(vtype1) + llvm_vec_num_elems(vtype2);
+              u32 total_width = llvm_vec_num_elems(vtype1) + llvm_vec_num_elems(vtype2);
               llvm::VectorType *new_vtype =
                   llvm::VectorType::get(llvm_vec_elem_type(vtype1), total_width);
               // Create a dummy super vector and appedn op1 and op2 elements
@@ -2429,7 +2449,7 @@ struct Spirv_Builder {
                 llvm::Value *extr = llvm_builder->CreateExtractElement(op1, i);
                 prev              = llvm_builder->CreateInsertElement(prev, extr, i);
               }
-              uint32_t offset = llvm_vec_num_elems(vtype1);
+              u32 offset = llvm_vec_num_elems(vtype1);
               ito(llvm_vec_num_elems(vtype2)) {
                 llvm::Value *extr = llvm_builder->CreateExtractElement(op2, i);
                 prev              = llvm_builder->CreateInsertElement(prev, extr, i + offset);
@@ -2437,7 +2457,7 @@ struct Spirv_Builder {
               // Now we need to emit a chain of extact elements to make up the
               // result
               llvm::VectorType *res_type =
-                  llvm::VectorType::get(llvm_vec_elem_type(vtype1), (uint32_t)indices.size());
+                  llvm::VectorType::get(llvm_vec_elem_type(vtype1), (u32)indices.size());
               llvm::Value *res = llvm::UndefValue::get(res_type);
               ito(indices.size()) {
                 llvm::Value *elem = llvm_builder->CreateExtractElement(prev, indices[i]);
@@ -2453,9 +2473,9 @@ struct Spirv_Builder {
         }
         case spv::Op::OpDot: {
           kto(opt_subgroup_size) {
-            uint32_t     res_id  = word2;
-            uint32_t     op1_id  = word3;
-            uint32_t     op2_id  = word4;
+            u32          res_id  = word2;
+            u32          op1_id  = word3;
+            u32          op2_id  = word4;
             llvm::Value *op1_val = llvm_values_per_lane[k][op1_id];
             ASSERT_ALWAYS(op1_val != NULL);
             llvm::VectorType *op1_vtype = llvm::dyn_cast<llvm::VectorType>(op1_val->getType());
@@ -2484,9 +2504,9 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpExtInst: {
-          uint32_t        result_type_id = word1;
-          uint32_t        result_id      = word2;
-          uint32_t        set_id         = word3;
+          u32             result_type_id = word1;
+          u32             result_id      = word2;
+          u32             set_id         = word3;
           spv::GLSLstd450 inst           = (spv::GLSLstd450)word4;
           switch (inst) {
           case spv::GLSLstd450::GLSLstd450Normalize: {
@@ -2496,7 +2516,7 @@ struct Spirv_Builder {
               ASSERT_ALWAYS(arg != NULL);
               llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(arg->getType());
               ASSERT_ALWAYS(vtype != NULL);
-              uint32_t width = llvm_vec_num_elems(vtype);
+              u32 width = llvm_vec_num_elems(vtype);
               switch (width) {
               case 2:
                 llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(normalize_f2, {arg});
@@ -2521,7 +2541,7 @@ struct Spirv_Builder {
               if (vtype != NULL) {
 
                 ASSERT_ALWAYS(vtype != NULL);
-                uint32_t     width = llvm_vec_num_elems(vtype);
+                u32          width = llvm_vec_num_elems(vtype);
                 llvm::Value *prev  = arg;
                 ito(width) {
                   llvm::Value *elem = llvm_builder->CreateExtractElement(arg, i);
@@ -2544,7 +2564,7 @@ struct Spirv_Builder {
               ASSERT_ALWAYS(arg != NULL);
               llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(arg->getType());
               ASSERT_ALWAYS(vtype != NULL);
-              uint32_t width = llvm_vec_num_elems(vtype);
+              u32 width = llvm_vec_num_elems(vtype);
               switch (width) {
               case 2:
                 llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_length_f2, {arg});
@@ -2689,7 +2709,7 @@ struct Spirv_Builder {
               if (arg->getType()->isVectorTy()) {
                 llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(arg->getType());
                 ASSERT_ALWAYS(vtype != NULL);
-                uint32_t width = llvm_vec_num_elems(vtype);
+                u32 width = llvm_vec_num_elems(vtype);
                 switch (width) {
                 case 2:
                   llvm_values_per_lane[k][result_id] = llvm_builder->CreateCall(spv_fabs_f2, {arg});
@@ -2718,15 +2738,17 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpReturnValue: {
+          llvm::SmallVector<llvm::Value *, 64> currently_returned_values;
           ASSERT_ALWAYS(!contains(entries, item.first));
-          uint32_t ret_value_id = word1;
+          u32 ret_value_id = word1;
           kto(opt_subgroup_size) {
             llvm::Value *ret_value = llvm_values_per_lane[k][ret_value_id];
             NOTNULL(ret_value);
-            arr = llvm_builder->CreateInsertValue(returned_data, ret_value, (uint32_t)k);
+            currently_returned_values.push_back(ret_value);
           }
+          masked_store(currently_returned_values, returned_values);
           //          llvm::ReturnInst::Create(c, arr, cur_bb);
-          terminators[cur_bb] = arr;
+          terminators.insert(cur_bb);
           // Terminate current basic block
           cur_bb = NULL;
           llvm_builder.release();
@@ -2744,7 +2766,7 @@ struct Spirv_Builder {
             }
           }
           //            llvm::ReturnInst::Create(c, NULL, cur_bb);
-          terminators[cur_bb] = NULL;
+          terminators.insert(cur_bb);
           // Terminate current basic block
           cur_bb = NULL;
           llvm_builder.release();
@@ -2754,9 +2776,9 @@ struct Spirv_Builder {
         }
         case spv::Op::OpFNegate: {
           ASSERT_ALWAYS(WordCount == 4);
-          uint32_t result_type_id = word1;
-          uint32_t result_id      = word2;
-          uint32_t op_id          = word3;
+          u32 result_type_id = word1;
+          u32 result_id      = word2;
+          u32 op_id          = word3;
           kto(opt_subgroup_size) {
             llvm::Value *op = llvm_values_per_lane[k][op_id];
             NOTNULL(op);
@@ -2767,9 +2789,9 @@ struct Spirv_Builder {
         case spv::Op::OpBitcast: {
           ASSERT_ALWAYS(WordCount == 4);
           kto(opt_subgroup_size) {
-            uint32_t    res_type_id = word1;
-            uint32_t    res_id      = word2;
-            uint32_t    src_id      = word3;
+            u32         res_type_id = word1;
+            u32         res_id      = word2;
+            u32         src_id      = word3;
             llvm::Type *res_type    = llvm_types[res_type_id];
             ASSERT_ALWAYS(res_type != NULL);
             llvm::Value *src = llvm_values_per_lane[k][src_id];
@@ -2781,9 +2803,9 @@ struct Spirv_Builder {
         case spv::Op::OpImageWrite: {
           // TODO: handle >4
           ASSERT_ALWAYS(WordCount == 4);
-          uint32_t image_id = word1;
-          uint32_t coord_id = word2;
-          uint32_t texel_id = word3;
+          u32 image_id = word1;
+          u32 coord_id = word2;
+          u32 texel_id = word3;
           kto(opt_subgroup_size) {
             llvm::Value *image = llvm_values_per_lane[k][image_id];
             ASSERT_ALWAYS(image != NULL);
@@ -2800,10 +2822,10 @@ struct Spirv_Builder {
         case spv::Op::OpImageRead: {
           // TODO: handle >5
           ASSERT_ALWAYS(WordCount == 5);
-          uint32_t res_type_id = word1;
-          uint32_t res_id      = word2;
-          uint32_t image_id    = word3;
-          uint32_t coord_id    = word4;
+          u32 res_type_id = word1;
+          u32 res_id      = word2;
+          u32 image_id    = word3;
+          u32 coord_id    = word4;
           kto(opt_subgroup_size) {
             llvm::Type *res_type = llvm_types[res_type_id];
             ASSERT_ALWAYS(res_type != NULL);
@@ -2818,8 +2840,8 @@ struct Spirv_Builder {
           break;
         }
         case spv::Op::OpFunctionCall: {
-          uint32_t     fun_id    = word3;
-          uint32_t     res_id    = word2;
+          u32          fun_id    = word3;
+          u32          res_id    = word2;
           llvm::Value *fun_value = llvm_global_values[fun_id];
           NOTNULL(fun_value);
           llvm::Function *target_fun = llvm::dyn_cast<llvm::Function>(fun_value);
@@ -2828,7 +2850,8 @@ struct Spirv_Builder {
           // Prepend state * and mask
           args.push_back(state_ptr);
           args.push_back(cur_mask);
-
+          llvm::Value *enabled_lanes = save_enabled_lanes_mask();
+          u32          args_count    = (WordCount - 4) * opt_subgroup_size + 2;
           for (int i = 4; i < WordCount; i++) {
             kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[i]];
@@ -2836,18 +2859,33 @@ struct Spirv_Builder {
               args.push_back(arg);
             }
           }
-          llvm::Value *result = llvm_builder->CreateCall(target_fun, args);
-          kto(opt_subgroup_size) {
-            llvm_values_per_lane[k][res_id] = llvm_builder->CreateExtractValue(result, k);
+          llvm::FunctionType *                target_fun_type = get_fn_ty(target_fun);
+          llvm::SmallVector<llvm::Value *, 4> return_values;
+          if (target_fun_type->getReturnType() != llvm::Type::getVoidTy(c)) {
+            // the rest is return values
+            ASSERT_ALWAYS(target_fun_type->getNumParams() - args_count == opt_subgroup_size);
+
+            for (u32 i = args_count; i < target_fun_type->getNumParams(); i++) {
+              llvm::Value *alloca = llvm_builder->CreateAlloca(target_fun_type->getParamType(i));
+              return_values.push_back(alloca);
+              args.push_back(alloca);
+            }
           }
+          llvm_builder->CreateCall(target_fun, args);
+          if (target_fun_type->getReturnType() != llvm::Type::getVoidTy(c)) {
+            kto(opt_subgroup_size) {
+              llvm_values_per_lane[k][res_id] = llvm_builder->CreateLoad(return_values[k]);
+            }
+          }
+          restore_enabled_lanes_mask(enabled_lanes);
           break;
         }
         case spv::Op::OpMatrixTimesScalar: {
           ASSERT_ALWAYS(WordCount == 5);
-          uint32_t result_type_id = word1;
-          uint32_t result_id      = word2;
-          uint32_t matrix_id      = word3;
-          uint32_t scalar_id      = word4;
+          u32 result_type_id = word1;
+          u32 result_id      = word2;
+          u32 matrix_id      = word3;
+          u32 scalar_id      = word4;
           kto(opt_subgroup_size) {
             llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
             llvm::Value *scalar = llvm_values_per_lane[k][scalar_id];
@@ -2855,7 +2893,7 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(matrix->getType()->isArrayTy() &&
                           matrix->getType()->getArrayElementType()->isVectorTy());
             llvm::Value *result   = llvm::UndefValue::get(matrix->getType());
-            uint32_t     row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
+            u32          row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
             ito(matrix->getType()->getArrayNumElements()) {
               llvm::Value *row = llvm_builder->CreateExtractValue(matrix, i);
               result           = llvm_builder->CreateInsertValue(
@@ -2869,10 +2907,10 @@ struct Spirv_Builder {
         }
         case spv::Op::OpVectorTimesMatrix: {
           ASSERT_ALWAYS(WordCount == 5);
-          uint32_t result_type_id = word1;
-          uint32_t result_id      = word2;
-          uint32_t vector_id      = word3;
-          uint32_t matrix_id      = word4;
+          u32 result_type_id = word1;
+          u32 result_id      = word2;
+          u32 vector_id      = word3;
+          u32 matrix_id      = word4;
           kto(opt_subgroup_size) {
             llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
             llvm::Value *vector = llvm_values_per_lane[k][vector_id];
@@ -2880,9 +2918,9 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(matrix->getType()->isArrayTy() &&
                           matrix->getType()->getArrayElementType()->isVectorTy());
 
-            uint32_t vector_size = llvm_vec_num_elems(vector->getType());
+            u32 vector_size = llvm_vec_num_elems(vector->getType());
             ASSERT_ALWAYS(vector_size == matrix->getType()->getArrayNumElements());
-            uint32_t matrix_row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
+            u32 matrix_row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
             llvm::Type *result_type =
                 llvm::VectorType::get(llvm_vec_elem_type(vector->getType()), matrix_row_size);
             llvm::Value *result   = llvm::UndefValue::get(result_type);
@@ -2899,10 +2937,10 @@ struct Spirv_Builder {
         }
         case spv::Op::OpMatrixTimesVector: {
           ASSERT_ALWAYS(WordCount == 5);
-          uint32_t result_type_id = word1;
-          uint32_t result_id      = word2;
-          uint32_t matrix_id      = word3;
-          uint32_t vector_id      = word4;
+          u32 result_type_id = word1;
+          u32 result_id      = word2;
+          u32 matrix_id      = word3;
+          u32 vector_id      = word4;
           kto(opt_subgroup_size) {
             llvm::Value *matrix = llvm_values_per_lane[k][matrix_id];
             llvm::Value *vector = llvm_values_per_lane[k][vector_id];
@@ -2910,9 +2948,9 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(matrix->getType()->isArrayTy() &&
                           matrix->getType()->getArrayElementType()->isVectorTy());
 
-            uint32_t vector_size = llvm_vec_num_elems(vector->getType());
+            u32 vector_size = llvm_vec_num_elems(vector->getType());
 
-            uint32_t matrix_col_size = matrix->getType()->getArrayNumElements();
+            u32 matrix_col_size = matrix->getType()->getArrayNumElements();
             ASSERT_ALWAYS(vector_size ==
                           llvm_vec_num_elems(matrix->getType()->getArrayElementType()));
 
@@ -2931,10 +2969,10 @@ struct Spirv_Builder {
         }
         case spv::Op::OpMatrixTimesMatrix: {
           ASSERT_ALWAYS(WordCount == 5);
-          uint32_t result_type_id = word1;
-          uint32_t result_id      = word2;
-          uint32_t matrix_1_id    = word3;
-          uint32_t matrix_2_id    = word4;
+          u32 result_type_id = word1;
+          u32 result_id      = word2;
+          u32 matrix_1_id    = word3;
+          u32 matrix_2_id    = word4;
           uto(opt_subgroup_size) {
             // MUl N x K x M matrices
             llvm::Value *matrix_1 = llvm_values_per_lane[u][matrix_1_id];
@@ -2946,11 +2984,11 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(matrix_2->getType()->isArrayTy() &&
                           matrix_2->getType()->getArrayElementType()->isVectorTy());
             llvm::Type *elem_type = llvm_vec_elem_type(matrix_1->getType()->getArrayElementType());
-            uint32_t    N         = (uint32_t)matrix_1->getType()->getArrayNumElements();
-            uint32_t    K         = llvm_vec_num_elems(matrix_1->getType()->getArrayElementType());
-            uint32_t    K_1       = (uint32_t)matrix_2->getType()->getArrayNumElements();
+            u32         N         = (u32)matrix_1->getType()->getArrayNumElements();
+            u32         K         = llvm_vec_num_elems(matrix_1->getType()->getArrayElementType());
+            u32         K_1       = (u32)matrix_2->getType()->getArrayNumElements();
             ASSERT_ALWAYS(K == K_1);
-            uint32_t M = llvm_vec_num_elems(matrix_2->getType()->getArrayElementType());
+            u32 M = llvm_vec_num_elems(matrix_2->getType()->getArrayElementType());
 
             llvm::Value *matrix_2_t = llvm_matrix_transpose(matrix_2, llvm_builder.get());
             llvm::SmallVector<llvm::Value *, 4> rows_1;
@@ -2973,11 +3011,11 @@ struct Spirv_Builder {
         }
         case spv::Op::OpImageSampleImplicitLod: {
           ASSERT_ALWAYS(WordCount == 5);
-          uint32_t    result_type_id   = word1;
-          uint32_t    result_id        = word2;
-          uint32_t    sampled_image_id = word3;
-          uint32_t    coordinate_id    = word4;
-          uint32_t    dim              = 0;
+          u32         result_type_id   = word1;
+          u32         result_id        = word2;
+          u32         sampled_image_id = word3;
+          u32         coordinate_id    = word4;
+          u32         dim              = 0;
           llvm::Type *coord_elem_type  = NULL;
           ito(opt_subgroup_size) {
             llvm::Value *coord = llvm_values_per_lane[i][coordinate_id];
@@ -3055,10 +3093,10 @@ struct Spirv_Builder {
             ito(opt_subgroup_size) {
               llvm::Value *dudxdy         = llvm_builder->CreateExtractValue(derivatives_x, {i});
               llvm::Value *dvdxdy         = llvm_builder->CreateExtractValue(derivatives_y, {i});
-              llvm::Value *dudx           = llvm_builder->CreateExtractElement(dudxdy, (uint64_t)0);
-              llvm::Value *dvdx           = llvm_builder->CreateExtractElement(dvdxdy, (uint64_t)0);
-              llvm::Value *dudy           = llvm_builder->CreateExtractElement(dudxdy, (uint64_t)1);
-              llvm::Value *dvdy           = llvm_builder->CreateExtractElement(dvdxdy, (uint64_t)1);
+              llvm::Value *dudx           = llvm_builder->CreateExtractElement(dudxdy, (u64)0);
+              llvm::Value *dvdx           = llvm_builder->CreateExtractElement(dvdxdy, (u64)0);
+              llvm::Value *dudy           = llvm_builder->CreateExtractElement(dudxdy, (u64)1);
+              llvm::Value *dvdy           = llvm_builder->CreateExtractElement(dvdxdy, (u64)1);
               llvm::Value *combined_image = llvm_values_per_lane[i][sampled_image_id];
               NOTNULL(combined_image);
               ASSERT_ALWAYS(combined_image->getType() == combined_image_t);
@@ -3069,9 +3107,8 @@ struct Spirv_Builder {
               llvm::Value *coord                 = llvm_values_per_lane[i][coordinate_id];
               llvm_values_per_lane[i][result_id] = llvm_builder->CreateCall(
                   spv_image_sample_2d_float4,
-                  {image_handle, sampler_handle,
-                   llvm_builder->CreateExtractElement(coord, (uint64_t)0),
-                   llvm_builder->CreateExtractElement(coord, (uint64_t)1), dudx, dudy, dvdx, dvdy});
+                  {image_handle, sampler_handle, llvm_builder->CreateExtractElement(coord, (u64)0),
+                   llvm_builder->CreateExtractElement(coord, (u64)1), dudx, dudy, dvdx, dvdy});
             }
           } else {
             UNIMPLEMENTED;
@@ -3080,9 +3117,9 @@ struct Spirv_Builder {
         }
         case spv::Op::OpConvertSToF: {
           ASSERT_ALWAYS(WordCount == 4);
-          uint32_t    result_type_id = word1;
-          uint32_t    result_id      = word2;
-          uint32_t    integer_val_id = word3;
+          u32         result_type_id = word1;
+          u32         result_id      = word2;
+          u32         integer_val_id = word3;
           llvm::Type *result_type    = llvm_types[result_type_id];
           NOTNULL(result_type);
           ASSERT_ALWAYS(result_type->isFloatTy());
@@ -3547,17 +3584,11 @@ struct Spirv_Builder {
         }
       }
       // @llvm/finish_function
-      llvm::BasicBlock *global_terminator = new llvm::BasicBlock(c, "terminator", cur_fun);
-      new llvm::ReturnInst(c, NULL, global_terminator);
-      if (returned_data) {
-        // we put the pointer to returned data as the last parameter
-        new llvm::StoreInst(returned_data, cur_fun->getArg(cur_fun_ty->getNumParams() - 1),
-                            global_terminator);
-      }
+      llvm::BasicBlock *global_terminator = llvm::BasicBlock::Create(c, "terminator", cur_fun);
+      llvm::ReturnInst::Create(c, global_terminator);
       for (auto &j : deferred_phis) {
         kto(opt_subgroup_size) {
-          llvm::PHINode *llvm_phi =
-              llvm::PHINode::Create(j.result_type, (uint32_t)j.vars.size(), "phi");
+          llvm::PHINode *llvm_phi = llvm::PHINode::Create(j.result_type, (u32)j.vars.size(), "phi");
           ito(j.vars.size()) {
             llvm::Value *     value     = llvm_values_per_lane[k][j.vars[i].first];
             llvm::BasicBlock *parent_bb = llvm_labels[j.vars[i].second];
@@ -3593,78 +3624,94 @@ struct Spirv_Builder {
         call_bb(local_cfg[bb], bb);
       }
       local_cfg[allocas_bb] = allocas_bb;
+      std::map<llvm::BasicBlock*, llvm::Value*> masks_to_bb;
       for (BranchCond &cb : deferred_branches) {
         llvm::BasicBlock *bb = cb.bb;
         ASSERT_ALWAYS(bb != NULL);
-        llvm::BasicBlock *dst_true  = llvm_labels[cb.true_id];
-        llvm::BasicBlock *dst_false = llvm_labels[cb.false_id];
-        llvm::BasicBlock *dst_merge = llvm_labels[cb.merge_id];
+        llvm::BasicBlock *dst_true = llvm_labels[cb.true_id];
         NOTNULL(dst_true);
-        NOTNULL(dst_false);
-        NOTNULL(dst_merge);
+        llvm::BasicBlock *dst_false    = NULL;
+        llvm::BasicBlock *dst_merge    = NULL;
+        llvm::BasicBlock *dst_continue = NULL;
+        if (cb.false_id != 0) {
+          dst_false = llvm_labels[cb.false_id];
+          bb_cfg[bb].out_bbs.insert(dst_false);
+          bb_cfg[dst_false].in_bbs.insert(bb);
+        }
+        if (cb.merge_id != 0) {
+          dst_merge = llvm_labels[cb.merge_id];
+          bb_cfg[bb].out_bbs.insert(dst_merge);
+          bb_cfg[dst_merge].in_bbs.insert(bb);
+        }
+        if (cb.continue_id != 0) {
+          dst_continue = llvm_labels[cb.continue_id];
+          bb_cfg[bb].out_bbs.insert(dst_continue);
+          bb_cfg[dst_continue].in_bbs.insert(bb);
+        }
+
         bb_cfg[bb].out_bbs.insert(dst_true);
-        bb_cfg[bb].out_bbs.insert(dst_false);
-        bb_cfg[bb].out_bbs.insert(dst_merge);
         bb_cfg[dst_true].in_bbs.insert(bb);
-        bb_cfg[dst_false].in_bbs.insert(bb);
-        bb_cfg[dst_merge].in_bbs.insert(bb);
 
         llvm_builder.reset(new llvm::IRBuilder<>(local_cfg[bb], llvm::ConstantFolder()));
 
-        llvm::Value *i1_vec = llvm::UndefValue::get(
-            llvm::VectorType::get(llvm::Type::getInt1Ty(c), opt_subgroup_size));
-        kto(opt_subgroup_size) {
-          llvm::Instruction *src_cond =
-              llvm::dyn_cast<llvm::Instruction>(llvm_values_per_lane[k][cb.cond_id]);
-          NOTNULL(src_cond);
-          llvm::Value *cond = llvm_builder->CreateLoad(inst_hub[src_cond]);
-          NOTNULL(cond);
-          ASSERT_ALWAYS(cond->getType()->isIntegerTy());
-          i1_vec = llvm_builder->CreateInsertElement(i1_vec, cond, k);
+        // Conditional branch
+        if (cb.cond_id != 0) {
+          llvm::Value *cond_mask = NULL;
+          llvm::Value *i1_vec    = llvm::UndefValue::get(
+              llvm::VectorType::get(llvm::Type::getInt1Ty(c), opt_subgroup_size));
+          kto(opt_subgroup_size) {
+            llvm::Instruction *src_cond =
+                llvm::dyn_cast<llvm::Instruction>(llvm_values_per_lane[k][cb.cond_id]);
+            NOTNULL(src_cond);
+            llvm::Value *cond = llvm_builder->CreateLoad(inst_hub[src_cond]);
+            NOTNULL(cond);
+            ASSERT_ALWAYS(cond->getType()->isIntegerTy());
+            i1_vec = llvm_builder->CreateInsertElement(i1_vec, cond, k);
+          }
+          cond_mask = i1_vec_to_mask(i1_vec);
+
+          llvm::Value *old_mask  = llvm_builder->CreateLoad(cur_mask);
+          llvm::Value *true_mask = llvm_builder->CreateAnd(old_mask, cond_mask);
+          llvm::Value *false_mask =
+              llvm_builder->CreateAnd(old_mask, llvm_builder->CreateNot(cond_mask));
+          llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c, "flow_control", cur_fun);
+          //        call_bb(bb, true_mask, dst_true, flow_control_bb);
+          //        call_bb(flow_control_bb, false_mask, dst_false, dst_merge);
+
+          //        llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c, "flow_control");
+          llvm::Value *all_true  = llvm_builder->CreateICmpEQ(true_mask, old_mask);
+          llvm::Value *all_false = llvm_builder->CreateICmpEQ(true_mask, llvm_get_constant_i64(0));
+
+          llvm::BranchInst::Create(create_masked_jump(flow_control_bb, old_mask),
+                                   create_masked_jump(dst_true, true_mask), all_false,
+                                   local_cfg[bb]);
+
+          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
+                                   create_masked_jump(dst_false, true_mask), all_true,
+                                   flow_control_bb);
+        } else { // unconditional branch
+          llvm::BranchInst::Create(local_cfg[dst_true], local_cfg[bb]);
         }
-        llvm::Value *old_mask  = llvm_builder->CreateLoad(cur_mask);
-        llvm::Value *cond_mask = i1_vec_to_mask(i1_vec);
-        //        llvm_print_string("condition:");
-        //        llvm_builder->CreateCall(dump_mask, {state_ptr, cond_mask});
-
-        llvm::Value *true_mask = llvm_builder->CreateAnd(old_mask, cond_mask);
-        llvm::Value *false_mask =
-            llvm_builder->CreateAnd(old_mask, llvm_builder->CreateNot(cond_mask));
-
         //        call_bb(local_cfg[bb], dst_true);
-
-        llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c, "flow_control", cur_fun);
-        //        call_bb(bb, true_mask, dst_true, flow_control_bb);
-        //        call_bb(flow_control_bb, false_mask, dst_false, dst_merge);
-
-        //        llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c, "flow_control");
-        llvm::Value *all_true  = llvm_builder->CreateICmpEQ(true_mask, old_mask);
-        llvm::Value *all_false = llvm_builder->CreateICmpEQ(true_mask, llvm_get_constant_i64(0));
-
-        llvm::BranchInst::Create(create_masked_jump(flow_control_bb, old_mask),
-                                 create_masked_jump(dst_true, true_mask), all_false, local_cfg[bb]);
-
-        llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
-                                 create_masked_jump(dst_false, true_mask), all_true,
-                                 flow_control_bb);
 
         //        //        new llvm::StoreInst(true_mask, cur_mask, dst_true->getFirstNonPHI());
         //        //        new llvm::StoreInst(false_mask, cur_mask, dst_false->getFirstNonPHI());
         //        //        new llvm::StoreInst(old_mask, cur_mask, dst_merge->getFirstNonPHI());
       }
-      for (auto &j : deferred_jumps) {
-        llvm::BasicBlock *bb = j.first;
-        ASSERT_ALWAYS(bb != NULL);
-        llvm::BasicBlock *dst = llvm_labels[j.second];
-        NOTNULL(dst);
-        //        call_bb(bb, dst);
-        bb_cfg[bb].out_bbs.insert(dst);
-        bb_cfg[dst].in_bbs.insert(bb);
-        llvm::BranchInst::Create(local_cfg[dst], local_cfg[bb]);
-      }
+      //      for (auto &j : deferred_jumps) {
+      //        llvm::BasicBlock *bb = j.first;
+      //        ASSERT_ALWAYS(bb != NULL);
+      //        llvm::BasicBlock *dst = llvm_labels[j.second];
+      //        NOTNULL(dst);
+      //        //        call_bb(bb, dst);
+      //        bb_cfg[bb].out_bbs.insert(dst);
+      //        bb_cfg[dst].in_bbs.insert(bb);
+      //        llvm::BranchInst::Create(local_cfg[dst], local_cfg[bb]);
+      //      }
       for (auto &item : terminators) {
-        llvm::Value *all_lanes_are_off = llvm::CallInst::Create(spv_disable_lanes, {}, "return", item.first);
-        llvm::BranchInst(global_terminator, NULL, all_lanes_are_off, item.first);
+        llvm::Value *all_lanes_are_off =
+            llvm::CallInst::Create(spv_disable_lanes, {state_ptr, llvm_builder->CreateLoad(cur_mask)}, "return", item);
+        llvm::BranchInst::Create(global_terminator, NULL, all_lanes_are_off, item);
         UNIMPLEMENTED;
       }
       dump_cfg();
@@ -3694,11 +3741,11 @@ struct Spirv_Builder {
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
           llvm::Function::LinkageTypes::ExternalLinkage, "get_export_count", module.get());
       llvm::BasicBlock *bb          = llvm::BasicBlock::Create(c, "entry", get_export_count);
-      uint32_t          field_count = 0;
+      u32               field_count = 0;
       for (auto &item : struct_types) {
         if (item.second.is_builtin) {
           ASSERT_ALWAYS(field_count == 0 && "Only one export structure per module is allowed");
-          field_count = (uint32_t)item.second.member_types.size();
+          field_count = (u32)item.second.member_types.size();
         }
       }
       llvm::ReturnInst::Create(c, llvm::ConstantInt::get(c, llvm::APInt(32, field_count)), bb);
@@ -3715,7 +3762,7 @@ struct Spirv_Builder {
       llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
 
       for (auto &item : struct_types) {
-        uint32_t i = 0;
+        u32 i = 0;
         if (item.second.is_builtin) {
           ASSERT_ALWAYS(i == 0);
           for (auto &member_builtin_id : item.second.member_builtins) {
@@ -3732,7 +3779,7 @@ struct Spirv_Builder {
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
           llvm::Function::LinkageTypes::ExternalLinkage, "get_input_count", module.get());
       llvm::BasicBlock *bb          = llvm::BasicBlock::Create(c, "entry", get_input_count);
-      uint32_t          input_count = 0;
+      u32               input_count = 0;
       ito(input_sizes.size()) {
         if (input_sizes[i] != 0) input_count++;
       }
@@ -3755,7 +3802,7 @@ struct Spirv_Builder {
       llvm::BasicBlock *                 bb = llvm::BasicBlock::Create(c, "entry", get_input_slots);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
-      uint32_t k = 0;
+      u32 k = 0;
       ito(input_sizes.size()) {
         if (input_sizes[i] != 0) {
           llvm::Value *gep_0 = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3));
@@ -3774,7 +3821,7 @@ struct Spirv_Builder {
           llvm::FunctionType::get(llvm::IntegerType::getInt32Ty(c), false),
           llvm::Function::LinkageTypes::ExternalLinkage, "get_output_count", module.get());
       llvm::BasicBlock *bb           = llvm::BasicBlock::Create(c, "entry", get_output_count);
-      uint32_t          output_count = 0;
+      u32               output_count = 0;
       ito(output_sizes.size()) {
         if (output_sizes[i] != 0) output_count++;
       }
@@ -3797,7 +3844,7 @@ struct Spirv_Builder {
       llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_output_slots);
       std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
       llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
-      uint32_t k = 0;
+      u32 k = 0;
       ito(output_sizes.size()) {
         if (output_sizes[i] != 0) {
           llvm::Value *gep_0 = llvm_builder->CreateGEP(ptr_arg, llvm_get_constant_i32(k * 3));
@@ -3854,7 +3901,7 @@ struct Spirv_Builder {
     }
   }
 
-  void parse_meta(const uint32_t *pCode, size_t codeSize) {
+  void parse_meta(const u32 *pCode, size_t codeSize) {
     this->code      = pCode;
     this->code_size = codeSize;
     code_hash       = hash_of(string_ref{(char const *)pCode, (size_t)codeSize * 4});
@@ -3871,7 +3918,7 @@ struct Spirv_Builder {
         snprintf(shader_dump_path, sizeof(shader_dump_path), "%.*s", (int)final_path.len,
                  final_path.ptr);
         spv_context context = spvContextCreate(SPV_ENV_VULKAN_1_2);
-        uint32_t    options = SPV_BINARY_TO_TEXT_OPTION_NONE;
+        u32         options = SPV_BINARY_TO_TEXT_OPTION_NONE;
         options |= SPV_BINARY_TO_TEXT_OPTION_NO_HEADER;
         options |= SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES;
         spv_text       text;
@@ -3886,32 +3933,32 @@ struct Spirv_Builder {
     ASSERT_ALWAYS(pCode[0] == spv::MagicNumber);
     ASSERT_ALWAYS(pCode[1] <= spv::Version);
 
-    const uint32_t generator = pCode[2];
-    const uint32_t ID_bound  = pCode[3];
+    const u32 generator = pCode[2];
+    const u32 ID_bound  = pCode[3];
 
     ASSERT_ALWAYS(pCode[4] == 0);
 
-    const uint32_t *opStart = pCode + 5;
-    const uint32_t *opEnd   = pCode + codeSize;
-    pCode                   = opStart;
-    uint32_t cur_function   = 0;
+    const u32 *opStart = pCode + 5;
+    const u32 *opEnd   = pCode + codeSize;
+    pCode              = opStart;
+    u32 cur_function   = 0;
 #define CLASSIFY(id, TYPE) decl_types.push_back({id, TYPE});
-    uint32_t spirv_line = 0;
+    u32 spirv_line = 0;
     // First pass
     // Parse Meta data: types, decorations etc
     while (pCode < opEnd) {
       spirv_line++;
-      uint16_t WordCount = pCode[0] >> spv::WordCountShift;
-      spv::Op  opcode    = spv::Op(pCode[0] & spv::OpCodeMask);
-      uint32_t word1     = pCode[1];
-      uint32_t word2     = WordCount > 2 ? pCode[2] : 0;
-      uint32_t word3     = WordCount > 3 ? pCode[3] : 0;
-      uint32_t word4     = WordCount > 4 ? pCode[4] : 0;
-      uint32_t word5     = WordCount > 5 ? pCode[5] : 0;
-      uint32_t word6     = WordCount > 6 ? pCode[6] : 0;
-      uint32_t word7     = WordCount > 7 ? pCode[7] : 0;
-      uint32_t word8     = WordCount > 8 ? pCode[8] : 0;
-      uint32_t word9     = WordCount > 9 ? pCode[9] : 0;
+      u16     WordCount = pCode[0] >> spv::WordCountShift;
+      spv::Op opcode    = spv::Op(pCode[0] & spv::OpCodeMask);
+      u32     word1     = pCode[1];
+      u32     word2     = WordCount > 2 ? pCode[2] : 0;
+      u32     word3     = WordCount > 3 ? pCode[3] : 0;
+      u32     word4     = WordCount > 4 ? pCode[4] : 0;
+      u32     word5     = WordCount > 5 ? pCode[5] : 0;
+      u32     word6     = WordCount > 6 ? pCode[6] : 0;
+      u32     word7     = WordCount > 7 ? pCode[7] : 0;
+      u32     word8     = WordCount > 8 ? pCode[8] : 0;
+      u32     word9     = WordCount > 9 ? pCode[9] : 0;
       // Parse meta opcodes
       switch (opcode) {
       case spv::Op::OpName: {
@@ -4049,7 +4096,7 @@ struct Spirv_Builder {
         StructTy type;
         type.id         = word1;
         type.is_builtin = false;
-        for (uint16_t i = 2; i < WordCount; i++) {
+        for (u16 i = 2; i < WordCount; i++) {
           type.member_types.push_back(pCode[i]);
           type.member_offsets.push_back(0);
           type.member_builtins.push_back(spv::BuiltIn::BuiltInMax);
@@ -4074,7 +4121,7 @@ struct Spirv_Builder {
       case spv::Op::OpTypeFunction: {
         FunTy &f = functypes[word1];
         f.id     = word1;
-        for (uint16_t i = 3; i < WordCount; i++) f.params.push_back(pCode[i]);
+        for (u16 i = 3; i < WordCount; i++) f.params.push_back(pCode[i]);
         f.ret = word2;
         CLASSIFY(f.id, DeclTy::FunTy);
         break;
@@ -4182,7 +4229,7 @@ struct Spirv_Builder {
         Constant c;
         c.id             = word2;
         c.type           = word1;
-        c.i32_val        = (uint32_t)~0;
+        c.i32_val        = (u32)~0;
         constants[word2] = c;
         CLASSIFY(c.id, DeclTy::Constant);
         break;
@@ -4738,7 +4785,7 @@ struct Spirv_Builder {
       ASSERT_ALWAYS(size != 0);
       return size;
     };
-    std::function<size_t(uint32_t)> get_size = [&](uint32_t member_type_id) -> size_t {
+    std::function<size_t(u32)> get_size = [&](u32 member_type_id) -> size_t {
       size_t size = 0;
       ASSERT_ALWAYS(decl_types_table.find(member_type_id) != decl_types_table.end());
       DeclTy decl_type = decl_types_table.find(member_type_id)->second;
@@ -4764,15 +4811,15 @@ struct Spirv_Builder {
       case DeclTy::VectorTy: {
         ASSERT_ALWAYS(contains(vector_types, member_type_id));
         VectorTy vtype           = vector_types[member_type_id];
-        uint32_t vmember_type_id = vtype.member_id;
+        u32      vmember_type_id = vtype.member_id;
         size                     = get_size(vmember_type_id) * vtype.width;
         break;
       }
       case DeclTy::ArrayTy: {
         ASSERT_ALWAYS(contains(array_types, member_type_id));
-        ArrayTy  atype           = array_types[member_type_id];
-        uint32_t amember_type_id = atype.member_id;
-        uint32_t length          = 0;
+        ArrayTy atype           = array_types[member_type_id];
+        u32     amember_type_id = atype.member_id;
+        u32     length          = 0;
         ASSERT_ALWAYS(contains(constants, atype.width_id));
         length = constants[atype.width_id].i32_val;
         ASSERT_ALWAYS(length != 0);
@@ -4791,7 +4838,7 @@ struct Spirv_Builder {
       ASSERT_ALWAYS(size != 0);
       return size;
     };
-    std::function<VkFormat(uint32_t)> get_format = [&](uint32_t member_type_id) -> VkFormat {
+    std::function<VkFormat(u32)> get_format = [&](u32 member_type_id) -> VkFormat {
       ASSERT_ALWAYS(decl_types_table.find(member_type_id) != decl_types_table.end());
       DeclTy decl_type = decl_types_table.find(member_type_id)->second;
       // Limit to primitives and vectors and arrays
@@ -4809,7 +4856,7 @@ struct Spirv_Builder {
       case DeclTy::VectorTy: {
         ASSERT_ALWAYS(contains(vector_types, member_type_id));
         VectorTy vtype           = vector_types[member_type_id];
-        uint32_t vmember_type_id = vtype.member_id;
+        u32      vmember_type_id = vtype.member_id;
         VkFormat member_format   = get_format(vmember_type_id);
         switch (member_format) {
         case VkFormat::VK_FORMAT_R32_SFLOAT:
@@ -4830,18 +4877,18 @@ struct Spirv_Builder {
     for (auto &item : decl_types) {
       decl_types_table[item.first] = item.second;
     }
-    auto get_pointee_size = [&](uint32_t ptr_type_id) {
+    auto get_pointee_size = [&](u32 ptr_type_id) {
       ASSERT_ALWAYS(decl_types_table[ptr_type_id] == DeclTy::PtrTy);
       PtrTy ptr_type = ptr_types[ptr_type_id];
       return get_size(ptr_type.target_id);
     };
-    auto get_pointee_format = [&](uint32_t ptr_type_id) {
+    auto get_pointee_format = [&](u32 ptr_type_id) {
       ASSERT_ALWAYS(decl_types_table[ptr_type_id] == DeclTy::PtrTy);
       PtrTy ptr_type = ptr_types[ptr_type_id];
       return get_format(ptr_type.target_id);
     };
     for (auto &item : decl_types) {
-      uint32_t type_id = item.first;
+      u32 type_id = item.first;
       switch (item.second) {
       case DeclTy::FunTy: type_sizes[type_id] = 0; break;
       case DeclTy::PtrTy:
@@ -4850,9 +4897,9 @@ struct Spirv_Builder {
         ASSERT_HAS(struct_types);
         StructTy type = struct_types.find(type_id)->second;
         ASSERT_ALWAYS(type.member_offsets.size() > 0);
-        uint32_t last_member_offset = type.member_offsets[type.member_offsets.size() - 1];
-        type.size           = last_member_offset + (uint32_t)get_size(type.member_types.back());
-        type_sizes[type_id] = type.size;
+        u32 last_member_offset = type.member_offsets[type.member_offsets.size() - 1];
+        type.size              = last_member_offset + (u32)get_size(type.member_types.back());
+        type_sizes[type_id]    = type.size;
         break;
       }
       case DeclTy::Function:
@@ -4868,10 +4915,10 @@ struct Spirv_Builder {
     // Calculate the layout of the input and ouput data needed for optimal
     // work of the shader
     {
-      std::vector<uint32_t> inputs;
-      std::vector<uint32_t> outputs;
-      uint32_t              max_input_location  = 0;
-      uint32_t              max_output_location = 0;
+      std::vector<u32> inputs;
+      std::vector<u32> outputs;
+      u32              max_input_location  = 0;
+      u32              max_output_location = 0;
       // First pass figure out the number of input/output slots
       for (auto &item : decl_types) {
         if (item.second == DeclTy::Variable) {
@@ -4889,14 +4936,14 @@ struct Spirv_Builder {
             }
           }
           if (var.storage == spv::StorageClass::StorageClassInput) {
-            uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
+            u32 location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
             if (inputs.size() <= location) {
               inputs.resize(location + 1);
             }
             inputs[location]   = var.id;
             max_input_location = std::max(max_input_location, location);
           } else if (var.storage == spv::StorageClass::StorageClassOutput) {
-            uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
+            u32 location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
             if (outputs.size() <= location) {
               outputs.resize(location + 1);
             }
@@ -4905,39 +4952,39 @@ struct Spirv_Builder {
           }
         }
       }
-      uint32_t input_offset  = 0;
-      uint32_t output_offset = 0;
+      u32 input_offset  = 0;
+      u32 output_offset = 0;
       input_offsets.resize(max_input_location + 1);
       input_sizes.resize(max_input_location + 1);
       input_formats.resize(max_input_location + 1);
       output_offsets.resize(max_output_location + 1);
       output_sizes.resize(max_output_location + 1);
       output_formats.resize(max_output_location + 1);
-      for (uint32_t id : inputs) {
+      for (u32 id : inputs) {
         if (id > 0) {
           Variable var      = variables[id];
-          uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
+          u32      location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
           // Align to 16 bytes
           if ((input_offset & 0xf) != 0) {
             input_offset = (input_offset + 0xf) & (~0xfu);
           }
           input_offsets[location] = input_offset;
-          uint32_t size           = (uint32_t)get_pointee_size(var.type_id);
+          u32 size                = (u32)get_pointee_size(var.type_id);
           input_sizes[location]   = size;
           input_formats[location] = get_pointee_format(var.type_id);
           input_offset += size;
         }
       }
-      for (uint32_t id : outputs) {
+      for (u32 id : outputs) {
         if (id > 0) {
           Variable var      = variables[id];
-          uint32_t location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
+          u32      location = find_decoration(spv::Decoration::DecorationLocation, var.id).param1;
           // Align to 16 bytes
           if ((output_offset & 0xf) != 0) {
             output_offset = (output_offset + 0xf) & (~0xfu);
           }
           output_offsets[location] = output_offset;
-          uint32_t size            = (uint32_t)get_pointee_size(var.type_id);
+          u32 size                 = (u32)get_pointee_size(var.type_id);
           output_sizes[location]   = size;
           output_formats[location] = get_pointee_format(var.type_id);
           output_offset += size;
@@ -4959,8 +5006,8 @@ struct Spirv_Builder {
       if (var.storage == spv::StorageClass::StorageClassPrivate) {
         // Usually it's a pointer but is it always?
         ASSERT_ALWAYS(contains(ptr_types, var.type_id));
-        PtrTy    ptr             = ptr_types[var.type_id];
-        uint32_t pointee_type_id = ptr.target_id;
+        PtrTy ptr             = ptr_types[var.type_id];
+        u32   pointee_type_id = ptr.target_id;
         // Check that we don't have further indirections
         ASSERT_ALWAYS(
             //
@@ -4989,7 +5036,7 @@ struct Spirv_Builder {
 };
 
 extern "C" {
-void *compile_spirv(uint32_t const *pCode, size_t code_size) {
+void *compile_spirv(u32 const *pCode, size_t code_size) {
   Spirv_Builder builder;
   builder.parse_meta(pCode, code_size / 4);
   llvm::orc::ThreadSafeModule bundle = builder.build_llvm_module_vectorized();
@@ -5038,15 +5085,15 @@ Shader_Symbols *get_shader_symbols(void *ptr) {
 #ifdef S2L_EXE
 int main(int argc, char **argv) {
   ASSERT_ALWAYS(argc == 3);
-  uint32_t subgroup_size = (uint32_t)atoi(argv[2]);
+  u32 subgroup_size = (u32)atoi(argv[2]);
   ASSERT_ALWAYS(subgroup_size == 1 || subgroup_size == 4 || subgroup_size == 64);
   size_t size;
   auto * bytes = read_file(argv[1], &size);
   defer(tl_free(bytes));
 
-  const uint32_t *pCode    = (uint32_t *)bytes;
-  size_t          codeSize = size / 4;
-  Spirv_Builder   builder;
+  const u32 *   pCode    = (u32 *)bytes;
+  size_t        codeSize = size / 4;
+  Spirv_Builder builder;
   builder.opt_subgroup_size = subgroup_size;
   builder.parse_meta(pCode, codeSize);
   llvm::orc::ThreadSafeModule bundle = builder.build_llvm_module_vectorized();
