@@ -1,3 +1,36 @@
+// uEdit
+// Toy project to explore the difficulty of a features set for a text editor
+//
+// ## TODO
+// ### Shortcuts
+// * C-z, C-Shift-Z - undo redo
+// * C-f            - find/replace window, find selected region
+// * alt-Shift      - block selection
+// * C-c, C-c, C-v  - copy/cut/paste
+// * C-d            - duplicate line
+// * C-k            - kill line
+// * C-n,C-alt-n    - new line at the bottom/top
+// * C-x-p          - execute a python script
+// * C-t            - highlight symbol under cursor/selected range
+// * C-h            - goto next symbol under cursor/selected range
+// * C-`            - open console at file location
+// * Alt-t          - open file tree at file location
+// * C-b-n          - new scratch buffer
+// * C-s            - save current buffer
+// * C-a            - select all
+//
+// ### Buffer types
+// * text buffer
+// * split screen vertical/horizontal
+// * image viewer
+// * console
+// * file tree
+// * csv table view
+// * messages
+//
+// ### UX
+// * auto reload modified files via inotify + options for conflict resolution
+
 #include <GLES3/gl32.h>
 #include <SDL2/SDL.h>
 #include <atomic>
