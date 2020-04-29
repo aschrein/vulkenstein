@@ -133,7 +133,7 @@ FNATTR float4 get_pixel_position(Invocation_Info *state, uint32_t lane_id, float
 //  return state->mask_stack[--state->mask_top];
 //}
 
-FNATTR bool PURE spv_get_lane_mask(Invocation_Info *state, uint64_t mask, uint32_t lane_id) {
+FNATTR bool spv_get_lane_mask(Invocation_Info *state, uint64_t mask, uint32_t lane_id) {
   return (((state->enabled_lanes & mask) >> lane_id) & 1) == 1;
 }
 

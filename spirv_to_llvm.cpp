@@ -168,6 +168,35 @@ public:
   Shader_Symbols                    symbols;
   std::unique_ptr<llvm::orc::LLJIT> jit;
 };
+namespace llvm {
+struct My_Dump_Pass : llvm::ModulePass {
+  static char ID;
+  u64         code_hash;
+  explicit My_Dump_Pass(u64 code_hash = 0) : llvm::ModulePass(ID), code_hash(code_hash) {}
+
+  virtual bool runOnModule(llvm::Module &M) override {
+    static u32 dump_id = 0;
+    TMP_STORAGE_SCOPE;
+    char buf[0x100];
+    // Print llvm dumps
+    {
+      std::string              str;
+      llvm::raw_string_ostream os(str);
+      M.print(os, NULL);
+      os.flush();
+      string_ref dir = stref_s("shader_dumps/llvm/");
+      make_dir_recursive(dir);
+      snprintf(buf, sizeof(buf), "%lx.%i.ll", code_hash, dump_id++);
+      string_ref final_path = stref_concat(dir, stref_s(buf));
+      dump_file(stref_to_tmp_cstr(final_path), str.c_str(), str.length());
+    }
+    return false;
+  }
+};
+
+char My_Dump_Pass::ID = 0;
+} // namespace llvm
+llvm::My_Dump_Pass *create_my_dump_pass(u64 code_hash) { return new llvm::My_Dump_Pass(code_hash); }
 
 //////////////////////////
 // Meta data structures //
@@ -327,6 +356,7 @@ struct Spirv_Builder {
   bool opt_debug_comments = false;
   bool opt_debug_info     = false;
   bool opt_dump           = true;
+  bool opt_llvm_dump      = true;
   //  bool opt_deinterleave_attributes = false;
 
   //////////////////////
@@ -457,6 +487,14 @@ struct Spirv_Builder {
     default: UNIMPLEMENTED;
     };
     ASSERT_ALWAYS(module);
+    if (opt_llvm_dump) {
+      std::vector<const char *> argv;
+      argv.push_back("S2L");
+      argv.push_back("--print-after-all");
+      argv.push_back("--print-before-all");
+      argv.push_back(NULL);
+      llvm::cl::ParseCommandLineOptions(argv.size() - 1, &argv[0]);
+    }
     llvm::PassRegistry *registry = llvm::PassRegistry::getPassRegistry();
     llvm::initializeCore(*registry);
     llvm::initializeScalarOpts(*registry);
@@ -999,22 +1037,16 @@ struct Spirv_Builder {
         llvm::SmallVector<llvm::Value *, 64>      dummy_values;
         llvm::Type *                              result_type;
       };
-      struct WrappedBB {
-        llvm::BasicBlock *                         bb;
-        llvm::Function *                           fun;
-        llvm::SmallDenseMap<llvm::Value *, u32, 8> in_args;
-        llvm::SmallDenseMap<llvm::Value *, u32, 8> out_args;
-      };
       std::vector<BranchCond> deferred_branches;
       //      std::vector<std::pair<llvm::BasicBlock *, u32>> deferred_jumps;
-      std::vector<DeferredStore>              deferred_stores;
-      std::vector<DeferredPhi>                deferred_phis;
-      std::map<u32, llvm::BasicBlock *>       llvm_labels;
-      std::map<llvm::BasicBlock *, WrappedBB> wrapped_bbs;
-      std::vector<llvm::BasicBlock *>         bbs;
-      std::set<llvm::Value *>                 conditions;
-      std::set<llvm::BasicBlock *>            terminators;
-      llvm::BasicBlock *                      entry_bb = NULL;
+      std::vector<DeferredStore>                             deferred_stores;
+      std::map<llvm::BasicBlock *, std::vector<DeferredPhi>> deferred_phis;
+      std::map<u32, llvm::BasicBlock *>                      llvm_labels;
+
+      std::vector<llvm::BasicBlock *> bbs;
+      std::set<llvm::Value *>         conditions;
+      std::set<llvm::BasicBlock *>    terminators;
+      llvm::BasicBlock *              entry_bb = NULL;
       // stash for communication between basic blocks
       llvm::SmallDenseMap<llvm::Value *, llvm::Value *> shared_values_stash;
 
@@ -1055,6 +1087,7 @@ struct Spirv_Builder {
         llvm::Value *mask = llvm_builder->CreateLoad(cur_mask);
         return llvm_builder->CreateCall(spv_get_lane_mask,
                                         {state_ptr, mask, llvm_get_constant_i32(lane_id)});
+        //          return llvm::ConstantInt::get(llvm::Type::getInt1Ty(c), 1);
       };
       auto i1_vec_to_mask = [&](llvm::Value *i1vec) {
         llvm::VectorType *vtype = llvm::dyn_cast<llvm::VectorType>(i1vec->getType());
@@ -1070,202 +1103,7 @@ struct Spirv_Builder {
             dump_string,
             {state_ptr, llvm_builder->CreateBitCast(str_const, llvm::Type::getInt8PtrTy(c))});
       };
-      auto create_masked_jump = [&](llvm::BasicBlock *dst, llvm::Value *mask) {
-        llvm::BasicBlock *set_mask_bb = llvm::BasicBlock::Create(c, "set_mask", cur_fun);
-        new llvm::StoreInst(mask, cur_mask, set_mask_bb);
-        llvm::BranchInst::Create(dst, set_mask_bb);
-        return set_mask_bb;
-      };
-      // I'm trying to emitate basic blocks with parameters by having a bunch of alloced
-      // slots to hold on the values
-      auto call_bb = [&](llvm::BasicBlock *src, llvm::BasicBlock *dst) {
-        ASSERT_ALWAYS(contains(wrapped_bbs, dst));
-        WrappedBB &     wbb    = wrapped_bbs[dst];
-        llvm::Function *bb_fun = wbb.fun;
-        NOTNULL(bb_fun);
-        llvm::SmallVector<llvm::Value *, 16> args;
-        llvm::FunctionType *                 fun_ty = get_fn_ty(bb_fun);
-        NOTNULL(fun_ty);
-        args.resize(fun_ty->getNumParams());
-        args[0] = state_ptr;
-        args[1] = new llvm::LoadInst(mask_t, cur_mask, "mask", src);
-        for (auto &item : wbb.in_args) {
-          ASSERT_ALWAYS(contains(shared_values_stash, item.first));
-          llvm::Value *      inst   = shared_values_stash[item.first];
-          llvm::PointerType *ptr_ty = llvm::dyn_cast<llvm::PointerType>(inst->getType());
-          NOTNULL(ptr_ty);
-          args[item.second] =
-              new llvm::LoadInst(ptr_ty->getPointerElementType(), inst,
-                                 "param_" + bb_fun->getArg(item.second)->getName(), src);
-        }
-        for (auto &item : wbb.out_args) {
-          ASSERT_ALWAYS(contains(shared_values_stash, item.first));
-          llvm::Value *inst = shared_values_stash[item.first];
-          args[item.second] = inst;
-        }
-        llvm::CallInst::Create(bb_fun, args, "", src);
-        //        // Dst Trampoline
-        //        llvm::BasicBlock *trampoline = llvm::BasicBlock::Create(c, "trampoline", cur_fun);
-        //        new llvm::StoreInst(mask, cur_mask, trampoline);
-        //        llvm::BranchInst::Create(dst, trampoline);
 
-        //        llvm::Value *old_mask  = new llvm::LoadInst(mask_t, cur_mask, "old_mask", src);
-        //        llvm::Value *all_false = new llvm::ICmpInst(*src,
-        //        llvm::ICmpInst::Predicate::ICMP_EQ, mask,
-        //                                                    llvm_get_constant_i64(0));
-
-        //        // Merge Trampoline
-        //        llvm::BasicBlock *merge_trampoline =
-        //            llvm::BasicBlock::Create(c, "merge_trampoline", cur_fun);
-        //        new llvm::StoreInst(old_mask, cur_mask, merge_trampoline);
-        //        llvm::BranchInst::Create(dst_merge, merge_trampoline);
-
-        //        llvm::BranchInst::Create(merge_trampoline, trampoline, all_false, src);
-        //        llvm::BranchInst::Create(merge_trampoline, dst);
-      };
-      auto wrap_bb = [&](llvm::BasicBlock *bb) {
-        WrappedBB wbb;
-        wbb.bb = bb;
-        bb->removeFromParent();
-        llvm::SmallVector<llvm::Type *, 16> args;
-        // Prepend state_t* to each function type
-        args.push_back(state_t_ptr);
-        // Prepend mask to each function type
-        args.push_back(mask_t);
-        // Prepend the work set ptr
-        llvm::SmallDenseSet<llvm::Value *, 8> used_foreign_values;
-        // Steps:
-        // 1) promote foreign instructions to arguments
-        // 2) insert pointers to local instructions to argumetns
-        // 2) generate stores of local instructions to arguments
-
-        // allocate arguments for foreign instructions
-        for (llvm::Instruction &inst : *bb) {
-          ito(inst.getNumOperands()) {
-            llvm::Value *op = inst.getOperand(i);
-            if (op == state_ptr || op == cur_mask) continue;
-            llvm::Instruction *used_inst = llvm::dyn_cast<llvm::Instruction>(op);
-            if (used_inst != NULL && used_inst->getParent() != bb &&
-                !contains(used_foreign_values, used_inst)) {
-              args.push_back(used_inst->getType());
-              wbb.in_args[used_inst] = (u32)args.size() - 1;
-              used_foreign_values.insert(used_inst);
-              shared_values.insert(used_inst);
-            }
-            llvm::Argument *used_arg = llvm::dyn_cast<llvm::Argument>(op);
-            if (used_arg != NULL && !contains(used_foreign_values, used_arg)) {
-              args.push_back(used_arg->getType());
-              wbb.in_args[used_arg] = (u32)args.size() - 1;
-              used_foreign_values.insert(used_arg);
-              shared_values.insert(used_arg);
-            }
-          }
-          //          if (!contains(used_instructions, &inst))
-          //            continue;
-          //          for (auto &use : used_instructions[&inst]) {
-          //            llvm::Instruction *used_inst = use.first;
-          //            NOTNULL(used_inst);
-          //            if (used_inst->getParent() != bb &&
-          //                !contains(used_foreign_values, used_inst)) {
-          //              args.push_back(used_inst->getType());
-          //              val_to_arg_id.push_back({.val = used_inst, .arg_id = (u32)args.size()
-          //              - 1}); used_foreign_values.insert(used_inst);
-          //            }
-          //          }
-        }
-
-        u32 out_args_begin = args.size();
-        // allocate arguments for local instructions that are used outside
-        for (llvm::Instruction &inst : *bb) {
-          // if has users
-          bool has_foreign_users = contains(conditions, &inst);
-          for (llvm::User *user : inst.users()) {
-            llvm::Instruction *inst = llvm::dyn_cast<llvm::Instruction>(user);
-            if (inst != NULL && inst->getParent() != bb) {
-              has_foreign_users = true;
-              break;
-            }
-          }
-          //          if (contains(used_instructions, &inst)) {
-          //            for (auto &item : used_instructions[&inst]) {
-          //              if (item.first->getParent() != bb) {
-          //                has_foreign_users = true;
-          //                break;
-          //              }
-          //            }
-          //          }
-          if (has_foreign_users) {
-            args.push_back(llvm::PointerType::get(inst.getType(), 0));
-            wbb.out_args[&inst] = (u32)args.size() - 1;
-            shared_values.insert(&inst);
-          }
-        }
-
-        char tmp_buf[0x100];
-        snprintf(tmp_buf, sizeof(tmp_buf), "deinlined_%s", bb->getName().str().c_str());
-        llvm::Function *fun =
-            llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(c), args, false),
-                                   llvm::GlobalValue::InternalLinkage, tmp_buf, module.get());
-        //        llvm::Instruction *bb_begin  = &bb->front();
-
-        bb->insertInto(fun);
-        llvm::Instruction *this_mask = NULL;
-        if (bb->begin() == bb->end()) {
-          this_mask                     = new llvm::AllocaInst(mask_t, 0, "mask_alloca", bb);
-          llvm::Instruction *store_mask = new llvm::StoreInst(fun->getArg(1), this_mask, bb);
-        } else {
-          this_mask = new llvm::AllocaInst(mask_t, 0, "mask_alloca", &bb->front());
-          llvm::Instruction *store_mask =
-              new llvm::StoreInst(fun->getArg(1), this_mask, this_mask->getNextNode());
-        }
-
-        //        store_mask->insertBefore(&bb->front());
-        //        this_mask->insertBefore(store_mask);
-        // Replace state ptr
-        for (llvm::Instruction &inst : *bb) {
-          ito(inst.getNumOperands()) {
-            if (inst.getOperand(i) == state_ptr) {
-              inst.setOperand(i, fun->getArg(0));
-            } else if (inst.getOperand(i) == cur_mask) {
-              inst.setOperand(i, this_mask);
-            }
-          }
-        }
-        // Store locals to the arguments
-        for (auto &item : wbb.out_args) {
-          new llvm::StoreInst(item.first, fun->getArg(item.second), bb);
-        }
-        for (u32 i = out_args_begin; i < fun->arg_size(); ++i) {
-          fun->getArg(i)->setName("out");
-        }
-        for (auto &item : wbb.in_args) {
-          llvm::Value *arg              = fun->getArg(item.second);
-          llvm::Value *value_to_replace = item.first;
-          ASSERT_ALWAYS(!contains(wbb.out_args, item.first));
-
-          arg->setName("in");
-
-          for (llvm::Instruction &inst : *bb) {
-            ito(inst.getNumOperands()) {
-              llvm::Value *op = inst.getOperand(i);
-              if (op == value_to_replace) {
-                inst.setOperand(i, arg);
-              }
-            }
-            //            for (llvm::Use &use : inst.uses()) {
-            //              llvm::Instruction *used_inst =
-            //              llvm::dyn_cast<llvm::Instruction>(use.getUser()); if (used_inst == val)
-            //              {
-            //                for ()
-            //              }
-            //            }
-          }
-        }
-        llvm::ReturnInst::Create(c, NULL, bb);
-        wbb.fun         = fun;
-        wrapped_bbs[bb] = wbb;
-        return fun;
-      };
       auto masked_store = [&](llvm::SmallVector<llvm::Value *, 64> &values,
                               llvm::SmallVector<llvm::Value *, 64> &addresses) {
         //        llvm_print_string("mask:");
@@ -1753,11 +1591,11 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(addr != NULL);
             llvm::Value *val = llvm_values_per_lane[k][word2];
             ASSERT_ALWAYS(val != NULL);
-            //            llvm_builder->CreateStore(val, addr);
-            values.push_back(val);
-            addresses.push_back(addr);
+            llvm_builder->CreateStore(val, addr);
+            //            values.push_back(val);
+            //            addresses.push_back(addr);
           }
-          masked_store(values, addresses);
+          //          masked_store(values, addresses);
           break;
         }
         // Skip structured control flow instructions for now
@@ -2018,10 +1856,10 @@ struct Spirv_Builder {
             dummy_values.push_back(dummy_value);
             llvm_values_per_lane[k][res_id] = dummy_value;
           }
-          deferred_phis.push_back({.bb           = cur_bb,
-                                   .vars         = vars,
-                                   .dummy_values = dummy_values,
-                                   .result_type  = result_type});
+          deferred_phis[cur_bb].push_back({.bb           = cur_bb,
+                                           .vars         = vars,
+                                           .dummy_values = dummy_values,
+                                           .result_type  = result_type});
           break;
         }
 #define SIMPLE_LLVM_OP(llvm_op)                                                                    \
@@ -2636,9 +2474,10 @@ struct Spirv_Builder {
           kto(opt_subgroup_size) {
             llvm::Value *ret_value = llvm_values_per_lane[k][ret_value_id];
             NOTNULL(ret_value);
-            currently_returned_values.push_back(ret_value);
+            llvm_builder->CreateStore(ret_value, returned_values[k]);
+            //            currently_returned_values.push_back(ret_value);
           }
-          masked_store(currently_returned_values, returned_values);
+          //          masked_store(currently_returned_values, returned_values);
           //          llvm::ReturnInst::Create(c, arr, cur_bb);
           terminators.insert(cur_bb);
           // Terminate current basic block
@@ -3481,20 +3320,15 @@ struct Spirv_Builder {
       // @llvm/finish_function
       llvm::BasicBlock *global_terminator = llvm::BasicBlock::Create(c, "terminator", cur_fun);
       llvm::ReturnInst::Create(c, global_terminator);
-      for (auto &j : deferred_phis) {
-        kto(opt_subgroup_size) {
-          llvm::PHINode *llvm_phi = llvm::PHINode::Create(j.result_type, (u32)j.vars.size(), "phi");
-          ito(j.vars.size()) {
-            llvm::Value *     value     = llvm_values_per_lane[k][j.vars[i].first];
-            llvm::BasicBlock *parent_bb = llvm_labels[j.vars[i].second];
-            NOTNULL(parent_bb);
-            NOTNULL(value);
-            llvm_phi->addIncoming(value, parent_bb);
-          }
-          j.dummy_values[k]->replaceAllUsesWith(llvm_phi);
-          llvm_phi->insertBefore(j.bb->getFirstNonPHI());
-        }
-      }
+      // A local cfg that is going to mirror the initial cfg
+      llvm::SmallDenseMap<llvm::BasicBlock *, llvm::BasicBlock *, 16> local_cfg;
+      struct WrappedBB {
+        llvm::BasicBlock *                         bb;
+        llvm::Function *                           fun;
+        llvm::SmallDenseMap<llvm::Value *, u32, 8> in_args;
+        llvm::SmallDenseMap<llvm::Value *, u32, 8> out_args;
+      };
+      std::map<llvm::BasicBlock *, WrappedBB> wrapped_bbs;
       //      for (llvm::BasicBlock *bb : bbs) {
       //        for (llvm::Instruction &inst : *bb) {
       //          for (llvm::Use &use : inst.uses()) {
@@ -3505,20 +3339,255 @@ struct Spirv_Builder {
       //          }
       //        }
       //      }
+      auto create_masked_jump = [&](llvm::BasicBlock *dst, llvm::Value *mask) {
+        llvm::BasicBlock *set_mask_bb = llvm::BasicBlock::Create(c, "set_mask", cur_fun);
+        new llvm::StoreInst(mask, cur_mask, set_mask_bb);
+        llvm::BranchInst::Create(dst, set_mask_bb);
+        return set_mask_bb;
+      };
+      // I'm trying to emitate basic blocks with parameters by having a bunch of alloced
+      // slots to hold on the values
+      auto call_bb = [&](llvm::BasicBlock *src, llvm::BasicBlock *dst) {
+        ASSERT_ALWAYS(contains(wrapped_bbs, dst));
+        WrappedBB &     wbb    = wrapped_bbs[dst];
+        llvm::Function *bb_fun = wbb.fun;
+        NOTNULL(bb_fun);
+        llvm::SmallVector<llvm::Value *, 16> args;
+        llvm::FunctionType *                 fun_ty = get_fn_ty(bb_fun);
+        NOTNULL(fun_ty);
+        args.resize(fun_ty->getNumParams());
+        args[0] = state_ptr;
+        args[1] = new llvm::LoadInst(mask_t, cur_mask, "mask", src);
+        for (auto &item : wbb.in_args) {
+          ASSERT_ALWAYS(contains(shared_values_stash, item.first));
+          llvm::Value *      inst   = shared_values_stash[item.first];
+          llvm::PointerType *ptr_ty = llvm::dyn_cast<llvm::PointerType>(inst->getType());
+          NOTNULL(ptr_ty);
+          args[item.second] =
+              new llvm::LoadInst(ptr_ty->getPointerElementType(), inst,
+                                 "param_" + bb_fun->getArg(item.second)->getName(), src);
+        }
+        for (auto &item : wbb.out_args) {
+          ASSERT_ALWAYS(contains(shared_values_stash, item.first));
+          llvm::Value *inst = shared_values_stash[item.first];
+          args[item.second] = inst;
+        }
+        llvm::CallInst::Create(bb_fun, args, "", src);
+        //        // Dst Trampoline
+        //        llvm::BasicBlock *trampoline = llvm::BasicBlock::Create(c, "trampoline", cur_fun);
+        //        new llvm::StoreInst(mask, cur_mask, trampoline);
+        //        llvm::BranchInst::Create(dst, trampoline);
 
+        //        llvm::Value *old_mask  = new llvm::LoadInst(mask_t, cur_mask, "old_mask", src);
+        //        llvm::Value *all_false = new llvm::ICmpInst(*src,
+        //        llvm::ICmpInst::Predicate::ICMP_EQ, mask,
+        //                                                    llvm_get_constant_i64(0));
+
+        //        // Merge Trampoline
+        //        llvm::BasicBlock *merge_trampoline =
+        //            llvm::BasicBlock::Create(c, "merge_trampoline", cur_fun);
+        //        new llvm::StoreInst(old_mask, cur_mask, merge_trampoline);
+        //        llvm::BranchInst::Create(dst_merge, merge_trampoline);
+
+        //        llvm::BranchInst::Create(merge_trampoline, trampoline, all_false, src);
+        //        llvm::BranchInst::Create(merge_trampoline, dst);
+      };
+      auto wrap_bb = [&](llvm::BasicBlock *bb) {
+        WrappedBB wbb;
+        wbb.bb = bb;
+        bb->removeFromParent();
+        llvm::SmallVector<llvm::Type *, 16> args;
+        // Prepend state_t* to each function type
+        args.push_back(state_t_ptr);
+        // Prepend mask to each function type
+        args.push_back(mask_t);
+        // Prepend the work set ptr
+        llvm::SmallDenseSet<llvm::Value *, 8> used_foreign_values;
+        // Steps:
+        // 1) promote foreign instructions to arguments
+        // 2) insert pointers to local instructions to argumetns
+        // 2) generate stores of local instructions to arguments
+
+        // allocate arguments for foreign instructions
+        for (llvm::Instruction &inst : *bb) {
+          ito(inst.getNumOperands()) {
+            llvm::Value *op = inst.getOperand(i);
+            if (op == state_ptr || op == cur_mask) continue;
+            llvm::Instruction *used_inst = llvm::dyn_cast<llvm::Instruction>(op);
+            if (used_inst != NULL && used_inst->getParent() != bb &&
+                !contains(used_foreign_values, used_inst)) {
+              args.push_back(used_inst->getType());
+              wbb.in_args[used_inst] = (u32)args.size() - 1;
+              used_foreign_values.insert(used_inst);
+              shared_values.insert(used_inst);
+            }
+            llvm::Argument *used_arg = llvm::dyn_cast<llvm::Argument>(op);
+            if (used_arg != NULL && !contains(used_foreign_values, used_arg)) {
+              args.push_back(used_arg->getType());
+              wbb.in_args[used_arg] = (u32)args.size() - 1;
+              used_foreign_values.insert(used_arg);
+              shared_values.insert(used_arg);
+            }
+          }
+          //          if (!contains(used_instructions, &inst))
+          //            continue;
+          //          for (auto &use : used_instructions[&inst]) {
+          //            llvm::Instruction *used_inst = use.first;
+          //            NOTNULL(used_inst);
+          //            if (used_inst->getParent() != bb &&
+          //                !contains(used_foreign_values, used_inst)) {
+          //              args.push_back(used_inst->getType());
+          //              val_to_arg_id.push_back({.val = used_inst, .arg_id = (u32)args.size()
+          //              - 1}); used_foreign_values.insert(used_inst);
+          //            }
+          //          }
+        }
+
+        u32 out_args_begin = args.size();
+        // allocate arguments for local instructions that are used outside
+        for (llvm::Instruction &inst : *bb) {
+          // if has users
+          bool has_foreign_users = contains(conditions, &inst);
+          for (llvm::User *user : inst.users()) {
+            llvm::Instruction *inst = llvm::dyn_cast<llvm::Instruction>(user);
+            if (inst != NULL && inst->getParent() != bb) {
+              has_foreign_users = true;
+              break;
+            }
+          }
+          //          if (contains(used_instructions, &inst)) {
+          //            for (auto &item : used_instructions[&inst]) {
+          //              if (item.first->getParent() != bb) {
+          //                has_foreign_users = true;
+          //                break;
+          //              }
+          //            }
+          //          }
+          if (has_foreign_users) {
+            args.push_back(llvm::PointerType::get(inst.getType(), 0));
+            wbb.out_args[&inst] = (u32)args.size() - 1;
+            shared_values.insert(&inst);
+          }
+        }
+
+        llvm::BasicBlock *mirror_bb = llvm::BasicBlock::Create(c, "pseudo_" + bb->getName());
+        mirror_bb->insertInto(cur_fun);
+
+        if (contains(deferred_phis, bb)) {
+          for (auto &j : deferred_phis[bb]) {
+            kto(opt_subgroup_size) {
+              args.push_back(j.dummy_values[k]->getType());
+              wbb.in_args[j.dummy_values[k]] = (u32)args.size() - 1;
+              used_foreign_values.insert(j.dummy_values[k]);
+              shared_values.insert(j.dummy_values[k]);
+            }
+          }
+        }
+        char tmp_buf[0x100];
+        snprintf(tmp_buf, sizeof(tmp_buf), "deinlined_%s", bb->getName().str().c_str());
+        llvm::Function *fun =
+            llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(c), args, false),
+                                   llvm::GlobalValue::InternalLinkage, tmp_buf, module.get());
+        //        llvm::Instruction *bb_begin  = &bb->front();
+
+        bb->insertInto(fun);
+        llvm::Instruction *this_mask = NULL;
+        if (bb->begin() == bb->end()) {
+          this_mask                     = new llvm::AllocaInst(mask_t, 0, "mask_alloca", bb);
+          llvm::Instruction *store_mask = new llvm::StoreInst(fun->getArg(1), this_mask, bb);
+        } else {
+          this_mask = new llvm::AllocaInst(mask_t, 0, "mask_alloca", &bb->front());
+          llvm::Instruction *store_mask =
+              new llvm::StoreInst(fun->getArg(1), this_mask, this_mask->getNextNode());
+        }
+
+        //        store_mask->insertBefore(&bb->front());
+        //        this_mask->insertBefore(store_mask);
+        // Replace state ptr
+        for (llvm::Instruction &inst : *bb) {
+          ito(inst.getNumOperands()) {
+            if (inst.getOperand(i) == state_ptr) {
+              inst.setOperand(i, fun->getArg(0));
+            } else if (inst.getOperand(i) == cur_mask) {
+              inst.setOperand(i, this_mask);
+            }
+          }
+        }
+        // Store locals to the arguments
+        for (auto &item : wbb.out_args) {
+          new llvm::StoreInst(item.first, fun->getArg(item.second), bb);
+        }
+        for (u32 i = out_args_begin; i < fun->arg_size(); ++i) {
+          fun->getArg(i)->setName("out");
+        }
+        for (auto &item : wbb.in_args) {
+          llvm::Value *arg              = fun->getArg(item.second);
+          llvm::Value *value_to_replace = item.first;
+          ASSERT_ALWAYS(!contains(wbb.out_args, item.first));
+
+          arg->setName("in");
+
+          for (llvm::Instruction &inst : *bb) {
+            ito(inst.getNumOperands()) {
+              llvm::Value *op = inst.getOperand(i);
+              if (op == value_to_replace) {
+                inst.setOperand(i, arg);
+              }
+            }
+            //            for (llvm::Use &use : inst.uses()) {
+            //              llvm::Instruction *used_inst =
+            //              llvm::dyn_cast<llvm::Instruction>(use.getUser()); if (used_inst == val)
+            //              {
+            //                for ()
+            //              }
+            //            }
+          }
+        }
+        llvm::ReturnInst::Create(c, NULL, bb);
+        wbb.fun         = fun;
+        wrapped_bbs[bb] = wbb;
+        local_cfg[bb]   = mirror_bb;
+
+        return fun;
+      };
       // Wrap each basic block in a function
       for (llvm::BasicBlock *bb : bbs) {
         wrap_bb(bb);
       }
       // Allocate a storage for each shared variable
       for (llvm::Value *item : shared_values) {
-        llvm::Value *inst = item;
-        shared_values_stash[inst] =
-            new llvm::AllocaInst(inst->getType(), 0, "proxy_" + inst->getName(), allocas_bb);
+        llvm::Value *val = item;
+        shared_values_stash[val] =
+            new llvm::AllocaInst(val->getType(), 0, "proxy_" + val->getName(), allocas_bb);
+        if (llvm::Instruction *inst = llvm::dyn_cast<llvm::Instruction>(val)) {
+          if (inst->getParent() == allocas_bb) {
+            new llvm::StoreInst(val, shared_values_stash[val], allocas_bb);
+          }
+        } else if (llvm::Argument *arg = llvm::dyn_cast<llvm::Argument>(val)) {
+          new llvm::StoreInst(val, shared_values_stash[val], allocas_bb);
+        }
       }
-      // A local cfg that is going to mirror the initial cfg
-      llvm::SmallDenseMap<llvm::BasicBlock *, llvm::BasicBlock *, 16> local_cfg;
-
+      for (llvm::BasicBlock *bb : bbs) {
+        call_bb(local_cfg[bb], bb);
+      }
+      for (auto &item : deferred_phis) {
+        llvm::BasicBlock *bb = item.first;
+        for (auto &j : item.second) {
+          kto(opt_subgroup_size) {
+            llvm::PHINode *llvm_phi =
+                llvm::PHINode::Create(j.result_type, (u32)j.vars.size(), "phi");
+            ito(j.vars.size()) {
+              llvm::Value *     value     = llvm_values_per_lane[k][j.vars[i].first];
+              llvm::BasicBlock *parent_bb = local_cfg[llvm_labels[j.vars[i].second]];
+              NOTNULL(parent_bb);
+              NOTNULL(value);
+              llvm_phi->addIncoming(value, parent_bb);
+            }
+            j.dummy_values[k]->replaceAllUsesWith(llvm_phi);
+            llvm_phi->insertBefore(local_cfg[bb]->getFirstNonPHI());
+          }
+        }
+      }
       struct CFG_Node {
         u32                                        id   = 0;
         llvm::BasicBlock *                         prev = NULL;
@@ -3535,6 +3604,7 @@ struct Spirv_Builder {
           for (auto &bb : bbs) {
             bb_to_id[bb] = id++;
           }
+          bb_to_id[global_terminator] = id++;
         }
 
         //        char tmp_name[0x100];
@@ -3554,6 +3624,8 @@ struct Spirv_Builder {
         fprintf(dotgraph, "node [shape=record];\n");
         // 1348 -> 1350 [style=dashed];
         // 1348 -> 1351 [style=dotted];
+        fprintf(dotgraph, "%i [label = \"terminator\", shape = record];\n",
+                bb_to_id[global_terminator]);
         for (llvm::BasicBlock *bb : bbs) {
           fprintf(dotgraph, "%i [label = \"%s\", shape = %s];\n", bb_to_id[bb],
                   bb->getName().str().c_str(),
@@ -3581,10 +3653,6 @@ struct Spirv_Builder {
           }
         }
       };
-      for (llvm::BasicBlock *bb : bbs) {
-        local_cfg[bb] = llvm::BasicBlock::Create(c, "pseudo_" + bb->getName(), cur_fun);
-        call_bb(local_cfg[bb], bb);
-      }
       local_cfg[allocas_bb]        = allocas_bb;
       local_cfg[global_terminator] = global_terminator;
       // Build cfg
@@ -3646,7 +3714,9 @@ struct Spirv_Builder {
       }
 
       // dst -> (src -> mask expression)
-      std::map<llvm::BasicBlock *, llvm::Value *> mask_control;
+      std::map<llvm::BasicBlock *, llvm::Value *>      mask_control;
+      std::map<llvm::BasicBlock *, std::pair<llvm::BasicBlock *, llvm::Value *>> backward_jumps;
+
       for (BranchCond &cb : deferred_branches) {
         llvm::BasicBlock *bb = cb.bb;
         ASSERT_ALWAYS(bb != NULL);
@@ -3692,23 +3762,22 @@ struct Spirv_Builder {
           if (node.next == dst_true) {
             new llvm::StoreInst(true_mask, cur_mask, local_cfg[bb]);
             ASSERT_ALWAYS(!contains(mask_control, dst_false));
+            // backward jump
+            if (bb_cfg[dst_false].id < bb_cfg[bb].id) {
+              backward_jumps[bb] = {dst_false, false_mask};
+            }
             mask_control[dst_false] = false_mask;
-            //            llvm::BranchInst::Create(local_cfg[dst_true], local_cfg[bb]);
-            //            llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c,
-            //            "flow_control"); new llvm::StoreInst(false_mask, cur_mask,
-            //            flow_control_bb); llvm::BranchInst::Create(local_cfg[dst_false],
-            //            flow_control_bb);
+
           } else if (node.next == dst_false) {
             new llvm::StoreInst(false_mask, cur_mask, local_cfg[bb]);
             ASSERT_ALWAYS(!contains(mask_control, dst_true));
             mask_control[dst_true] = true_mask;
-            //            llvm::BranchInst::Create(local_cfg[dst_false], local_cfg[bb]);
-            //            llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c,
-            //            "flow_control"); new llvm::StoreInst(false_mask, cur_mask,
-            //            flow_control_bb); llvm::BranchInst::Create(local_cfg[dst_false],
-            //            flow_control_bb);
+            // backward jump
+            if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
+              backward_jumps[bb] = {dst_true, true_mask};
+            }
           } else {
-            // What?
+            // What? we sort stuff in depth first no?
             UNIMPLEMENTED;
           }
           //        call_bb(bb, true_mask, dst_true, flow_control_bb);
@@ -3745,10 +3814,17 @@ struct Spirv_Builder {
         if (bb == global_terminator) continue;
         CFG_Node &node = bb_cfg[bb];
         NOTNULL(node.next);
-        if (contains(mask_control, node.next)) {
-          new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
-        }
-        llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
+//        if (contains(backward_jumps, bb)) {
+//          ASSERT_ALWAYS(contains(mask_control, node.next));
+//          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
+//                                   create_masked_jump(dst_false, true_mask), all_true,
+//                                   flow_control_bb);
+//        } else {
+          if (contains(mask_control, node.next)) {
+            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
+          }
+          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
+//        }
       }
       for (llvm::BasicBlock *item : terminators) {
         CFG_Node &node = bb_cfg[item];
@@ -3765,13 +3841,14 @@ struct Spirv_Builder {
                                    local_cfg[item]);
         }
       }
-      // dump_cfg();
+      dump_cfg();
 
     finish_function:
       continue;
     }
-    // exit(1);
-    //     NOCOMMIT;
+    module->dump();
+    exit(1);
+    NOCOMMIT;
     // @llvm/finish_module
     // Make a function that returns the size of private space required by this
     // module
@@ -3951,127 +4028,99 @@ struct Spirv_Builder {
       fprintf(stderr, "%s", os.str().c_str());
       abort();
     } else {
-      {
-        if (opt_dump) {
-          TMP_STORAGE_SCOPE;
-          char buf[0x100];
-          // Print llvm dumps
-          {
-            std::string              str;
-            llvm::raw_string_ostream os(str);
-            module->print(os, NULL);
-            os.flush();
-            string_ref dir = stref_s("shader_dumps/llvm/");
-            make_dir_recursive(dir);
-            snprintf(buf, sizeof(buf), "%lx.ll", code_hash);
-            string_ref final_path = stref_concat(dir, stref_s(buf));
-            dump_file(stref_to_tmp_cstr(final_path), str.c_str(), str.length());
-          }
-        }
-        // Create a function pass manager.
-        auto FPM = std::make_unique<llvm::legacy::PassManager>();
-        if (!opt_debug_info) {
-          llvm::StripDebugInfo(*module);
-        }
-        FPM->add(llvm::createInstructionCombiningPass());
-        FPM->add(llvm::createReassociatePass());
-        FPM->add(llvm::createGVNPass());
-        FPM->add(llvm::createCFGSimplificationPass());
-        FPM->add(llvm::createGlobalDCEPass());
-        FPM->add(llvm::createSROAPass());
-        FPM->add(llvm::createEarlyCSEPass());
-        FPM->add(llvm::createReassociatePass());
-        FPM->add(llvm::createConstantPropagationPass());
-        FPM->add(llvm::createDeadInstEliminationPass());
-        FPM->add(llvm::createFunctionInliningPass());
-//        FPM->add(llvm::createCFGSimplificationPass());
-//        FPM->add(llvm::createPromoteMemoryToRegisterPass());
-//        FPM->add(llvm::createAggressiveDCEPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createDeadInstEliminationPass());
-//        FPM->add(llvm::createSROAPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createCFGSimplificationPass());
-//        FPM->add(llvm::createPromoteMemoryToRegisterPass());
-//        FPM->add(llvm::createReassociatePass());
-//        FPM->add(llvm::createIPConstantPropagationPass());
-//        FPM->add(llvm::createDeadArgEliminationPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createCFGSimplificationPass());
-//        FPM->add(llvm::createPruneEHPass());
-//        FPM->add(llvm::createReversePostOrderFunctionAttrsPass());
-
-//        FPM->add(llvm::createConstantPropagationPass());
-//        FPM->add(llvm::createDeadInstEliminationPass());
-//        FPM->add(llvm::createCFGSimplificationPass());
-//        FPM->add(llvm::createArgumentPromotionPass());
-//        FPM->add(llvm::createAggressiveDCEPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createJumpThreadingPass());
-//        FPM->add(llvm::createCFGSimplificationPass());
-//        FPM->add(llvm::createSROAPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createTailCallEliminationPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createEarlyCSEPass());
-//        FPM->add(llvm::createFunctionInliningPass());
-//        FPM->add(llvm::createConstantPropagationPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createIPSCCPPass());
-//        FPM->add(llvm::createDeadArgEliminationPass());
-//        FPM->add(llvm::createAggressiveDCEPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createCFGSimplificationPass());
-//        FPM->add(llvm::createFunctionInliningPass());
-//        FPM->add(llvm::createArgumentPromotionPass());
-//        FPM->add(llvm::createSROAPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createCFGSimplificationPass());
-//        FPM->add(llvm::createReassociatePass());
-//        FPM->add(llvm::createLoopRotatePass());
-//        FPM->add(llvm::createLICMPass());
-//        FPM->add(llvm::createLoopUnswitchPass(false));
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createIndVarSimplifyPass());
-//        FPM->add(llvm::createLoopIdiomPass());
-//        FPM->add(llvm::createLoopDeletionPass());
-//        FPM->add(llvm::createLoopUnrollPass());
-//        FPM->add(llvm::createGVNPass());
-//        FPM->add(llvm::createMemCpyOptPass());
-//        FPM->add(llvm::createSCCPPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createJumpThreadingPass());
-//        FPM->add(llvm::createCorrelatedValuePropagationPass());
-//        FPM->add(llvm::createDeadStoreEliminationPass());
-//        FPM->add(llvm::createAggressiveDCEPass());
-//        FPM->add(llvm::createCFGSimplificationPass());
-//        FPM->add(llvm::createInstructionCombiningPass());
-//        FPM->add(llvm::createAggressiveInstCombinerPass());
-//        FPM->add(llvm::createFunctionInliningPass());
-//        FPM->add(llvm::createAggressiveDCEPass());
-//        FPM->add(llvm::createStripDeadPrototypesPass());
-//        FPM->add(llvm::createGlobalDCEPass());
-//        FPM->add(llvm::createGlobalOptimizerPass());
-//        FPM->add(llvm::createConstantMergePass());
-
-        FPM->run(*module);
-        if (opt_dump) {
-          TMP_STORAGE_SCOPE;
-          char buf[0x100];
-          // Print llvm dumps
-          {
-            std::string              str;
-            llvm::raw_string_ostream os(str);
-            module->print(os, NULL);
-            os.flush();
-            string_ref dir = stref_s("shader_dumps/llvm/");
-            make_dir_recursive(dir);
-            snprintf(buf, sizeof(buf), "%lx.opt.ll", code_hash);
-            string_ref final_path = stref_concat(dir, stref_s(buf));
-            dump_file(stref_to_tmp_cstr(final_path), str.c_str(), str.length());
-          }
-        }
+      // Create a function pass manager.
+      std::unique_ptr<llvm::legacy::PassManager> FPM =
+          std::make_unique<llvm::legacy::PassManager>();
+      if (!opt_debug_info) {
+        llvm::StripDebugInfo(*module);
       }
+      if (opt_dump) {
+        FPM->add(create_my_dump_pass(code_hash));
+      }
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createReassociatePass());
+      FPM->add(llvm::createGVNPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createGlobalDCEPass());
+      FPM->add(llvm::createSROAPass());
+      FPM->add(llvm::createEarlyCSEPass());
+      FPM->add(llvm::createReassociatePass());
+      FPM->add(llvm::createConstantPropagationPass());
+      FPM->add(llvm::createDeadInstEliminationPass());
+      FPM->add(llvm::createFunctionInliningPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createPromoteMemoryToRegisterPass());
+      FPM->add(llvm::createAggressiveDCEPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createDeadInstEliminationPass());
+      FPM->add(llvm::createSROAPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createPromoteMemoryToRegisterPass());
+      FPM->add(llvm::createReassociatePass());
+      FPM->add(llvm::createIPConstantPropagationPass());
+      FPM->add(llvm::createDeadArgEliminationPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createPruneEHPass());
+      FPM->add(llvm::createReversePostOrderFunctionAttrsPass());
+      FPM->add(llvm::createConstantPropagationPass());
+      FPM->add(llvm::createDeadInstEliminationPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createArgumentPromotionPass());
+      FPM->add(llvm::createAggressiveDCEPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createJumpThreadingPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createSROAPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createTailCallEliminationPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createEarlyCSEPass());
+      FPM->add(llvm::createFunctionInliningPass());
+      FPM->add(llvm::createConstantPropagationPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createIPSCCPPass());
+      FPM->add(llvm::createDeadArgEliminationPass());
+      FPM->add(llvm::createAggressiveDCEPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createFunctionInliningPass());
+      FPM->add(llvm::createArgumentPromotionPass());
+      FPM->add(llvm::createSROAPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createReassociatePass());
+      FPM->add(llvm::createLoopRotatePass());
+      FPM->add(llvm::createLICMPass());
+      FPM->add(llvm::createLoopUnswitchPass(false));
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createIndVarSimplifyPass());
+      FPM->add(llvm::createLoopIdiomPass());
+      FPM->add(llvm::createLoopDeletionPass());
+      FPM->add(llvm::createLoopUnrollPass());
+      FPM->add(llvm::createGVNPass());
+      FPM->add(llvm::createMemCpyOptPass());
+      FPM->add(llvm::createSCCPPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createJumpThreadingPass());
+      FPM->add(llvm::createCorrelatedValuePropagationPass());
+      FPM->add(llvm::createDeadStoreEliminationPass());
+      FPM->add(llvm::createAggressiveDCEPass());
+      FPM->add(llvm::createCFGSimplificationPass());
+      FPM->add(llvm::createInstructionCombiningPass());
+      FPM->add(llvm::createAggressiveInstCombinerPass());
+      FPM->add(llvm::createFunctionInliningPass());
+      FPM->add(llvm::createAggressiveDCEPass());
+      FPM->add(llvm::createStripDeadPrototypesPass());
+      FPM->add(llvm::createGlobalDCEPass());
+      FPM->add(llvm::createGlobalOptimizerPass());
+      FPM->add(llvm::createConstantMergePass());
+      if (opt_dump) {
+        FPM->add(create_my_dump_pass(code_hash));
+      }
+      FPM->run(*module);
+
       return llvm::orc::ThreadSafeModule(std::move(module), std::move(context));
       //      fprintf(stdout, "Module verified!\n");
     }
