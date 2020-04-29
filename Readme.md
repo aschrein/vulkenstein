@@ -1,5 +1,5 @@
 ## Toy software Vulkan driver
-
+![Vulkan scene](readme/preview.gif)
 ## Run tests
 ```console
 cd vulkenstein
