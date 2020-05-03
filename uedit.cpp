@@ -64,24 +64,75 @@ static u16 f32_to_u16(f32 x) { return (u16)(clamp(x, 0.0f, 1.0f) * ((1 << 16) - 
 /////////////
 // GLOBALS //
 /////////////
-static Temporary_Storage<> ts                       = Temporary_Storage<>::create(256 * (1 << 20));
-SDL_Window *               window                   = NULL;
-SDL_GLContext              glc                      = 0;
-static void *              g_buffers_to_dump[0x100] = {};
-static size_t              g_buffers_to_dump_sizes[0x100] = {};
-static u32                 g_num_buffers_to_dump          = 0;
+static Temporary_Storage<> ts     = Temporary_Storage<>::create(256 * (1 << 20));
+SDL_Window *               window = NULL;
+SDL_GLContext              glc    = 0;
+struct Dump_Range {
+  char *      data = NULL;
+  size_t      len  = 0;
+  Dump_Range *next = NULL;
+};
+struct Emergency_Dump {
+  std::mutex  access_mutex;
+  Dump_Range *root = NULL;
+  void        append(char *data, size_t len) {
+    Dump_Range *range = (Dump_Range *)malloc(sizeof(Dump_Range));
+    range->data       = data;
+    range->len        = len;
+    range->next       = NULL;
+    std::lock_guard<std::mutex> lock(access_mutex);
+    if (root == NULL) {
+      root = range;
+    } else {
+      Dump_Range *cur  = root;
+      Dump_Range *prev = cur;
+      while (cur != NULL) {
+        prev = cur;
+        cur  = cur->next;
+      }
+      prev->next = range;
+    }
+  }
+  void release_data(char *data) {
+    std::lock_guard<std::mutex> lock(access_mutex);
+    if (root == NULL) {
+      return;
+    } else if (root->data == NULL) {
+      Dump_Range *next = root->next;
+      free(root);
+      root = next;
+    } else {
+      Dump_Range *cur  = root;
+      Dump_Range *prev = cur;
+      while (cur != NULL) {
+        if (cur->data == data) {
+          Dump_Range *next = cur->next;
+          free(cur);
+          prev->next = next;
+          return;
+        }
+        prev = cur;
+        cur  = cur->next;
+      }
+    }
+  }
+  void dump() {
+    FILE *                      dump = fopen("emergency_dump.txt", "wb");
+    std::lock_guard<std::mutex> lock(access_mutex);
+    Dump_Range *                cur = root;
+    while (cur != NULL) {
+      fwrite(cur->data, 1, cur->len, dump);
+    }
+    fclose(dump);
+  }
+} g_emergency_dump;
 ////////////
 void handle_segfault(int signal, siginfo_t *si, void *arg) {
-  FILE *dump = fopen("segfault_dump", "wb");
-  ito(g_num_buffers_to_dump) { fwrite(g_buffers_to_dump[i], 1, g_buffers_to_dump_sizes[i], dump); }
-  fclose(dump);
-  printf("Caught segfault at address %p\n", si->si_addr);
+  g_emergency_dump.dump();
   exit(1);
 }
 extern "C" void handle_abort(int signal_number) {
-  FILE *dump = fopen("segfault_dump", "wb");
-  ito(g_num_buffers_to_dump) { fwrite(g_buffers_to_dump[i], 1, g_buffers_to_dump_sizes[i], dump); }
-  fclose(dump);
+  g_emergency_dump.dump();
   exit(1);
 }
 
@@ -128,160 +179,377 @@ static uint2 get_glyph_offset(u32 line, u32 col) {
 }
 static u32 num_full_columns(u32 size) { return size / simplefont_bitmap_glyphs_width; }
 static u32 num_full_lines(u32 size) { return size / (simplefont_bitmap_glyphs_height - 1); }
-
-struct Text_Buffer {
-  Temporary_Storage<char> char_storage;
-  u32                     num_columns;
-  u32                     num_lines;
-  Text_Buffer() { memset(this, 0, sizeof(*this)); }
-  void init(string_ref str, u32 line_width) {
+struct Context2D {
+  using Color = u32;
+  struct URect2D {
+    u32   x, y, z, width, height;
+    Color color;
+  };
+  struct ULine2D {
+    u32   x0, y0, x1, y1, z;
+    Color color;
+  };
+  struct UString2D {
+    string_ref str;
+    u32        x, y, z;
+    Color      color;
+  };
+  void draw_rect(URect2D p) { quad_storage.push(p); }
+  void draw_line(ULine2D l) { line_storage.push(l); }
+  void draw_string(UString2D s) {
+    size_t len = s.str.len; // strlen(s.c_str);
+    if (len == 0) return;
+    char *dst = char_storage.alloc(len + 1);
+    memcpy(dst, s.str.ptr, len);
+    dst[len] = '\0';
+    UString2D internal_string;
+    internal_string.color   = s.color;
+    internal_string.str.ptr = dst;
+    internal_string.str.len = (u32)len;
+    internal_string.x       = s.x;
+    internal_string.y       = s.y;
+    internal_string.z       = s.z;
+    string_storage.push(internal_string);
+  }
+  void frame_start(f32 viewport_width, f32 viewport_height) {
+    line_storage.enter_scope();
+    quad_storage.enter_scope();
+    string_storage.enter_scope();
+    char_storage.enter_scope();
+    this->viewport_width  = viewport_width;
+    this->viewport_height = viewport_height;
+    height_over_width     = ((f32)viewport_height / viewport_width);
+    width_over_heigth     = ((f32)viewport_width / viewport_height);
+    pixel_screen_width    = 1.0f / viewport_width;
+    pixel_screen_height   = 1.0f / viewport_height;
+    glyphs_screen_width   = glyph_scale * (f32)(simplefont_bitmap_glyphs_width) / viewport_width;
+    glyphs_screen_height  = glyph_scale * (f32)(simplefont_bitmap_glyphs_height) / viewport_height;
+  }
+  void frame_end() {
+    render_stuff();
+    line_storage.exit_scope();
+    quad_storage.exit_scope();
+    string_storage.exit_scope();
+    char_storage.exit_scope();
+  }
+  void init() { init_gl(); }
+  void release() {
+    line_storage.release();
+    quad_storage.release();
+    string_storage.release();
     char_storage.release();
-    char_storage                                   = Temporary_Storage<char>::create(1 << 20);
-    g_buffers_to_dump_sizes[g_num_buffers_to_dump] = char_storage.capacity;
-    g_buffers_to_dump[g_num_buffers_to_dump++]     = char_storage.ptr;
-    ASSERT_ALWAYS(line_width > 0);
-    num_columns = line_width;
-    char_storage.reset();
-    u32 line_cursor      = 0;
-    num_lines            = 0;
-    char *      cur_line = add_line();
-    size_t      text_len = str.len;
-    char const *text     = str.ptr;
-    ito(text_len) {
-      char c = text[i];
-      if (c == '\0') {
-        break;
-      } else if (c == '\n') {
-        cur_line    = add_line();
-        line_cursor = 0;
+    release_gl();
+  }
+  void render_stuff();
+  void init_gl();
+  void release_gl();
+  // Fields
+  Temporary_Storage<ULine2D>   line_storage      = Temporary_Storage<ULine2D>::create(1 << 17);
+  Temporary_Storage<URect2D>   quad_storage      = Temporary_Storage<URect2D>::create(1 << 17);
+  Temporary_Storage<UString2D> string_storage    = Temporary_Storage<UString2D>::create(1 << 18);
+  Temporary_Storage<char>      char_storage      = Temporary_Storage<char>::create(1 * (1 << 20));
+  u32                          viewport_width    = 0;
+  u32                          viewport_height   = 0;
+  bool                         force_update      = false;
+  f32                          height_over_width = 0.0f;
+  f32                          width_over_heigth = 0.0f;
+  f32                          glyphs_screen_height = 0.0f;
+  f32                          glyphs_screen_width  = 0.0f;
+  f32                          pixel_screen_width   = 0.0f;
+  f32                          pixel_screen_height  = 0.0f;
+  u32                          glyph_scale          = 1;
+
+  // GL state
+  GLuint line_program;
+  GLuint quad_program;
+  GLuint line_vao;
+  GLuint line_vbo;
+  GLuint quad_vao;
+  GLuint quad_instance_vbo;
+  GLuint vao;
+  GLuint vbo;
+  GLuint instance_vbo;
+  GLuint program;
+  GLuint font_texture;
+};
+// Fixed size ascii char table.
+// Each line takes up at least one row.
+// The rest is filled with '\0'.
+struct Ascii_Table {
+  static const u32 ROW_SIZE   = 128;
+  static const u32 MAX_ROWS   = 1 << 10;
+  static const u32 TABLE_SIZE = ROW_SIZE * MAX_ROWS;
+  Ascii_Table *    next       = NULL;
+
+  u32  num_lines  = 0;
+  u32  line_offsets[MAX_ROWS];
+  u32  line_ends[MAX_ROWS];
+  char data[TABLE_SIZE];
+
+  // returns the number of characters left
+  void init() {
+    memset(this, 0, sizeof(*this));
+    g_emergency_dump.append(&data[0], TABLE_SIZE);
+  }
+  static Ascii_Table *create() {
+    Ascii_Table *out = (Ascii_Table*)malloc(sizeof(Ascii_Table));
+    out->init();
+    return out;
+  }
+  static void destroy(Ascii_Table *table) {
+    table->release();
+    free(table);
+  }
+  u32 reset_text(string_ref text) {
+    last_line = 0;
+    memset(line_offsets, 0, sizeof(line_offsets));
+    u32 cur_row    = 0;
+    u32 cur_column = 0;
+    ito(text.len) {
+      char c = (char)clamp((u32)text.ptr[i], 0x20u, 0x7fu);
+      if (cur_row >= MAX_ROWS) return (text.len - i);
+      if (text.ptr[i] == '\n') {
+        cur_row++;
+        continue;
       } else {
-        c = (char)clamp((u32)c, 0x20u, 0x7fu);
-        if (line_cursor == num_columns) {
-          cur_line[num_columns] = '\0';
-          cur_line              = add_line();
-          line_cursor           = 0;
-        }
-        cur_line[line_cursor++] = c;
+        get_row(cur_row)[cur_column++] = c;
       }
-    }
-  }
-  void shift_cell_right(u32 line_num, u32 col_num) {
-    char *cur_line = get_line(line_num);
-    // materialize empty cells
-    if (cur_line[col_num] == '\0') {
-      ito(col_num) {
-        if (cur_line[i] == '\0') {
-          cur_line[i] = ' ';
-        }
+      if (cur_column == ROW_SIZE) {
+        cur_row++;
+        cur_column = 0;
       }
-    }
-    if (cur_line[num_columns - 1] != '\0') {
-      duplicate_line(line_num);
-      memset(get_line(line_num + 1), '\0', num_columns);
-      get_line(line_num + 1)[0] = cur_line[num_columns - 1];
-    }
-    for (u32 i = num_columns - 1; i > col_num; i--) {
-      cur_line[i] = cur_line[i - 1];
-    }
-  }
-  void shift_cell_left(u32 line_num, u32 col_num) {
-    char *cur_line = get_line(line_num);
-    if (col_num == 0) return;
-    for (u32 i = col_num - 1; i < num_columns - 1; i++) {
-      cur_line[i] = cur_line[i + 1];
-    }
-  }
-  u32 count_indent(u32 line_num) {
-    char *line = get_line(line_num);
-    ito(num_columns) {
-      if (line[i] != ' ') return i;
     }
     return 0;
   }
-  void concat_line_with_prev(u32 line_num) {
-    if (line_num == 0) return;
-    if (line_num > num_lines - 1) return;
-    char *line      = get_line(line_num);
-    char *prev_line = get_line(line_num - 1);
-    u32   len0      = line_width(line_num - 1);
-    u32   len1      = line_width(line_num);
-    if (len0 + len1 < num_columns) {
-      memcpy(prev_line + len0, line, len1);
-      kill_line(line_num);
-    } else {
-      u32 copy_cnt = num_columns - len0;
-      u32 move_cnt = (len0 + len1) - num_columns;
-      memcpy(prev_line + len0, line, copy_cnt);
-      memmove(line, line + copy_cnt, move_cnt);
-      for (u32 i = move_cnt; i < num_columns; i++) line[i] = '\0';
-    }
+  void  release() { g_emergency_dump.release_data(&data[0]); }
+  char *get_row(u32 id) { return data + ROW_SIZE * id; }
+  bool  is_line_break(u32 id) { return get_row(id)[ROW_SIZE - 1] == '\0'; }
+  char *get_line(u32 id) {
+    ASSERT_ALWAYS(id < num_lines);
+    return data[line_offsets[id]];
   }
-  void break_line(u32 line_num, u32 col_num, u32 indent) {
-    u32   len  = line_width(line_num);
-    char *line = get_line(line_num);
-    duplicate_line(line_num);
-    char *next_line = get_line(line_num + 1);
-    memset(next_line, '\0', num_columns);
-    if (len > col_num) {
-      u32 to_move = len - col_num;
-      memcpy(next_line + indent, line + col_num, to_move);
-      ito(indent) next_line[i] = ' ';
-    }
-    for (u32 i = col_num; i < len; i++) {
-      line[i] = '\0';
-    }
+  // true - success. false - not enough space
+  bool append_char(u32 line_id, char c) {
+    if (line_ends[line_id] == TABLE_SIZE)
+      return false;
+    data[line_ends[line_id]++] = c;
+    return true;
   }
-  void kill_line(u32 line_num) {
-    for (u32 i = line_num; i < num_lines - 1; i++) {
-      memcpy(get_line(i), get_line(i + 1), num_columns);
+  bool has_rows_left() {return get_row(MAX_ROWS - 1)[0] == '\0'; }
+};
+// struct Line_Table {
+//  struct Node {
+//    static const u32 SIZE      = 0x100;
+//    static const u32 TOMBSTONE = 0x0;
+//    static const u32 LINK_MASK = 1 << 31;
+//    u32              offsets[SIZE];
+//  };
+//  Node children[Node::SIZE];
+//  u32  offsets[Node::SIZE];
+//  u32  depth = 0;
+//  u32  get_line_page(u32 line_id) {
+//    u32 table_id = 0;
+//    ito(Node::SIZE) {
+//      if (offsets[i] <= line_id) {
+//        table_id = i;
+//      }
+//    }
+//    ito(Node::SIZE) {
+//      if (children[table_id].offsets[i] <= line_id) {
+//        return Node::Size * table_id + i;
+//      }
+//    }
+//    TRAP;
+//  }
+//  void on_new_line(u32 line_id) {
+//    u32 table_id = 0;
+//    ito(Node::SIZE) {
+//      if (offsets[i] <= line_id) {
+//        table_id = i;
+//      }
+//    }
+//    for (u32 i = table_id + 1; i < Node::SIZE; i++) {
+//      children[table_id].offsets[i]++;
+//    }
+//  }
+//  void set_line_page(u32 line_id, u32 page_id) {
+//    u32 table_id                       = line_id / Node::SIZE;
+//    u32 entry_id                       = line_id % Node::SIZE;
+//    children[table_id].table[entry_id] = page_id;
+//  }
+//  void init() {}
+//  void release() {}
+//};
+struct Text_Buffer {
+  Ascii_Table *    root      = NULL;
+  Ascii_Table *    end      = NULL;
+  static const u32 MAX_PAGES = 0x100;
+  u32              start_lines[MAX_PAGES];
+  u32              num_lines = 0;
+  Text_Buffer() { memset(this, 0, sizeof(*this)); }
+  void init(string_ref str) {
+    u32 line_cursor      = 0;
+    num_lines            = 0;
+    root = Ascii_Table::create();
+    end = root;
+    Ascii_Table *cur = root;
+    while (u32 rest = cur->reset_text(str)) {
+      str = str.substr(rest, (str.len - rest));
+      Ascii_Table *new_table = Ascii_Table::create();
+      cur->next = new_table;
+      cur = new_table;
+      end = new_table;
     }
-    num_lines--;
+//    char *      cur_line = add_line();
+//    size_t      text_len = str.len;
+//    char const *text     = str.ptr;
+//    ito(text_len) {
+//      char c = text[i];
+//      if (c == '\0') {
+//        break;
+//      } else if (c == '\n') {
+//        cur_line    = add_line();
+//        line_cursor = 0;
+//      } else {
+//        c = (char)clamp((u32)c, 0x20u, 0x7fu);
+//        if (line_cursor == num_columns) {
+//          cur_line[num_columns] = '\0';
+//          cur_line              = add_line();
+//          line_cursor           = 0;
+//        }
+//        cur_line[line_cursor++] = c;
+//      }
+//    }
   }
-  void clear_trailing_spaces(u32 line_num) {
-    char *line = get_line(line_num);
-    for (u32 i = num_columns - 1; i > 0; i--) {
-      if (line[i] == ' ') {
-        line[i] = '\0';
-      } else if (line[i] != '\0') {
-        return;
-      }
-    }
-  }
-  void clear_trailing_garbage(u32 line_num) {
-    char *line     = get_line(line_num);
-    bool  seen_nul = false;
-    for (u32 i = 0; i < num_columns; i++) {
-      if (line[i] == '\0') seen_nul = true;
-      if (seen_nul) line[i] = '\0';
-    }
-  }
-  u32 line_width(u32 line_num) {
-    char *line = get_line(line_num);
-    ito(num_columns) {
-      if (line[i] == '\0') return i;
-    }
-    return num_columns;
-  }
-  void duplicate_line(u32 line_num) {
-    char *new_line = char_storage.alloc(num_columns);
-    for (u32 i = num_lines; i > line_num; i--) {
-      memcpy(get_line(i), get_line(i - 1), num_columns);
-    }
-    num_lines++;
-  }
-  char *get_line(u32 i) { return char_storage.at(0) + (num_columns)*i; }
-  void  resize(u32 new_line_width) {
-    if (new_line_width == num_columns) return;
-    UNIMPLEMENTED;
-  }
+  //  void shift_cell_right(u32 line_num, u32 col_num) {
+  //    char *cur_line = get_line(line_num);
+  //    // materialize empty cells
+  //    if (cur_line[col_num] == '\0') {
+  //      ito(col_num) {
+  //        if (cur_line[i] == '\0') {
+  //          cur_line[i] = ' ';
+  //        }
+  //      }
+  //    }
+  //    if (cur_line[num_columns - 1] != '\0') {
+  //      duplicate_line(line_num);
+  //      memset(get_line(line_num + 1), '\0', num_columns);
+  //      get_line(line_num + 1)[0] = cur_line[num_columns - 1];
+  //    }
+  //    for (u32 i = num_columns - 1; i > col_num; i--) {
+  //      cur_line[i] = cur_line[i - 1];
+  //    }
+  //  }
+  //  void shift_cell_left(u32 line_num, u32 col_num) {
+  //    char *cur_line = get_line(line_num);
+  //    if (col_num == 0) return;
+  //    for (u32 i = col_num - 1; i < num_columns - 1; i++) {
+  //      cur_line[i] = cur_line[i + 1];
+  //    }
+  //  }
+  //  u32 count_indent(u32 line_num) {
+  //    char *line = get_line(line_num);
+  //    ito(num_columns) {
+  //      if (line[i] != ' ') return i;
+  //    }
+  //    return 0;
+  //  }
+  //  void concat_line_with_prev(u32 line_num) {
+  //    if (line_num == 0) return;
+  //    if (line_num > num_lines - 1) return;
+  //    char *line      = get_line(line_num);
+  //    char *prev_line = get_line(line_num - 1);
+  //    u32   len0      = line_width(line_num - 1);
+  //    u32   len1      = line_width(line_num);
+  //    if (len0 + len1 < num_columns) {
+  //      memcpy(prev_line + len0, line, len1);
+  //      kill_line(line_num);
+  //    } else {
+  //      u32 copy_cnt = num_columns - len0;
+  //      u32 move_cnt = (len0 + len1) - num_columns;
+  //      memcpy(prev_line + len0, line, copy_cnt);
+  //      memmove(line, line + copy_cnt, move_cnt);
+  //      for (u32 i = move_cnt; i < num_columns; i++) line[i] = '\0';
+  //    }
+  //  }
+  //  void break_line(u32 line_num, u32 col_num, u32 indent) {
+  //    u32   len  = line_width(line_num);
+  //    char *line = get_line(line_num);
+  //    duplicate_line(line_num);
+  //    char *next_line = get_line(line_num + 1);
+  //    memset(next_line, '\0', num_columns);
+  //    if (len > col_num) {
+  //      u32 to_move = len - col_num;
+  //      memcpy(next_line + indent, line + col_num, to_move);
+  //      ito(indent) next_line[i] = ' ';
+  //    }
+  //    for (u32 i = col_num; i < len; i++) {
+  //      line[i] = '\0';
+  //    }
+  //  }
+  //  void kill_line(u32 line_num) {
+  //    for (u32 i = line_num; i < num_lines - 1; i++) {
+  //      memcpy(get_line(i), get_line(i + 1), num_columns);
+  //    }
+  //    num_lines--;
+  //  }
+  //  void clear_trailing_spaces(u32 line_num) {
+  //    char *line = get_line(line_num);
+  //    for (u32 i = num_columns - 1; i > 0; i--) {
+  //      if (line[i] == ' ') {
+  //        line[i] = '\0';
+  //      } else if (line[i] != '\0') {
+  //        return;
+  //      }
+  //    }
+  //  }
+  //  void clear_trailing_garbage(u32 line_num) {
+  //    char *line     = get_line(line_num);
+  //    bool  seen_nul = false;
+  //    for (u32 i = 0; i < num_columns; i++) {
+  //      if (line[i] == '\0') seen_nul = true;
+  //      if (seen_nul) line[i] = '\0';
+  //    }
+  //  }
+  //  u32 line_width(u32 line_num) {
+  //    char *line = get_line(line_num);
+  //    ito(num_columns) {
+  //      if (line[i] == '\0') return i;
+  //    }
+  //    return num_columns;
+  //  }
+  //  void duplicate_line(u32 line_num) {
+  //    char *new_line = char_storage.alloc(num_columns);
+  //    for (u32 i = num_lines; i > line_num; i--) {
+  //      memcpy(get_line(i), get_line(i - 1), num_columns);
+  //    }
+  //    num_lines++;
+  //  }
+  //  char *get_line(u32 i) { return char_storage.at(0) + (num_columns)*i; }
+  //  void  resize(u32 new_line_width) {
+  //    if (new_line_width == num_columns) return;
+  //    UNIMPLEMENTED;
+  //  }
+
   char *add_line() {
+    if (end == NULL) {
+      ASSERT_ALWAYS(root == NULL);
+      end = Ascii_Table::create();
+      root = end;
+    }
     char *new_line = char_storage.alloc(num_columns);
     memset(new_line, '\0', num_columns);
     num_lines++;
     return new_line;
   }
-  void flush(char const *filename) {}
-  void release() { char_storage.release(); }
+  void release() {
+    Ascii_Table *cur = root;
+    while (cur != NULL) {
+      Ascii_Table *next = cur->next;
+      Ascii_Table::destroy(cur);
+      cur = next;
+    }
+  }
 };
 struct Cell_Extent {
   u32 line_offset;
@@ -294,9 +562,9 @@ struct IO_Consumer {
   virtual void consume_event(SDL_Event event) = 0;
   virtual void on_focus_gain(){};
   virtual void on_focus_lost(){};
-
-  IO_Consumer *parent = NULL;
-  Cell_Extent  extent = {};
+  virtual void draw(Context2D &c2d) = 0;
+  IO_Consumer *parent               = NULL;
+  Cell_Extent  extent               = {};
 
   virtual void update_extent(u32 x, u32 y, u32 width, u32 height) = 0;
 };
@@ -346,8 +614,8 @@ struct Text_Buffer_View : public IO_Consumer {
   }
   void new_line() {
     u32 indent = text_buffer->count_indent(cur_line);
-    text_buffer->break_line(cur_line, cur_column, indent);
-    cur_column = indent;
+    text_buffer->break_line(cur_line, cur_column, indent > cur_column ? cur_column : indent);
+    cur_column = MIN(cur_column, indent);
     cur_line += 1;
   }
   void backspace() {
@@ -515,6 +783,110 @@ struct Text_Buffer_View : public IO_Consumer {
     } break;
     }
   }
+  virtual void draw(Context2D &c2d) override {
+    // The boundary in screen space (col, line) of the rendered text
+    // I'm writing this with 20 IQ brain
+    u32 text_start_col  = 0;
+    u32 text_start_line = 0;
+    u32 text_end_col    = 0;
+    u32 text_end_line   = 0;
+    if (start_column < 0)
+      text_start_col = (u32)((i32)extent.col_offset - start_column);
+    else
+      text_start_col = extent.col_offset;
+
+    if (start_line < 0)
+      text_start_line = (u32)((i32)extent.line_offset - start_line);
+    else
+      text_start_line = extent.line_offset;
+
+    text_end_col =
+        MIN(text_start_col + text_buffer->num_columns, extent.col_offset + extent.num_cols);
+    text_end_line =
+        MIN(text_start_line + text_buffer->num_lines, extent.line_offset + extent.num_lines);
+
+    if (text_start_col == text_end_col || text_start_line == text_end_line) return;
+
+    ASSERT_ALWAYS(text_end_col > text_start_col && text_end_line > text_start_line);
+
+    u32 col_offset       = extent.col_offset;
+    u32 inner_col_offset = 0;
+    if (start_column < 0) inner_col_offset = -start_column;
+    u32 string_offset = 0;
+    if (start_column > 0) string_offset = start_column;
+    u32 line_offset = extent.line_offset;
+    u32 max_line    = 0;
+    ito(extent.num_lines) {
+      i32 line_num = start_line + (i32)i;
+      if (line_num < 0 || line_num > text_buffer->num_lines - 1) continue;
+      if (text_buffer->get_line((u32)line_num)[string_offset] == '\0') continue;
+      //      uint2 coord = get_glyph_offset(line_offset + i, col_offset);
+      string_ref line_ref = stref_s(text_buffer->get_line((u32)line_num) + string_offset);
+
+      line_ref.len = MIN(extent.num_cols - inner_col_offset, line_ref.len);
+      c2d.draw_string({.str = // string_ref{.ptr =
+                       line_ref,
+                       //
+                       //,.len = text_buffer->num_columns},
+                       .x     = inner_col_offset + col_offset,
+                       .y     = line_offset + i,
+                       .z     = 2,
+                       .color = parse_color_u32(dark_mode::g_text_color)});
+    }
+
+    {
+      i32 line = -start_line + cur_line;
+      i32 col  = -start_column + cur_column;
+      if (line >= 0 && col >= 0 && line < extent.num_lines && col < extent.num_cols) {
+        uint2 cursor_coord = get_glyph_offset(line + line_offset, col + col_offset);
+        c2d.draw_rect({.x      = cursor_coord.x,
+                       .y      = cursor_coord.y,
+                       .z      = 1,
+                       .width  = simplefont_bitmap_glyphs_width,
+                       .height = simplefont_bitmap_glyphs_height,
+                       .color  = parse_color_u32(dark_mode::g_search_result_color)});
+      }
+    }
+    uint2 c00 = get_glyph_offset(line_offset, col_offset);
+    uint2 c01 = get_glyph_offset(line_offset, col_offset + extent.num_cols);
+    uint2 c10 = get_glyph_offset(line_offset + extent.num_lines, col_offset);
+    uint2 c11 = get_glyph_offset(line_offset + extent.num_lines, col_offset + extent.num_cols);
+    // Draw backgroudn
+    {
+      uint2 bg00 = get_glyph_offset(text_start_line, text_start_col);
+      uint2 bg11 = get_glyph_offset(text_end_line, text_end_col);
+      c2d.draw_rect({.x      = bg00.x,
+                     .y      = bg00.y,
+                     .z      = 0,
+                     .width  = bg11.x - bg00.x,
+                     .height = bg11.y - bg00.y,
+                     .color  = parse_color_u32(dark_mode::g_background_color)});
+    }
+    c2d.draw_line({.x0    = c00.x + 1,
+                   .y0    = c00.y + 1,
+                   .x1    = c01.x,
+                   .y1    = c01.y + 1,
+                   .z     = 3,
+                   .color = parse_color_u32(dark_mode::g_selection_color)});
+    c2d.draw_line({.x0    = c01.x,
+                   .y0    = c01.y + 1,
+                   .x1    = c11.x,
+                   .y1    = c11.y + 1,
+                   .z     = 3,
+                   .color = parse_color_u32(dark_mode::g_selection_color)});
+    c2d.draw_line({.x0    = c11.x,
+                   .y0    = c11.y + 1,
+                   .x1    = c10.x + 1,
+                   .y1    = c10.y + 1,
+                   .z     = 3,
+                   .color = parse_color_u32(dark_mode::g_selection_color)});
+    c2d.draw_line({.x0    = c10.x + 1,
+                   .y0    = c10.y + 1,
+                   .x1    = c00.x + 1,
+                   .y1    = c00.y + 1,
+                   .z     = 3,
+                   .color = parse_color_u32(dark_mode::g_selection_color)});
+  }
 };
 struct Splitter : public IO_Consumer {
   IO_Consumer *children[2] = {NULL, NULL};
@@ -545,167 +917,12 @@ struct Splitter : public IO_Consumer {
       }
     }
   }
+  virtual void draw(Context2D &c2d) override {
+    if (children[0] != NULL) children[0]->draw(c2d);
+    if (children[1] != NULL) children[1]->draw(c2d);
+  }
 };
-struct Context2D {
-  using Color = u32;
-  struct URect2D {
-    u32   x, y, z, width, height;
-    Color color;
-  };
-  struct ULine2D {
-    u32   x0, y0, x1, y1, z;
-    Color color;
-  };
-  struct UString2D {
-    string_ref str;
-    u32        x, y, z;
-    Color      color;
-  };
-  void draw_rect(URect2D p) { quad_storage.push(p); }
-  void draw_line(ULine2D l) { line_storage.push(l); }
-  void draw_string(UString2D s) {
-    size_t len = s.str.len; // strlen(s.c_str);
-    if (len == 0) return;
-    char *dst = char_storage.alloc(len + 1);
-    memcpy(dst, s.str.ptr, len);
-    dst[len] = '\0';
-    UString2D internal_string;
-    internal_string.color   = s.color;
-    internal_string.str.ptr = dst;
-    internal_string.str.len = (u32)len;
-    internal_string.x       = s.x;
-    internal_string.y       = s.y;
-    internal_string.z       = s.z;
-    string_storage.push(internal_string);
-  }
-  void frame_start(f32 viewport_width, f32 viewport_height) {
-    line_storage.enter_scope();
-    quad_storage.enter_scope();
-    string_storage.enter_scope();
-    char_storage.enter_scope();
-    this->viewport_width  = viewport_width;
-    this->viewport_height = viewport_height;
-    height_over_width     = ((f32)viewport_height / viewport_width);
-    width_over_heigth     = ((f32)viewport_width / viewport_height);
-    pixel_screen_width    = 1.0f / viewport_width;
-    pixel_screen_height   = 1.0f / viewport_height;
-    glyphs_screen_width   = glyph_scale * (f32)(simplefont_bitmap_glyphs_width) / viewport_width;
-    glyphs_screen_height  = glyph_scale * (f32)(simplefont_bitmap_glyphs_height) / viewport_height;
-  }
-  void frame_end() {
-    render_stuff();
-    line_storage.exit_scope();
-    quad_storage.exit_scope();
-    string_storage.exit_scope();
-    char_storage.exit_scope();
-  }
-  void init() { init_gl(); }
-  void release() {
-    line_storage.release();
-    quad_storage.release();
-    string_storage.release();
-    char_storage.release();
-    release_gl();
-  }
-  void render_stuff();
-  void draw_text_buffer(Text_Buffer_View &view) {
 
-    if ((i32)view.extent.num_cols + view.start_column < 0) return;
-    if ((i32)view.text_buffer->num_columns - view.start_column < 0) return;
-
-    u32 col_offset       = view.extent.col_offset;
-    u32 inner_col_offset = 0;
-    if (view.start_column < 0) inner_col_offset = -view.start_column;
-    u32 string_offset = 0;
-    if (view.start_column > 0) string_offset = view.start_column;
-    u32 line_offset = view.extent.line_offset;
-    ito(view.extent.num_lines) {
-      i32 line_num = view.start_line + (i32)i;
-      if (line_num < 0 || line_num > view.text_buffer->num_lines - 1) continue;
-      if (view.text_buffer->get_line((u32)line_num)[string_offset] == '\0') continue;
-      //      uint2 coord = get_glyph_offset(line_offset + i, col_offset);
-      string_ref line_ref = stref_s(view.text_buffer->get_line((u32)line_num) + string_offset);
-
-      line_ref.len = MIN(view.extent.num_cols - inner_col_offset, line_ref.len);
-      draw_string({.str = // string_ref{.ptr =
-                   line_ref,
-                   //
-                   //,.len = view.text_buffer->num_columns},
-                   .x     = inner_col_offset + col_offset,
-                   .y     = line_offset + i,
-                   .z     = 1,
-                   .color = parse_color_u32(dark_mode::g_text_color)});
-    }
-    {
-      i32 line = -view.start_line + view.cur_line;
-      i32 col  = -view.start_column + view.cur_column;
-      if (line >= 0 && col >= 0 && line < view.extent.num_lines && col < view.extent.num_cols) {
-        uint2 cursor_coord = get_glyph_offset(line + line_offset, col + col_offset);
-        draw_rect({.x      = cursor_coord.x,
-                   .y      = cursor_coord.y,
-                   .z      = 0,
-                   .width  = simplefont_bitmap_glyphs_width,
-                   .height = simplefont_bitmap_glyphs_height,
-                   .color  = parse_color_u32(dark_mode::g_search_result_color)});
-      }
-    }
-    uint2 c00 = get_glyph_offset(line_offset, col_offset);
-    uint2 c01 = get_glyph_offset(line_offset, col_offset + view.extent.num_cols);
-    uint2 c10 = get_glyph_offset(line_offset + view.extent.num_lines, col_offset);
-    uint2 c11 =
-        get_glyph_offset(line_offset + view.extent.num_lines, col_offset + view.extent.num_cols);
-    draw_line({.x0    = c00.x + 1,
-               .y0    = c00.y + 1,
-               .x1    = c01.x,
-               .y1    = c01.y + 1,
-               .color = parse_color_u32(dark_mode::g_selection_color)});
-    draw_line({.x0    = c01.x,
-               .y0    = c01.y + 1,
-               .x1    = c11.x,
-               .y1    = c11.y + 1,
-               .color = parse_color_u32(dark_mode::g_selection_color)});
-    draw_line({.x0    = c11.x,
-               .y0    = c11.y + 1,
-               .x1    = c10.x + 1,
-               .y1    = c10.y + 1,
-               .color = parse_color_u32(dark_mode::g_selection_color)});
-    draw_line({.x0    = c10.x + 1,
-               .y0    = c10.y + 1,
-               .x1    = c00.x + 1,
-               .y1    = c00.y + 1,
-               .color = parse_color_u32(dark_mode::g_selection_color)});
-  }
-  void init_gl();
-  void release_gl();
-  // Fields
-  Temporary_Storage<ULine2D>   line_storage      = Temporary_Storage<ULine2D>::create(1 << 17);
-  Temporary_Storage<URect2D>   quad_storage      = Temporary_Storage<URect2D>::create(1 << 17);
-  Temporary_Storage<UString2D> string_storage    = Temporary_Storage<UString2D>::create(1 << 18);
-  Temporary_Storage<char>      char_storage      = Temporary_Storage<char>::create(1 * (1 << 20));
-  u32                          viewport_width    = 0;
-  u32                          viewport_height   = 0;
-  bool                         force_update      = false;
-  f32                          height_over_width = 0.0f;
-  f32                          width_over_heigth = 0.0f;
-  f32                          glyphs_screen_height = 0.0f;
-  f32                          glyphs_screen_width  = 0.0f;
-  f32                          pixel_screen_width   = 0.0f;
-  f32                          pixel_screen_height  = 0.0f;
-  u32                          glyph_scale          = 1;
-
-  // GL state
-  GLuint line_program;
-  GLuint quad_program;
-  GLuint line_vao;
-  GLuint line_vbo;
-  GLuint quad_vao;
-  GLuint quad_instance_vbo;
-  GLuint vao;
-  GLuint vbo;
-  GLuint instance_vbo;
-  GLuint program;
-  GLuint font_texture;
-} c2d;
 struct CV_Wrapper {
   std::mutex              cv_mutex;
   std::atomic<bool>       cv_predicate;
@@ -797,6 +1014,7 @@ void MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLs
 }
   )"),
                      128);
+  Context2D        c2d;
   Text_Buffer_View text_buffer_view_0;
   Text_Buffer_View text_buffer_view_1;
   Splitter         splitter;
@@ -885,8 +1103,7 @@ void MessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLs
       // Update delta time
       double last_time = my_clock();
       c2d.frame_start(SCREEN_WIDTH, SCREEN_HEIGHT);
-      c2d.draw_text_buffer(text_buffer_view_0);
-      c2d.draw_text_buffer(text_buffer_view_1);
+      splitter.draw(c2d);
 
       c2d.frame_end();
       glFinish();
@@ -1082,7 +1299,7 @@ void Context2D::init_gl() {
 void Context2D::release_gl() {}
 void Context2D::render_stuff() {
   glViewport(0, 0, viewport_width, viewport_height);
-  float3 bc = parse_color_float3(dark_mode::g_background_color);
+  float3 bc = parse_color_float3(dark_mode::g_empty_background_color);
   glClearColor(bc.x, bc.y, bc.z, 1.0f);
   glClearDepthf(0.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

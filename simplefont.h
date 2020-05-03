@@ -140,6 +140,7 @@ static char const *simplefont_bitmap[] = {
 };
 namespace dark_mode {
 static char const *g_background_color = "#0c0d10";
+static char const *g_empty_background_color = "#1c1d1c";
 static char const *g_text_color = "#dde1f7";
 static char const *g_selection_color = "#aaaaaa";
 static char const *g_search_result_color = "#e81b74";

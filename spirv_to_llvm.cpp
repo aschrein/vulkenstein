@@ -1047,14 +1047,7 @@ struct Spirv_Builder {
       std::set<llvm::Value *>         conditions;
       std::set<llvm::BasicBlock *>    terminators;
       llvm::BasicBlock *              entry_bb = NULL;
-      // stash for communication between basic blocks
-      llvm::SmallDenseMap<llvm::Value *, llvm::Value *> shared_values_stash;
 
-      //      // inst -> [inst that uses this instruction, op_id]
-      //      std::map<llvm::Instruction *, llvm::SmallVector<std::pair<llvm::Instruction *,
-      //      u32>, 4>>
-      //          used_instructions;
-      llvm::SmallDenseSet<llvm::Value *> shared_values;
       ///////////////////////////////////////////////
       u32      func_id         = item.first;
       Function function        = functions[func_id];
@@ -2866,6 +2859,17 @@ struct Spirv_Builder {
           }
           break;
         }
+        case spv::Op::OpUnreachable: {
+          NOTNULL(cur_bb);
+          new llvm::UnreachableInst(c, cur_bb);
+          terminators.insert(cur_bb);
+          // Terminate current basic block
+          cur_bb = NULL;
+          llvm_builder.release();
+          cur_merge_id    = -1;
+          cur_continue_id = -1;
+          break;
+        }
         case spv::Op::OpSampledImage:
         case spv::Op::OpImageSampleExplicitLod:
         case spv::Op::OpImageSampleDrefImplicitLod:
@@ -3022,7 +3026,6 @@ struct Spirv_Builder {
         case spv::Op::OpAtomicAnd:
         case spv::Op::OpAtomicXor:
         case spv::Op::OpSwitch:
-        case spv::Op::OpUnreachable:
         case spv::Op::OpLifetimeStart:
         case spv::Op::OpLifetimeStop:
         case spv::Op::OpGroupAsyncCopy:
@@ -3320,6 +3323,14 @@ struct Spirv_Builder {
       // @llvm/finish_function
       llvm::BasicBlock *global_terminator = llvm::BasicBlock::Create(c, "terminator", cur_fun);
       llvm::ReturnInst::Create(c, global_terminator);
+      // stash for communication between basic blocks
+      llvm::SmallDenseMap<llvm::Value *, llvm::Value *> shared_values_stash;
+
+      //      // inst -> [inst that uses this instruction, op_id]
+      //      std::map<llvm::Instruction *, llvm::SmallVector<std::pair<llvm::Instruction *,
+      //      u32>, 4>>
+      //          used_instructions;
+      llvm::SmallDenseSet<llvm::Value *> shared_values;
       // A local cfg that is going to mirror the initial cfg
       llvm::SmallDenseMap<llvm::BasicBlock *, llvm::BasicBlock *, 16> local_cfg;
       struct WrappedBB {
@@ -3594,65 +3605,11 @@ struct Spirv_Builder {
         llvm::BasicBlock *                         next = NULL;
         llvm::SmallDenseSet<llvm::BasicBlock *, 2> in_bbs;
         llvm::SmallDenseSet<llvm::BasicBlock *, 2> out_bbs;
+        llvm::BasicBlock *                         merge = NULL;
+        llvm::BasicBlock *                         cont  = NULL;
       };
       std::map<llvm::BasicBlock *, CFG_Node> bb_cfg;
-      auto                                   dump_cfg = [&]() {
-        static std::map<llvm::BasicBlock *, u32> bb_to_id;
-        {
-          static u32 id      = 1;
-          bb_to_id[entry_bb] = id++;
-          for (auto &bb : bbs) {
-            bb_to_id[bb] = id++;
-          }
-          bb_to_id[global_terminator] = id++;
-        }
 
-        //        char tmp_name[0x100];
-        //        snprintf(tmp_name, sizeof(tmp_name), "%s.cfg.dot",
-        //        cur_fun->getName().str().c_str());
-        static FILE *dotgraph = NULL;
-        static defer({
-          fprintf(dotgraph, "}\n");
-          fflush(dotgraph);
-          fclose(dotgraph);
-          dotgraph = NULL;
-        });
-        if (dotgraph == NULL) {
-          dotgraph = fopen("cfg.dot", "wb");
-          fprintf(dotgraph, "digraph {\n");
-        }
-        fprintf(dotgraph, "node [shape=record];\n");
-        // 1348 -> 1350 [style=dashed];
-        // 1348 -> 1351 [style=dotted];
-        fprintf(dotgraph, "%i [label = \"terminator\", shape = record];\n",
-                bb_to_id[global_terminator]);
-        for (llvm::BasicBlock *bb : bbs) {
-          fprintf(dotgraph, "%i [label = \"%s\", shape = %s];\n", bb_to_id[bb],
-                  bb->getName().str().c_str(),
-                  contains(terminators, bb)
-                      ? "invtriangle"
-                      : bb_cfg[bb].in_bbs.size() == 0
-                            ? "record"
-                            : bb_cfg[bb].out_bbs.size() > 1 ? "triangle" : "circle");
-        }
-        llvm::BasicBlock *cur = entry_bb;
-        while (cur) {
-          CFG_Node &node = bb_cfg[cur];
-          if (node.next == NULL) break;
-          u32 src_id = bb_to_id[cur];
-          u32 dst_id = bb_to_id[node.next];
-          fprintf(dotgraph, "%i -> %i [style=dotted];\n", src_id, dst_id);
-          cur = node.next;
-        }
-        for (llvm::BasicBlock *bb : bbs) {
-          u32       src_id = bb_to_id[bb];
-          CFG_Node &node   = bb_cfg[bb];
-          for (auto &dst_bb : node.out_bbs) {
-            u32 dst_id = bb_to_id[dst_bb];
-            fprintf(dotgraph, "%i -> %i [constraint = false];\n", src_id, dst_id);
-          }
-        }
-      };
       local_cfg[allocas_bb]        = allocas_bb;
       local_cfg[global_terminator] = global_terminator;
       // Build cfg
@@ -3670,40 +3627,206 @@ struct Spirv_Builder {
           bb_cfg[dst_false].in_bbs.insert(bb);
         }
         if (cb.merge_id != 0) {
-          dst_merge = llvm_labels[cb.merge_id];
-          //          bb_cfg[bb].out_bbs.insert(dst_merge);
-          //          bb_cfg[dst_merge].in_bbs.insert(bb);
+          dst_merge        = llvm_labels[cb.merge_id];
+          bb_cfg[bb].merge = dst_merge;
         }
         if (cb.continue_id != 0) {
-          dst_continue = llvm_labels[cb.continue_id];
-          //          bb_cfg[bb].out_bbs.insert(dst_continue);
-          //          bb_cfg[dst_continue].in_bbs.insert(bb);
+          dst_continue    = llvm_labels[cb.continue_id];
+          bb_cfg[bb].cont = dst_continue;
         }
 
         bb_cfg[bb].out_bbs.insert(dst_true);
         bb_cfg[dst_true].in_bbs.insert(bb);
       }
-      // Sort bbs somehow
+      // @TODO: cleanup
+      //////////////////////////////////
+      /// 10 IQ brain doin' the moves //
+      //////////////////////////////////
+
+      // build dominator tree
+      // bb dominated by [...]
+      //      std::map<llvm::BasicBlock *, std::set<llvm::BasicBlock *>>      dom_tree;
+      std::set<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>>     dom_tree;
+      std::function<bool(llvm::BasicBlock * a, llvm::BasicBlock * b)> dominates =
+          [&](llvm::BasicBlock *a, llvm::BasicBlock *b) {
+            if (a == b) return true;
+            if (contains(dom_tree, std::pair<llvm::BasicBlock *, llvm::BasicBlock *>{b, a}))
+              return true;
+            std::set<llvm::BasicBlock *>   visited;
+            std::deque<llvm::BasicBlock *> to_visit;
+            to_visit.push_back(b);
+            while (to_visit.size() != 0) {
+              llvm::BasicBlock *cur = to_visit.front();
+              to_visit.pop_front();
+              if (cur == a) return true;
+              if (contains(visited, cur)) continue;
+              visited.insert(cur);
+              for (llvm::BasicBlock *in : bb_cfg[cur].in_bbs) {
+                dom_tree.insert({b, in});
+                if (in == a) {
+                  return true;
+                }
+                to_visit.push_back(in);
+              }
+            }
+            //            ASSERT_ALWAYS(contains(bb_cfg, a));
+            //            if (bb_cfg[a].out_bbs.size() == 0)
+            //              return false;
+            //            for (llvm::BasicBlock *out : bb_cfg[a].out_bbs) {
+            //              if (b == out) {
+            //                dom_tree.insert({b, a});
+            //                return true;
+            //              }
+            //            }
+
+            //            for (llvm::BasicBlock *out : bb_cfg[a].out_bbs) {
+            //              if (dominates(out, b)) {
+            //                dom_tree.insert({b, a});
+            //                return true;
+            //              }
+            //            }
+            return false;
+          };
+      //      {
+      //        for (llvm::BasicBlock *bb : bbs) {
+      //          for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
+      //          }
+      //        }
+      //      }
+      //      {
+      //        std::set<llvm::BasicBlock *>   visited;
+      //        std::deque<llvm::BasicBlock *> to_visit;
+      //        to_visit.push_back(entry_bb);
+
+      //        while (!to_visit.empty()) {
+      //          llvm::BasicBlock *cur = to_visit.front();
+      //          to_visit.pop_front();
+      //          if (contains(visited, cur)) continue;
+      //          // insert all visited so far as dominators
+      //          for (llvm::BasicBlock *v : visited) {
+      //            dom_tree[cur].insert(v);
+      //          }
+      //          visited.insert(cur);
+      //          for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
+      //          }
+      //        }
+      //      }
+      // detect loops
+      struct Loop {
+        std::set<llvm::BasicBlock *> bbs;
+        std::set<llvm::BasicBlock *> entries;
+        std::set<llvm::BasicBlock *> escapes;
+      };
+      std::vector<Loop>                 loops;
+      std::map<llvm::BasicBlock *, u32> looped_bbs;
+      {
+        std::set<llvm::BasicBlock *>   visited;
+        std::deque<llvm::BasicBlock *> to_visit;
+        to_visit.push_back(entry_bb);
+
+        while (!to_visit.empty()) {
+          llvm::BasicBlock *cur = to_visit.front();
+          to_visit.pop_front();
+          visited.insert(cur);
+          for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
+            // loop detected
+            if (contains(visited, out)) {
+              if (!dominates(out, cur)) continue;
+              if (!contains(looped_bbs, out)) {
+                if (contains(looped_bbs, cur)) {
+                  looped_bbs[out] = looped_bbs[cur];
+                } else {
+                  Loop loop;
+                  loops.push_back(loop);
+                  looped_bbs[out] = loops.size() - 1;
+                }
+              }
+              u32 id = looped_bbs[out];
+              loops[id].bbs.insert(cur);
+              loops[id].bbs.insert(out);
+              looped_bbs[cur] = id;
+            } else {
+              to_visit.push_back(out);
+            }
+          }
+        }
+        // expand loop
+        ito(loops.size()) {
+          Loop &                         loop = loops[i];
+          std::set<llvm::BasicBlock *>   reachable;
+          std::deque<llvm::BasicBlock *> to_visit;
+          for (llvm::BasicBlock *bb : loop.bbs) {
+            to_visit.push_back(bb);
+          }
+          while (to_visit.size() != 0) {
+            llvm::BasicBlock *cur = to_visit.front();
+            to_visit.pop_front();
+            if (contains(reachable, cur)) continue;
+            reachable.insert(cur);
+            for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
+              if (bb_cfg[out].in_bbs.size() == 1) to_visit.push_back(out);
+            }
+          }
+          for (llvm::BasicBlock *bb : reachable) {
+            ASSERT_ALWAYS(!contains(looped_bbs, bb) || looped_bbs[bb] == i);
+            looped_bbs[bb] = i;
+          }
+          loop.bbs = reachable;
+          for (llvm::BasicBlock *bb : loop.bbs) {
+            bool entry  = false;
+            bool escape = false;
+            for (llvm::BasicBlock *out : bb_cfg[bb].out_bbs) {
+              if (!contains(looped_bbs, out) || looped_bbs[out] != i) {
+                escape = true;
+              }
+            }
+            for (llvm::BasicBlock *in : bb_cfg[bb].in_bbs) {
+              if (!contains(looped_bbs, in) || looped_bbs[bb] != i) {
+                entry = true;
+              }
+            }
+            if (entry) loop.entries.insert(bb);
+            if (escape) loop.escapes.insert(bb);
+          }
+        }
+        // @Debug
+        if (0) {
+          for (auto &item : looped_bbs) {
+            fprintf(stdout, "looped bb: %s -> %i\n", item.first->getName().str().c_str(),
+                    item.second);
+          }
+          fflush(stdout);
+        }
+      }
+      // sort cfg
       {
         std::vector<llvm::BasicBlock *> sorted_bbs;
         std::set<llvm::BasicBlock *>    visited;
         std::deque<llvm::BasicBlock *>  to_visit;
         {
-          ASSERT_ALWAYS(entry_bb != NULL);
-          to_visit.push_back(entry_bb);
-          // There might be cases when label_0 -> label_1 -> label_0 kind of loops but that's
-          // unlikely due to how usually spirv is generated
-          ASSERT_ALWAYS(to_visit.size() == 1 && "Only one entry basic block is allowed");
+          visited.insert(allocas_bb);
+          sorted_bbs.push_back(allocas_bb);
+          for (llvm::BasicBlock *bb : bbs) {
+            to_visit.push_back(bb);
+          }
         }
         while (!to_visit.empty()) {
           llvm::BasicBlock *bb = to_visit.front();
           to_visit.pop_front();
-          if (visited.find(bb) != visited.end()) continue;
+          if (contains(visited, bb)) continue;
+          bool ready_to_insert = true;
+          for (llvm::BasicBlock *in : bb_cfg[bb].in_bbs) {
+            if (!contains(visited, in) && !contains(looped_bbs, in)) {
+              ready_to_insert = false;
+              break;
+            }
+          }
+          if (!ready_to_insert) {
+            to_visit.push_back(bb);
+            continue;
+          }
           visited.insert(bb);
           sorted_bbs.push_back(bb);
-          for (llvm::BasicBlock *child : bb_cfg[bb].out_bbs) {
-            to_visit.push_front(child);
-          }
         }
         ito(sorted_bbs.size() - 1) {
           bb_cfg[sorted_bbs[i]].next     = sorted_bbs[i + 1];
@@ -3714,7 +3837,7 @@ struct Spirv_Builder {
       }
 
       // dst -> (src -> mask expression)
-      std::map<llvm::BasicBlock *, llvm::Value *>      mask_control;
+      std::map<llvm::BasicBlock *, llvm::Value *>                                mask_control;
       std::map<llvm::BasicBlock *, std::pair<llvm::BasicBlock *, llvm::Value *>> backward_jumps;
 
       for (BranchCond &cb : deferred_branches) {
@@ -3814,17 +3937,17 @@ struct Spirv_Builder {
         if (bb == global_terminator) continue;
         CFG_Node &node = bb_cfg[bb];
         NOTNULL(node.next);
-//        if (contains(backward_jumps, bb)) {
-//          ASSERT_ALWAYS(contains(mask_control, node.next));
-//          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
-//                                   create_masked_jump(dst_false, true_mask), all_true,
-//                                   flow_control_bb);
-//        } else {
-          if (contains(mask_control, node.next)) {
-            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
-          }
-          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
-//        }
+        //        if (contains(backward_jumps, bb)) {
+        //          ASSERT_ALWAYS(contains(mask_control, node.next));
+        //          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
+        //                                   create_masked_jump(dst_false, true_mask), all_true,
+        //                                   flow_control_bb);
+        //        } else {
+        if (contains(mask_control, node.next)) {
+          new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
+        }
+        llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
+        //        }
       }
       for (llvm::BasicBlock *item : terminators) {
         CFG_Node &node = bb_cfg[item];
@@ -3841,8 +3964,111 @@ struct Spirv_Builder {
                                    local_cfg[item]);
         }
       }
-      dump_cfg();
+      auto dump_cfg = [&]() {
+        static std::map<llvm::BasicBlock *, u32> bb_to_id;
+        {
+          static u32 id      = 1;
+          bb_to_id[entry_bb] = id++;
+          for (auto &bb : bbs) {
+            bb_to_id[bb] = id++;
+          }
+          bb_to_id[global_terminator] = id++;
+        }
 
+        //        char tmp_name[0x100];
+        //        snprintf(tmp_name, sizeof(tmp_name), "%s.cfg.dot",
+        //        cur_fun->getName().str().c_str());
+        static FILE *dotgraph = NULL;
+        static defer({
+          fprintf(dotgraph, "}\n");
+          fflush(dotgraph);
+          fclose(dotgraph);
+          dotgraph = NULL;
+        });
+        if (dotgraph == NULL) {
+          dotgraph = fopen("cfg.dot", "wb");
+          fprintf(dotgraph, "digraph {\n");
+        }
+        fprintf(dotgraph, "node [shape=record];\n");
+        // 1348 -> 1350 [style=dashed];
+        // 1348 -> 1351 [style=dotted];
+        fprintf(dotgraph, "%i [label = \"terminator\", shape = record];\n",
+                bb_to_id[global_terminator]);
+        for (llvm::BasicBlock *bb : bbs) {
+          fprintf(dotgraph, "%i [style=filled, label = \"%s\", shape = %s, fillcolor = %s];\n",
+                  bb_to_id[bb], bb->getName().str().c_str(),
+                  contains(terminators, bb)
+                      ? "invtriangle"
+                      : bb_cfg[bb].in_bbs.size() == 0
+                            ? "record"
+                            : bb_cfg[bb].out_bbs.size() > 1 ? "triangle" : "circle",
+                  contains(looped_bbs, bb)
+                      ? (contains(loops[looped_bbs[bb]].entries, bb)
+                             ? "green"
+                             : contains(loops[looped_bbs[bb]].escapes, bb) ? "red" : "white")
+                      : "white"
+
+          );
+        }
+        llvm::BasicBlock *cur = entry_bb;
+        // add loops to the cluster
+        ito(loops.size()) {
+          //          subgraph cluster_0 {
+          //		style=filled;
+          //		color=lightgrey;
+          //		node [style=filled,color=white];
+          //		a0 -> a1 -> a2 -> a3;
+          //		label = "process #1";
+          //	}
+          static u32 loop_cnt = 0;
+          loop_cnt++;
+          fprintf(dotgraph, "subgraph cluster_%i {\n", loop_cnt);
+          fprintf(dotgraph, "style=filled;\n");
+          fprintf(dotgraph, "color=lightgrey;\n");
+          Loop &loop = loops[i];
+          for (llvm::BasicBlock *bb : loop.bbs) {
+            u32       src_id = bb_to_id[bb];
+            CFG_Node &node   = bb_cfg[bb];
+            for (auto &dst_bb : node.out_bbs) {
+              if (!contains(loop.bbs, dst_bb)) continue;
+              u32 dst_id = bb_to_id[dst_bb];
+              fprintf(dotgraph, "%i -> %i;\n", src_id, dst_id);
+            }
+          }
+          fprintf(dotgraph, "}\n");
+        }
+        while (cur) {
+          CFG_Node &node = bb_cfg[cur];
+          if (node.next == NULL) break;
+          u32 src_id = bb_to_id[cur];
+          u32 dst_id = bb_to_id[node.next];
+          fprintf(dotgraph, "%i -> %i [style=dotted];\n", src_id, dst_id);
+          cur = node.next;
+        }
+        for (llvm::BasicBlock *bb : bbs) {
+          u32       src_id = bb_to_id[bb];
+          CFG_Node &node   = bb_cfg[bb];
+          for (auto &dst_bb : node.out_bbs) {
+            //  skip edges from the same loop as we already handled them above
+            if (contains(looped_bbs, dst_bb) && contains(looped_bbs, bb) &&
+                looped_bbs[dst_bb] == looped_bbs[bb])
+              continue;
+            u32 dst_id = bb_to_id[dst_bb];
+            fprintf(dotgraph, "%i -> %i [constraint = false];\n", src_id, dst_id);
+          }
+          if (node.cont != NULL) {
+            u32 dst_id = bb_to_id[node.cont];
+            fprintf(dotgraph, "%i -> %i [label=\"C\", style=dashed, constraint = false];\n", src_id,
+                    dst_id);
+          }
+          if (node.merge != NULL) {
+            u32 dst_id = bb_to_id[node.merge];
+            fprintf(dotgraph, "%i -> %i [label=\"M\", style=dashed, constraint = false];\n", src_id,
+                    dst_id);
+          }
+        }
+      };
+      dump_cfg();
     finish_function:
       continue;
     }
