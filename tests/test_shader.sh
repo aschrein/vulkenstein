@@ -3,7 +3,7 @@ export SCRIPTPATH=`dirname $SCRIPT`
 export PATH=$SCRIPTPATH/../build:$PATH
 export PATH=/home/aschrein/dev/llvm/build/Release/bin:$PATH
 echo "using $(which clang)"
-export WAVE_WIDTH=4
+export WAVE_WIDTH=1
 export DEINTERLEAVE=0
 echo "WAVE_WIDTH=$WAVE_WIDTH"
 echo "DEINTERLEAVE=$DEINTERLEAVE"

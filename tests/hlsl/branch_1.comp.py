@@ -7,12 +7,32 @@ extern "C"{
 const uint32_t NUM_INVOCATIONS = 128;
 
 void spv_main(void *, uint64_t);
-
+uint get_num(uint t) {
+  if (t < 888) {
+  //   while (t < 666) {
+  //     t = t + 1;
+  //     if (t == 444)
+  //       continue;
+  //     t = t * (t - 1) + 1;
+  //     if (t > 100500)
+  //       return t;
+  //     if (t == 777)
+  //       break;
+  //
+  //   }
+  //  t = t / 44;
+  //  return t;
+    return 555;
+  } else {
+    // return t + t * t * t;
+    return 666;
+  }
+}
 void test_launch(void *_printf) {
   uint32_t g_buf_0[NUM_INVOCATIONS];
   uint32_t g_buf_1[NUM_INVOCATIONS];
   for (uint32_t i = 1; i < NUM_INVOCATIONS; i++) {
-    g_buf_1[i] = i & 1;
+    g_buf_1[i] = i * 100 + 11;
   }
   Invocation_Info info;
   for (uint32_t i = 1; i < sizeof(info); i++)
@@ -48,7 +68,7 @@ void test_launch(void *_printf) {
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
-    TEST_EQ(g_buf_0[i], (i & 1) ? 2 : 0);
+    TEST_EQ(g_buf_0[i], get_num(g_buf_1[i]));
   }
   ((printf_t)_printf)("[SUCCESS]\n");
 }
@@ -59,16 +79,33 @@ shader = \
 r"""
 [[vk::binding(0, 0)]] RWBuffer <uint> g_buf_0;
 [[vk::binding(1, 0)]] RWBuffer <uint> g_buf_1;
+
+uint get_num(uint t) {
+  if (t < 888) {
+  //   while (t < 666) {
+  //     t = t + 1;
+  //     if (t == 444)
+  //       continue;
+  //     t = t * (t - 1) + 1;
+  //     if (t > 100500)
+  //       return t;
+  //     if (t == 777)
+  //       break;
+  //
+  //   }
+  //  t = t / 44;
+  //  return t;
+    return 555;
+  } else {
+    // return t + t * t * t;
+    return 666;
+  }
+}
+
 [numthreads(4, 1, 1)]
 void main(uint3 tid : SV_DispatchThreadID)
 {
-  int val = 666;
-  if (g_buf_1[tid.x] > 0) {
-    val = 2;
-  } else {
-    val = 0;
-  }
-  g_buf_0[tid.x] = val;
+  g_buf_0[tid.x] = get_num(g_buf_1[tid.x]);
 }
 """
 shader_filename = "shader.comp.hlsl"
@@ -90,47 +127,3 @@ print(stdout)
 if process.returncode != 0:
   exit(-1)
 
-#[[vk::binding(0, 0)]] RWBuffer <uint> g_buf_0;
-#[[vk::binding(1, 0)]] RWBuffer <uint> g_buf_1;
-
-
-#// uint get_num(uint t) {
-#//   if (t < 888) {
-#//     while (t < 666) {
-#//       t = t + 1;
-#//       if (t == 444)
-#//         continue;
-#//       t = t * (t - 1) + 1;
-#//       if (t > 100500)
-#//         return t;
-#//       if (t == 777)
-#//         break;
-#//
-#//     }
-#//     t = t / 44;
-#//     return t;
-#//   } else {
-#//     return t + t * t * t;
-#//   }
-#// }
-
-
-#[numthreads(4, 1, 1)]
-#void main(uint3 tid : SV_DispatchThreadID)
-#{
-#  // int val = 666;
-#  // if (g_buf_1[tid.x] > 0) {
-#  //   val = 1;
-#  //   for (uint i = 0; i < g_buf_1[tid.x]; i++) {
-#  //     val += g_buf_1[tid.x + i];
-#  //   }
-#  // } else {
-#  //   val = (int)get_num(g_buf_1[tid.x]);
-#  // }
-#  int t = g_buf_1[tid.x];
-#  for (uint i = 20; i < t; i++) {
-#    t = t + t * (t / 2 + 1) * (t / 3 + 2);
-#  }
-#  t = t + t ^ 0xffff70u;
-#  g_buf_0[tid.x] = t;
-#}

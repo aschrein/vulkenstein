@@ -59,6 +59,15 @@ COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -g -march=skylake ${CMAKE_SOURCE_DIR}/spv
         ${LLVM_TOOLS_BINARY_DIR}/llvm-dis llvm_stdlib_64.bc -o llvm_stdlib_64.final.ll &&
         xxd -i llvm_stdlib_64.bc  > llvm_stdlib_64.h
 )
+
+# LL stdlib
+add_custom_command(
+OUTPUT ll_stdlib.h
+DEPENDS ${CMAKE_SOURCE_DIR}/ll_stdlib.cpp
+COMMAND ${LLVM_TOOLS_BINARY_DIR}/clang -g -march=skylake ${CMAKE_SOURCE_DIR}/ll_stdlib.cpp -S -emit-llvm &&
+        ${LLVM_TOOLS_BINARY_DIR}/llvm-as ll_stdlib.ll -o ll_stdlib.bc &&
+        xxd -i ll_stdlib.bc  > ll_stdlib.h
+)
 ### END OF COPY PASTE
 configure_file(icd_template.json icd.json)
 #add_custom_command(
@@ -118,11 +127,27 @@ target_include_directories(s2l
   ${CMAKE_BINARY_DIR}
   ${LLVM_INCLUDE_DIRS}
 )
+add_executable(ll
+  ll.cpp
+  ll_stdlib.h
+)
+target_include_directories(ll
+  PRIVATE
+  3rdparty/SPIRV
+  3rdparty
+  ${VULKAN_SDK}/include
+  ${CMAKE_SOURCE_DIR}
+  ${CMAKE_BINARY_DIR}
+  ${LLVM_INCLUDE_DIRS}
+)
+
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=skylake -Werror -ferror-limit=1 -fno-exceptions -fno-rtti -fvisibility=hidden")
 target_compile_definitions(vk PRIVATE ${LLVM_COMPILE_FLAGS})
+target_compile_definitions(ll PRIVATE ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(s2l PRIVATE "-DS2L_EXE " ${LLVM_COMPILE_FLAGS})
 target_compile_definitions(raster PRIVATE "-DRASTER_EXE " ${LLVM_COMPILE_FLAGS})
 target_link_libraries(s2l ${LLVM_LIBRARY_LIST} ${VULKAN_SDK}/lib/libSPIRV-Tools-shared.so SPIRV-Tools pthread ncurses z dl)
+target_link_libraries(ll ${LLVM_LIBRARY_LIST} ${VULKAN_SDK}/lib/libSPIRV-Tools-shared.so SPIRV-Tools pthread ncurses z dl)
 target_link_libraries(vk ${LLVM_LIBRARY_LIST} ${VULKAN_SDK}/lib/libSPIRV-Tools-shared.so SPIRV-Tools pthread ncurses z dl xcb-image X11)
 target_link_libraries(raster SDL2 OpenGL pthread)
 target_link_libraries(uedit SDL2 OpenGL pthread)

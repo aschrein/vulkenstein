@@ -72,7 +72,7 @@ void test_launch(void *_printf) {
     info.input = &attributes[i * WAVE_WIDTH];
     info.output = &colors[i * WAVE_WIDTH];
     info.builtin_output = &gl_PerVertex[i * WAVE_WIDTH];
-    spv_main(&info, 0b1111);
+    spv_main(&info, ~0ull);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {

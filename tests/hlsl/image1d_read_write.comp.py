@@ -27,6 +27,7 @@ void test_launch(void *_printf) {
   info.subgroup_y_offset  = 0x0;
   info.subgroup_z_bits    = 0x0;
   info.subgroup_z_offset  = 0x0;
+  info.enabled_lanes = 0xffffffffffffffffull;
     info.print_fn = _printf;
     info.wave_width = WAVE_WIDTH;
 
@@ -45,7 +46,7 @@ void test_launch(void *_printf) {
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS/WAVE_WIDTH; i++) {
     info.invocation_id = (uint3){i, 0, 0};
-    spv_main(&info, 0b1111);
+    spv_main(&info, ~0ull);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {

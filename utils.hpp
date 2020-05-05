@@ -170,6 +170,12 @@ template <typename T = uint8_t> struct Temporary_Storage {
     return ptr;
   }
 
+  T *alloc_zero(size_t size) {
+    T *mem = alloc(size);
+    memset(mem, 0, size * sizeof(T));
+    return mem;
+  }
+
   T *alloc_align(size_t size, size_t alignment) {
     T *ptr = alloc(size + alignment);
     ptr    = (T *)(((size_t)ptr + alignment - 1) & (~(alignment - 1)));
@@ -465,44 +471,40 @@ struct Allocator {
   }
 };
 
-template <typename T> struct TinyArray {
-  T *    ptr;
-  size_t size;
-  void   init(T *ptr, size_t size) {
-    this->ptr  = ptr;
-    this->size = size;
+struct Default_Allocator {
+  static void *alloc(size_t size) { return tl_alloc(size); }
+  static void *realloc(void *ptr, size_t old_size, size_t new_size) {
+    return tl_realloc(ptr, old_size, new_size);
   }
+  static void free(void *ptr) { tl_free(ptr); }
 };
 
-template <typename T> struct Array {
-  T *        ptr;
-  size_t     size;
-  size_t     capacity;
-  Allocator *allocator;
-  size_t     grow_k;
-  Array(uint32_t capacity = 0, Allocator *allocator = NULL, size_t grow_k = 0x100) {
-    if (allocator == NULL) allocator = Allocator::get_default();
+template <typename T, typename Allcator_t = Default_Allocator> struct Array {
+  T *    ptr;
+  size_t size;
+  size_t capacity;
+  size_t grow_k;
+  void   init(uint32_t capacity = 0, size_t grow_k = 0x100) {
     if (capacity != 0)
-      ptr = (T *)allocator->alloc(sizeof(T) * capacity);
+      ptr = (T *)Allcator_t::alloc(sizeof(T) * capacity);
     else
       ptr = NULL;
-    size            = 0;
-    this->allocator = allocator;
-    this->capacity  = capacity;
-    this->grow_k    = grow_k;
+    size           = 0;
+    this->capacity = capacity;
+    this->grow_k   = grow_k;
   }
   u32  get_size() { return this->size; }
   u32  has_items() { return get_size() != 0; }
   void release() {
     if (ptr != NULL) {
-      allocator->free(ptr);
+      Allcator_t::free(ptr);
     }
     memset(this, 0, sizeof(*this));
   }
   void resize(size_t new_size) {
     if (new_size > capacity) {
       uint64_t new_capacity = new_size;
-      ptr      = (T *)allocator->realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
+      ptr      = (T *)Allcator_t::realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
       capacity = new_capacity;
     }
     ASSERT_DEBUG(capacity >= size + 1);
@@ -528,7 +530,7 @@ template <typename T> struct Array {
   void push(T elem) {
     if (size + 1 > capacity) {
       uint64_t new_capacity = capacity + grow_k;
-      ptr      = (T *)allocator->realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
+      ptr      = (T *)Allcator_t::realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
       capacity = new_capacity;
     }
     ASSERT_DEBUG(capacity >= size + 1);
@@ -543,13 +545,47 @@ template <typename T> struct Array {
     T elem = ptr[size - 1];
     if (size + grow_k < capacity) {
       uint64_t new_capacity = capacity - grow_k;
-      ptr      = (T *)allocator->realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
+      ptr      = (T *)Allcator_t::realloc(ptr, sizeof(T) * capacity, sizeof(T) * new_capacity);
       capacity = new_capacity;
     }
     ASSERT_DEBUG(size != 0);
     size -= 1;
     return elem;
   }
+  T &operator[](size_t i) {
+    ASSERT_DEBUG(i < size);
+    ASSERT_DEBUG(ptr != NULL);
+    return ptr[i];
+  }
+};
+
+template <typename T, u32 N, typename Allcator_t = Default_Allocator> struct SmallArray {
+  T                    _local[N];
+  size_t               _size;
+  Array<T, Allcator_t> _array;
+  void                 init() {
+    memset(this, 0, sizeof(*this));
+    _array.init();
+  }
+  void release() {
+    _array.release();
+    memset(this, 0, sizeof(*this));
+  }
+  T &operator[](size_t i) {
+    if (i < N)
+      return _local[i];
+    else
+      return _array[i];
+  }
+  void push(T const &val) {
+    if (_size < N) {
+      _local[_size++] = val;
+    } else {
+      _array.push(val);
+      _size++;
+    }
+  }
+  size_t get_size() { return _size; }
 };
 
 template <typename K> struct Hash_Set {
@@ -558,9 +594,9 @@ template <typename K> struct Hash_Set {
     uint64_t hash;
   };
   Array<Hash_Pair> arr;
-  size_t    item_count = 0;
-  size_t    grow_k     = 16;
-  uint32_t  attempts   = 16;
+  size_t           item_count = 0;
+  size_t           grow_k     = 16;
+  uint32_t         attempts   = 16;
 
   void release() {
     arr.release();
@@ -621,7 +657,7 @@ template <typename K> struct Hash_Set {
     uint64_t size = arr.capacity;
     if (size == 0) return false;
     Array<Hash_Pair> *arr        = &arr;
-    uint32_t   attempt_id = 0;
+    uint32_t          attempt_id = 0;
     for (; attempt_id < attempts; ++attempt_id) {
       uint64_t id = hash % size;
       if (hash != 0) {
@@ -635,7 +671,7 @@ template <typename K> struct Hash_Set {
   }
 };
 
-//template <typename K, typename V> struct HashArray {
+// template <typename K, typename V> struct HashArray {
 //  using HP = Hash_Pair<K, V>;
 //  Array<HP> arr;
 //  size_t    item_count = 0;

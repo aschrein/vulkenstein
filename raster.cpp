@@ -2326,6 +2326,7 @@ struct Draw_Call {
       info.output           = vs.vs_output + i * subgroup_size * vs_symbols->output_stride;
       // Assume there's only gl_Position
       info.builtin_output = vs.vs_vertex_positions + i * subgroup_size;
+      info.enabled_lanes = ~0ull;
       vs_symbols->spv_main(&info, (~0));
     }
   }

@@ -31,6 +31,7 @@
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Mangler.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/NoFolder.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Support/DynamicLibrary.h>
@@ -352,7 +353,7 @@ struct Spirv_Builder {
   //////////////////////
   //     Options      //
   //////////////////////
-  u32  opt_subgroup_size  = 4;
+  u32  opt_subgroup_size  = 1;
   bool opt_debug_comments = false;
   bool opt_debug_info     = false;
   bool opt_dump           = true;
@@ -461,9 +462,10 @@ struct Spirv_Builder {
 
   llvm::orc::ThreadSafeModule build_llvm_module_vectorized() {
     std::unique_ptr<llvm::LLVMContext> context(new llvm::LLVMContext());
-    auto &                             c = *context;
-    llvm::SMDiagnostic                 error;
-    std::unique_ptr<llvm::Module>      module = NULL;
+    using LLVM_IR_Builder_t         = llvm::IRBuilder<llvm::NoFolder>;
+    auto &                        c = *context;
+    llvm::SMDiagnostic            error;
+    std::unique_ptr<llvm::Module> module = NULL;
     // Load the stdlib for a given subgroup size
     switch (opt_subgroup_size) {
     case 1: {
@@ -487,6 +489,13 @@ struct Spirv_Builder {
     default: UNIMPLEMENTED;
     };
     ASSERT_ALWAYS(module);
+    // Hide all stdlib functions
+    for (llvm::Function &fun : module->functions()) {
+      if (fun.isDeclaration())
+        continue;
+      fun.setLinkage(llvm::GlobalValue::LinkageTypes::PrivateLinkage);
+      fun.setVisibility(llvm::GlobalValue::VisibilityTypes::DefaultVisibility);
+    }
     if (opt_llvm_dump) {
       std::vector<const char *> argv;
       argv.push_back("S2L");
@@ -567,7 +576,7 @@ struct Spirv_Builder {
       llvm::VectorType *vty = llvm::dyn_cast<llvm::VectorType>(ty);
       return vty->getElementCount().Min;
     };
-    auto llvm_matrix_transpose = [&](llvm::Value *matrix, llvm::IRBuilder<> *llvm_builder) {
+    auto llvm_matrix_transpose = [&](llvm::Value *matrix, LLVM_IR_Builder_t *llvm_builder) {
       llvm::Type *elem_type       = llvm_vec_elem_type(matrix->getType()->getArrayElementType());
       u32         matrix_row_size = llvm_vec_num_elems(matrix->getType()->getArrayElementType());
       u32         matrix_col_size = (u32)matrix->getType()->getArrayNumElements();
@@ -587,7 +596,7 @@ struct Spirv_Builder {
       return result;
     };
     auto llvm_dot = [&](llvm::Value *vector_0, llvm::Value *vector_1,
-                        llvm::IRBuilder<> *llvm_builder) {
+                        LLVM_IR_Builder_t *llvm_builder) {
       llvm::Type * elem_type   = llvm_vec_elem_type(vector_0->getType());
       llvm::Value *result      = llvm::ConstantFP::get(elem_type, 0.0);
       u32          vector_size = llvm_vec_num_elems(vector_0->getType());
@@ -658,6 +667,7 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_disable_lanes);
     LOOKUP_FN(spv_set_enabled_lanes);
     LOOKUP_FN(spv_get_enabled_lanes);
+    LOOKUP_FN(spv_dummy_call);
     LOOKUP_FN(dump_mask);
     std::map<std::string, llvm::GlobalVariable *> global_strings;
     auto                                          lookup_string = [&](std::string str) {
@@ -1072,9 +1082,10 @@ struct Spirv_Builder {
       // @llvm/allocas
       llvm::BasicBlock *cur_bb     = llvm::BasicBlock::Create(c, "allocas", cur_fun, NULL);
       llvm::BasicBlock *allocas_bb = cur_bb;
-      std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
-      llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
-      llvm::Value *cur_mask = llvm_builder->CreateAlloca(mask_t);
+
+      std::unique_ptr<LLVM_IR_Builder_t> llvm_builder;
+      llvm_builder.reset(new LLVM_IR_Builder_t(cur_bb, llvm::NoFolder()));
+      llvm::Value *cur_mask = llvm_builder->CreateAlloca(mask_t, NULL, "current_mask");
       llvm_builder->CreateStore(cur_fun->getArg(1), cur_mask);
       auto get_lane_mask_bit = [&](u32 lane_id) {
         llvm::Value *mask = llvm_builder->CreateLoad(cur_mask);
@@ -1098,19 +1109,29 @@ struct Spirv_Builder {
       };
 
       auto masked_store = [&](llvm::SmallVector<llvm::Value *, 64> &values,
-                              llvm::SmallVector<llvm::Value *, 64> &addresses) {
+                              llvm::SmallVector<llvm::Value *, 64> &addresses,
+                              llvm::BasicBlock *                    bb) {
         //        llvm_print_string("mask:");
         //        llvm_builder->CreateCall(dump_mask, {state_ptr,
         //        llvm_builder->CreateLoad(cur_mask)});
         kto(opt_subgroup_size) {
-          llvm::Value *old_value = llvm_builder->CreateLoad(addresses[k]);
-          llvm::Value *lane_bit  = get_lane_mask_bit(k);
-          llvm::Value *select    = llvm_builder->CreateSelect(lane_bit, values[k], old_value);
-          llvm_builder->CreateStore(select, addresses[k]);
+          llvm::Value *old_value =
+              new llvm::LoadInst(values[k]->getType(), addresses[k], "old_value", bb);
+          llvm::Value *mask = new llvm::LoadInst(mask_t, cur_mask, "cur_mask", bb);
+          //        lane_bit llvm_builder->CreateCall(spv_get_lane_mask,
+          //                                        {state_ptr, mask,
+          //                                        llvm_get_constant_i32(lane_id)});
+
+          //          llvm::Value *lane_bit = get_lane_mask_bit(k);
+          llvm::Value *lane_bit = llvm::CallInst::Create(
+              spv_get_lane_mask, {state_ptr, mask, llvm_get_constant_i32(k)}, "lane_bit", bb);
+          llvm::Value *select =
+              llvm::SelectInst::Create(lane_bit, values[k], old_value, "select", bb);
+          new llvm::StoreInst(select, addresses[k], bb);
         }
       };
       auto save_enabled_lanes_mask = [&]() {
-        llvm::Value *mask   = llvm_builder->CreateCall(spv_get_enabled_lanes, {state_ptr});
+        llvm::Value *mask   = llvm_builder->CreateCall(spv_get_enabled_lanes, {state_ptr}, "enabled_lanes");
         llvm::Value *alloca = llvm_builder->CreateAlloca(mask_t);
         llvm_builder->CreateStore(mask, alloca);
         return alloca;
@@ -1492,7 +1513,7 @@ struct Spirv_Builder {
           }
           cur_bb = new_bb;
           bbs.push_back(new_bb);
-          llvm_builder.reset(new llvm::IRBuilder<>(cur_bb, llvm::ConstantFolder()));
+          llvm_builder.reset(new LLVM_IR_Builder_t(cur_bb, llvm::NoFolder()));
           llvm_labels[id] = cur_bb;
           break;
         }
@@ -1584,11 +1605,11 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(addr != NULL);
             llvm::Value *val = llvm_values_per_lane[k][word2];
             ASSERT_ALWAYS(val != NULL);
-            llvm_builder->CreateStore(val, addr);
-            //            values.push_back(val);
-            //            addresses.push_back(addr);
+            //            llvm_builder->CreateStore(val, addr);
+            values.push_back(val);
+            addresses.push_back(addr);
           }
-          //          masked_store(values, addresses);
+          masked_store(values, addresses, cur_bb);
           break;
         }
         // Skip structured control flow instructions for now
@@ -1599,6 +1620,24 @@ struct Spirv_Builder {
         }
         case spv::Op::OpSelectionMerge: {
           cur_merge_id = (int32_t)word1;
+          break;
+        }
+        case spv::Op::OpSwitch: {
+          // Only trivial switches are supported
+          ASSERT_ALWAYS(WordCount == 3);
+          u32 selector_id = word1;
+          u32 default_id  = word2;
+          // branches reference labels that haven't been created yet
+          // So we just fix this up later
+          deferred_branches.push_back({.bb          = cur_bb,
+                                       .cond_id     = 0,
+                                       .true_id     = default_id,
+                                       .false_id    = 0,
+                                       .merge_id    = 0,
+                                       .continue_id = 0});
+          // Terminate current basic block
+          cur_bb = NULL;
+          llvm_builder.release();
           break;
         }
         case spv::Op::OpBranch: {
@@ -1845,9 +1884,12 @@ struct Spirv_Builder {
             //              llvm_phi->addIncoming(value, parent_bb);
             //            }
             //            deferred_per_lane_phi.push_back({llvm_phi});
-            llvm::Value *dummy_value = llvm::UndefValue::get(result_type);
+            llvm::Value *dummy_value =
+                new llvm::AllocaInst(result_type, 0, "phi_to_alloca", allocas_bb);
+
+            // llvm_builder->CreateBitCast(llvm_builder->CreateCall(spv_dummy_call), result_type);
             dummy_values.push_back(dummy_value);
-            llvm_values_per_lane[k][res_id] = dummy_value;
+            llvm_values_per_lane[k][res_id] = llvm_builder->CreateLoad(dummy_value);
           }
           deferred_phis[cur_bb].push_back({.bb           = cur_bb,
                                            .vars         = vars,
@@ -3025,7 +3067,6 @@ struct Spirv_Builder {
         case spv::Op::OpAtomicUMax:
         case spv::Op::OpAtomicAnd:
         case spv::Op::OpAtomicXor:
-        case spv::Op::OpSwitch:
         case spv::Op::OpLifetimeStart:
         case spv::Op::OpLifetimeStop:
         case spv::Op::OpGroupAsyncCopy:
@@ -3370,13 +3411,17 @@ struct Spirv_Builder {
         args[0] = state_ptr;
         args[1] = new llvm::LoadInst(mask_t, cur_mask, "mask", src);
         for (auto &item : wbb.in_args) {
-          ASSERT_ALWAYS(contains(shared_values_stash, item.first));
-          llvm::Value *      inst   = shared_values_stash[item.first];
-          llvm::PointerType *ptr_ty = llvm::dyn_cast<llvm::PointerType>(inst->getType());
-          NOTNULL(ptr_ty);
-          args[item.second] =
-              new llvm::LoadInst(ptr_ty->getPointerElementType(), inst,
-                                 "param_" + bb_fun->getArg(item.second)->getName(), src);
+          if (contains(shared_values_stash, item.first)) {
+            ASSERT_ALWAYS(contains(shared_values_stash, item.first));
+            llvm::Value *      inst   = shared_values_stash[item.first];
+            llvm::PointerType *ptr_ty = llvm::dyn_cast<llvm::PointerType>(inst->getType());
+            NOTNULL(ptr_ty);
+            args[item.second] =
+                new llvm::LoadInst(ptr_ty->getPointerElementType(), inst,
+                                   "param_" + bb_fun->getArg(item.second)->getName(), src);
+          } else {
+            args[item.second] = item.first;
+          }
         }
         for (auto &item : wbb.out_args) {
           ASSERT_ALWAYS(contains(shared_values_stash, item.first));
@@ -3484,16 +3529,14 @@ struct Spirv_Builder {
         llvm::BasicBlock *mirror_bb = llvm::BasicBlock::Create(c, "pseudo_" + bb->getName());
         mirror_bb->insertInto(cur_fun);
 
-        if (contains(deferred_phis, bb)) {
-          for (auto &j : deferred_phis[bb]) {
-            kto(opt_subgroup_size) {
-              args.push_back(j.dummy_values[k]->getType());
-              wbb.in_args[j.dummy_values[k]] = (u32)args.size() - 1;
-              used_foreign_values.insert(j.dummy_values[k]);
-              shared_values.insert(j.dummy_values[k]);
-            }
-          }
-        }
+        //        if (contains(deferred_phis, bb)) {
+        //          for (auto &j : deferred_phis[bb]) {
+        //            kto(opt_subgroup_size) {
+        //              args.push_back(j.result_type);
+        //              wbb.in_args[j.dummy_values[k]] = (u32)args.size() - 1;
+        //            }
+        //          }
+        //        }
         char tmp_buf[0x100];
         snprintf(tmp_buf, sizeof(tmp_buf), "deinlined_%s", bb->getName().str().c_str());
         llvm::Function *fun =
@@ -3514,6 +3557,7 @@ struct Spirv_Builder {
 
         //        store_mask->insertBefore(&bb->front());
         //        this_mask->insertBefore(store_mask);
+        llvm::UnreachableInst *unreach = NULL;
         // Replace state ptr
         for (llvm::Instruction &inst : *bb) {
           ito(inst.getNumOperands()) {
@@ -3522,6 +3566,10 @@ struct Spirv_Builder {
             } else if (inst.getOperand(i) == cur_mask) {
               inst.setOperand(i, this_mask);
             }
+          }
+          if (llvm::isa<llvm::UnreachableInst>(&inst)) {
+            ASSERT_ALWAYS(unreach == NULL);
+            unreach = llvm::dyn_cast<llvm::UnreachableInst>(&inst);
           }
         }
         // Store locals to the arguments
@@ -3554,6 +3602,10 @@ struct Spirv_Builder {
             //            }
           }
         }
+        if (unreach != NULL) {
+          unreach->removeFromParent();
+          unreach->deleteValue();
+        }
         llvm::ReturnInst::Create(c, NULL, bb);
         wbb.fun         = fun;
         wrapped_bbs[bb] = wbb;
@@ -3561,6 +3613,48 @@ struct Spirv_Builder {
 
         return fun;
       };
+      for (auto &item : deferred_phis) {
+        llvm::BasicBlock *bb = item.first;
+        for (auto &j : item.second) {
+
+          ito(j.vars.size()) {
+            llvm::SmallVector<llvm::Value *, 64> values;
+            llvm::SmallVector<llvm::Value *, 64> addresses;
+            llvm::BasicBlock *                   parent_bb = llvm_labels[j.vars[i].second];
+            kto(opt_subgroup_size) {
+
+              llvm::Value *value = llvm_values_per_lane[k][j.vars[i].first];
+
+              values.push_back(value);
+              addresses.push_back(j.dummy_values[k]);
+              //              new llvm::StoreInst(value, j.dummy_values[k], parent_bb);
+            }
+            masked_store(values, addresses, parent_bb);
+          }
+
+          //            llvm::PHINode *llvm_phi =
+          //                llvm::PHINode::Create(j.result_type, (u32)j.vars.size(), "phi",
+          //                local_cfg[bb]);
+          //            ito(j.vars.size()) {
+          //              llvm::Value *     value     = llvm_values_per_lane[k][j.vars[i].first];
+          //              llvm::BasicBlock *parent_bb = local_cfg[llvm_labels[j.vars[i].second]];
+          //              NOTNULL(parent_bb);
+          //              NOTNULL(value);
+          //              llvm_phi->addIncoming(value, parent_bb);
+          //            }
+          //            llvm::Value *dummy_value = j.dummy_values[k];
+          //            ASSERT_ALWAYS(contains(wrapped_bbs, bb));
+          //            WrappedBB &wbb = wrapped_bbs[bb];
+          //            if (contains(wbb.in_args, dummy_value)) {
+          //              wbb.in_args[llvm_phi] = wbb.in_args[dummy_value];
+          //              wbb.in_args.erase(dummy_value);
+          //            }
+          //            dummy_value->replaceAllUsesWith(llvm_phi);
+
+          //            llvm_phi->insertBefore(local_cfg[bb]->getFirstNonPHI());
+        }
+      }
+
       // Wrap each basic block in a function
       for (llvm::BasicBlock *bb : bbs) {
         wrap_bb(bb);
@@ -3576,28 +3670,12 @@ struct Spirv_Builder {
           }
         } else if (llvm::Argument *arg = llvm::dyn_cast<llvm::Argument>(val)) {
           new llvm::StoreInst(val, shared_values_stash[val], allocas_bb);
+        } else {
+          TRAP;
         }
       }
       for (llvm::BasicBlock *bb : bbs) {
         call_bb(local_cfg[bb], bb);
-      }
-      for (auto &item : deferred_phis) {
-        llvm::BasicBlock *bb = item.first;
-        for (auto &j : item.second) {
-          kto(opt_subgroup_size) {
-            llvm::PHINode *llvm_phi =
-                llvm::PHINode::Create(j.result_type, (u32)j.vars.size(), "phi");
-            ito(j.vars.size()) {
-              llvm::Value *     value     = llvm_values_per_lane[k][j.vars[i].first];
-              llvm::BasicBlock *parent_bb = local_cfg[llvm_labels[j.vars[i].second]];
-              NOTNULL(parent_bb);
-              NOTNULL(value);
-              llvm_phi->addIncoming(value, parent_bb);
-            }
-            j.dummy_values[k]->replaceAllUsesWith(llvm_phi);
-            llvm_phi->insertBefore(local_cfg[bb]->getFirstNonPHI());
-          }
-        }
       }
       struct CFG_Node {
         u32                                        id   = 0;
@@ -3838,7 +3916,7 @@ struct Spirv_Builder {
 
       // dst -> (src -> mask expression)
       std::map<llvm::BasicBlock *, llvm::Value *>                                mask_control;
-      std::map<llvm::BasicBlock *, std::pair<llvm::BasicBlock *, llvm::Value *>> backward_jumps;
+      std::map<llvm::BasicBlock *, std::pair<llvm::BasicBlock *, llvm::Value *>> loop_jumps;
 
       for (BranchCond &cb : deferred_branches) {
         llvm::BasicBlock *bb = cb.bb;
@@ -3859,7 +3937,7 @@ struct Spirv_Builder {
           dst_continue = llvm_labels[cb.continue_id];
         }
 
-        llvm_builder.reset(new llvm::IRBuilder<>(local_cfg[bb], llvm::ConstantFolder()));
+        llvm_builder.reset(new LLVM_IR_Builder_t(local_cfg[bb], llvm::NoFolder()));
         defer(llvm_builder.release());
         // Conditional branch
         if (cb.cond_id != 0) {
@@ -3877,30 +3955,33 @@ struct Spirv_Builder {
           }
           cond_mask = i1_vec_to_mask(i1_vec);
 
-          llvm::Value *old_mask  = llvm_builder->CreateLoad(cur_mask);
-          llvm::Value *true_mask = llvm_builder->CreateAnd(old_mask, cond_mask);
+          llvm::Value *old_mask  = llvm_builder->CreateLoad(cur_mask, "old_mask");
+          llvm::Value *true_mask = llvm_builder->CreateAnd(old_mask, cond_mask, "true_mask");
           llvm::Value *false_mask =
-              llvm_builder->CreateAnd(old_mask, llvm_builder->CreateNot(cond_mask));
+              llvm_builder->CreateAnd(old_mask, llvm_builder->CreateNot(cond_mask), "false_mask");
 
           if (node.next == dst_true) {
             new llvm::StoreInst(true_mask, cur_mask, local_cfg[bb]);
             ASSERT_ALWAYS(!contains(mask_control, dst_false));
             // backward jump
             if (bb_cfg[dst_false].id < bb_cfg[bb].id) {
-              backward_jumps[bb] = {dst_false, false_mask};
+              loop_jumps[bb] = {dst_false, false_mask};
+            } else {
+              mask_control[dst_false] = false_mask;
             }
-            mask_control[dst_false] = false_mask;
 
           } else if (node.next == dst_false) {
             new llvm::StoreInst(false_mask, cur_mask, local_cfg[bb]);
             ASSERT_ALWAYS(!contains(mask_control, dst_true));
-            mask_control[dst_true] = true_mask;
+
             // backward jump
             if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
-              backward_jumps[bb] = {dst_true, true_mask};
+              loop_jumps[bb] = {dst_true, true_mask};
+            } else {
+              mask_control[dst_true] = true_mask;
             }
+
           } else {
-            // What? we sort stuff in depth first no?
             UNIMPLEMENTED;
           }
           //        call_bb(bb, true_mask, dst_true, flow_control_bb);
@@ -3919,9 +4000,12 @@ struct Spirv_Builder {
           //                                   create_masked_jump(dst_false, true_mask), all_true,
           //                                   flow_control_bb);
         } else { // unconditional branch
-                 //          if (node.next == dst_true)
-                 //            llvm::BranchInst::Create(local_cfg[dst_true], local_cfg[bb]);
-                 //          else {
+          if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
+            loop_jumps[bb] = {dst_true, NULL};
+          }
+          //          if (node.next == dst_true)
+          //            llvm::BranchInst::Create(local_cfg[dst_true], local_cfg[bb]);
+          //          else {
 
           //          }
         }
@@ -3943,10 +4027,28 @@ struct Spirv_Builder {
         //                                   create_masked_jump(dst_false, true_mask), all_true,
         //                                   flow_control_bb);
         //        } else {
-        if (contains(mask_control, node.next)) {
-          new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
+
+        if (contains(loop_jumps, bb)) {
+          llvm::Value *mask      = new llvm::LoadInst(mask_t, cur_mask, "mask", local_cfg[bb]);
+          llvm::Value *all_false = new llvm::ICmpInst(
+              *local_cfg[bb], llvm::ICmpInst::Predicate::ICMP_EQ, mask, llvm_get_constant_i64(0));
+          auto &item = loop_jumps[bb];
+          if (item.second != NULL) {
+            ASSERT_ALWAYS(contains(mask_control, node.next));
+            llvm::BranchInst::Create(
+                create_masked_jump(local_cfg[node.next], mask_control[node.next]),
+                create_masked_jump(local_cfg[item.first], item.second), all_false, local_cfg[bb]);
+          } else {
+            llvm::BranchInst::Create(
+                create_masked_jump(local_cfg[node.next], mask_control[node.next]),
+                local_cfg[item.first], all_false, local_cfg[bb]);
+          }
+        } else {
+          if (contains(mask_control, node.next)) {
+            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
+          }
+          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
         }
-        llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
         //        }
       }
       for (llvm::BasicBlock *item : terminators) {
@@ -3959,7 +4061,9 @@ struct Spirv_Builder {
               spv_disable_lanes,
               {state_ptr, new llvm::LoadInst(mask_t, cur_mask, "old_mask", local_cfg[item])},
               "return", local_cfg[item]);
-
+          if (contains(mask_control, node.next)) {
+            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[item]);
+          }
           llvm::BranchInst::Create(global_terminator, local_cfg[node.next], all_lanes_are_off,
                                    local_cfg[item]);
         }
@@ -4068,13 +4172,14 @@ struct Spirv_Builder {
           }
         }
       };
-      dump_cfg();
+//          dump_cfg();
     finish_function:
       continue;
     }
-    module->dump();
-    exit(1);
-    NOCOMMIT;
+    //  module->dump();
+    //  exit(1);
+    //  NOCOMMIT;
+
     // @llvm/finish_module
     // Make a function that returns the size of private space required by this
     // module
@@ -4115,8 +4220,8 @@ struct Spirv_Builder {
       llvm::Value *ptr_arg = get_export_items->getArg(0);
       NOTNULL(ptr_arg);
       llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_export_items);
-      std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
-      llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
+      std::unique_ptr<LLVM_IR_Builder_t> llvm_builder;
+      llvm_builder.reset(new LLVM_IR_Builder_t(bb, llvm::NoFolder()));
 
       for (auto &item : struct_types) {
         u32 i = 0;
@@ -4157,8 +4262,8 @@ struct Spirv_Builder {
       llvm::Value *ptr_arg = get_input_slots->getArg(0);
       NOTNULL(ptr_arg);
       llvm::BasicBlock *                 bb = llvm::BasicBlock::Create(c, "entry", get_input_slots);
-      std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
-      llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
+      std::unique_ptr<LLVM_IR_Builder_t> llvm_builder;
+      llvm_builder.reset(new LLVM_IR_Builder_t(bb, llvm::NoFolder()));
       u32 k = 0;
       ito(input_sizes.size()) {
         if (input_sizes[i] != 0) {
@@ -4199,8 +4304,8 @@ struct Spirv_Builder {
       llvm::Value *ptr_arg = get_output_slots->getArg(0);
       NOTNULL(ptr_arg);
       llvm::BasicBlock *bb = llvm::BasicBlock::Create(c, "entry", get_output_slots);
-      std::unique_ptr<llvm::IRBuilder<>> llvm_builder;
-      llvm_builder.reset(new llvm::IRBuilder<>(bb, llvm::ConstantFolder()));
+      std::unique_ptr<LLVM_IR_Builder_t> llvm_builder;
+      llvm_builder.reset(new LLVM_IR_Builder_t(bb, llvm::NoFolder()));
       u32 k = 0;
       ito(output_sizes.size()) {
         if (output_sizes[i] != 0) {
@@ -4263,6 +4368,7 @@ struct Spirv_Builder {
       if (opt_dump) {
         FPM->add(create_my_dump_pass(code_hash));
       }
+      FPM->add(llvm::createFunctionInliningPass());
       FPM->add(llvm::createInstructionCombiningPass());
       FPM->add(llvm::createReassociatePass());
       FPM->add(llvm::createGVNPass());
@@ -4346,7 +4452,13 @@ struct Spirv_Builder {
         FPM->add(create_my_dump_pass(code_hash));
       }
       FPM->run(*module);
-
+      // @Debug
+      if (0) {
+        for (auto &fun : module->functions()) {
+          if (stref_find(stref_s(fun.getName().str().c_str()), stref_s("spv_main")) >= 0)
+            fun.viewCFG();
+        }
+      }
       return llvm::orc::ThreadSafeModule(std::move(module), std::move(context));
       //      fprintf(stdout, "Module verified!\n");
     }
@@ -4704,6 +4816,15 @@ struct Spirv_Builder {
         CLASSIFY(c.id, DeclTy::ConstantComposite);
         break;
       }
+      case spv::Op::OpUndef: {
+        Constant c;
+        c.id             = word2;
+        c.type           = word1;
+        c.i32_val        = 0;
+        constants[word2] = c;
+        CLASSIFY(c.id, DeclTy::Constant);
+        break;
+      }
       // TODO: Do we care about those?
       case spv::Op::OpCapability:
       case spv::Op::OpExtension:
@@ -4715,7 +4836,6 @@ struct Spirv_Builder {
         // SKIP
         break;
       // Trap those
-      case spv::Op::OpUndef:
       case spv::Op::OpSourceContinued:
       case spv::Op::OpString:
       case spv::Op::OpLine:

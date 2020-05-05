@@ -54,7 +54,7 @@ void test_launch(void *_printf) {
     info.builtin_output = (uint8_t*)(void*)dummy;
     info.print_fn = _printf;
     info.wave_width = WAVE_WIDTH;
-    spv_main(&info, 0b1111);
+    spv_main(&info, ~0ull);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
