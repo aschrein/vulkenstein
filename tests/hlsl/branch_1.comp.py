@@ -8,7 +8,15 @@ const uint32_t NUM_INVOCATIONS = 128;
 
 void spv_main(void *, uint64_t);
 uint get_num(uint t) {
-  if (t < 888) {
+  while (t < 666) {
+    if (t == 0) {
+      t += 1;
+      continue;
+    }
+    t = t + 1;
+  }
+  return t;
+  //if (t < 888) {
   //   while (t < 666) {
   //     t = t + 1;
   //     if (t == 444)
@@ -22,17 +30,17 @@ uint get_num(uint t) {
   //   }
   //  t = t / 44;
   //  return t;
-    return 555;
-  } else {
-    // return t + t * t * t;
-    return 666;
-  }
+  //  //return 555;
+  //} else {
+  //  return t + t * t * t;
+  //  //return 666;
+  //}
 }
 void test_launch(void *_printf) {
   uint32_t g_buf_0[NUM_INVOCATIONS];
   uint32_t g_buf_1[NUM_INVOCATIONS];
   for (uint32_t i = 1; i < NUM_INVOCATIONS; i++) {
-    g_buf_1[i] = i * 100 + 11;
+    g_buf_1[i] = i;
   }
   Invocation_Info info;
   for (uint32_t i = 1; i < sizeof(info); i++)
@@ -64,7 +72,8 @@ void test_launch(void *_printf) {
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS/WAVE_WIDTH; i++) {
     info.invocation_id = (uint3){i, 0, 0};
-    spv_main(&info, ~0ull);
+    info.enabled_lanes = (1 << WAVE_WIDTH) - 1;
+    spv_main(&info, (1 << WAVE_WIDTH) - 1);
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
@@ -81,7 +90,15 @@ r"""
 [[vk::binding(1, 0)]] RWBuffer <uint> g_buf_1;
 
 uint get_num(uint t) {
-  if (t < 888) {
+  while (t < 666) {
+    if (t == 0) {
+      t += 1;
+      continue;
+    }
+    t = t + 1;
+  }
+  return t;
+  //if (t < 888) {
   //   while (t < 666) {
   //     t = t + 1;
   //     if (t == 444)
@@ -95,11 +112,11 @@ uint get_num(uint t) {
   //   }
   //  t = t / 44;
   //  return t;
-    return 555;
-  } else {
-    // return t + t * t * t;
-    return 666;
-  }
+  //  //return 555;
+  //} else {
+  //  return t + t * t * t;
+  //  //return 666;
+  //}
 }
 
 [numthreads(4, 1, 1)]

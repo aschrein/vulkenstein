@@ -357,7 +357,7 @@ struct Spirv_Builder {
   bool opt_debug_comments = false;
   bool opt_debug_info     = false;
   bool opt_dump           = true;
-  bool opt_llvm_dump      = true;
+  bool opt_llvm_dump      = false;
   //  bool opt_deinterleave_attributes = false;
 
   //////////////////////
@@ -491,8 +491,7 @@ struct Spirv_Builder {
     ASSERT_ALWAYS(module);
     // Hide all stdlib functions
     for (llvm::Function &fun : module->functions()) {
-      if (fun.isDeclaration())
-        continue;
+      if (fun.isDeclaration()) continue;
       fun.setLinkage(llvm::GlobalValue::LinkageTypes::PrivateLinkage);
       fun.setVisibility(llvm::GlobalValue::VisibilityTypes::DefaultVisibility);
     }
@@ -1056,6 +1055,7 @@ struct Spirv_Builder {
       std::vector<llvm::BasicBlock *> bbs;
       std::set<llvm::Value *>         conditions;
       std::set<llvm::BasicBlock *>    terminators;
+      std::set<llvm::BasicBlock *>    unreachables;
       llvm::BasicBlock *              entry_bb = NULL;
 
       ///////////////////////////////////////////////
@@ -1131,7 +1131,8 @@ struct Spirv_Builder {
         }
       };
       auto save_enabled_lanes_mask = [&]() {
-        llvm::Value *mask   = llvm_builder->CreateCall(spv_get_enabled_lanes, {state_ptr}, "enabled_lanes");
+        llvm::Value *mask =
+            llvm_builder->CreateCall(spv_get_enabled_lanes, {state_ptr}, "enabled_lanes");
         llvm::Value *alloca = llvm_builder->CreateAlloca(mask_t);
         llvm_builder->CreateStore(mask, alloca);
         return alloca;
@@ -2904,7 +2905,7 @@ struct Spirv_Builder {
         case spv::Op::OpUnreachable: {
           NOTNULL(cur_bb);
           new llvm::UnreachableInst(c, cur_bb);
-          terminators.insert(cur_bb);
+          unreachables.insert(cur_bb);
           // Terminate current basic block
           cur_bb = NULL;
           llvm_builder.release();
@@ -3361,6 +3362,17 @@ struct Spirv_Builder {
         }
         }
       }
+      // Remove unreachables
+      {
+        std::vector<llvm::BasicBlock *> new_bbs;
+        for (llvm::BasicBlock *bb : bbs) {
+          if (contains(unreachables, bb)) {
+          } else {
+            new_bbs.push_back(bb);
+          }
+        }
+        bbs = new_bbs;
+      }
       // @llvm/finish_function
       llvm::BasicBlock *global_terminator = llvm::BasicBlock::Create(c, "terminator", cur_fun);
       llvm::ReturnInst::Create(c, global_terminator);
@@ -3429,24 +3441,6 @@ struct Spirv_Builder {
           args[item.second] = inst;
         }
         llvm::CallInst::Create(bb_fun, args, "", src);
-        //        // Dst Trampoline
-        //        llvm::BasicBlock *trampoline = llvm::BasicBlock::Create(c, "trampoline", cur_fun);
-        //        new llvm::StoreInst(mask, cur_mask, trampoline);
-        //        llvm::BranchInst::Create(dst, trampoline);
-
-        //        llvm::Value *old_mask  = new llvm::LoadInst(mask_t, cur_mask, "old_mask", src);
-        //        llvm::Value *all_false = new llvm::ICmpInst(*src,
-        //        llvm::ICmpInst::Predicate::ICMP_EQ, mask,
-        //                                                    llvm_get_constant_i64(0));
-
-        //        // Merge Trampoline
-        //        llvm::BasicBlock *merge_trampoline =
-        //            llvm::BasicBlock::Create(c, "merge_trampoline", cur_fun);
-        //        new llvm::StoreInst(old_mask, cur_mask, merge_trampoline);
-        //        llvm::BranchInst::Create(dst_merge, merge_trampoline);
-
-        //        llvm::BranchInst::Create(merge_trampoline, trampoline, all_false, src);
-        //        llvm::BranchInst::Create(merge_trampoline, dst);
       };
       auto wrap_bb = [&](llvm::BasicBlock *bb) {
         WrappedBB wbb;
@@ -3485,18 +3479,6 @@ struct Spirv_Builder {
               shared_values.insert(used_arg);
             }
           }
-          //          if (!contains(used_instructions, &inst))
-          //            continue;
-          //          for (auto &use : used_instructions[&inst]) {
-          //            llvm::Instruction *used_inst = use.first;
-          //            NOTNULL(used_inst);
-          //            if (used_inst->getParent() != bb &&
-          //                !contains(used_foreign_values, used_inst)) {
-          //              args.push_back(used_inst->getType());
-          //              val_to_arg_id.push_back({.val = used_inst, .arg_id = (u32)args.size()
-          //              - 1}); used_foreign_values.insert(used_inst);
-          //            }
-          //          }
         }
 
         u32 out_args_begin = args.size();
@@ -3511,14 +3493,6 @@ struct Spirv_Builder {
               break;
             }
           }
-          //          if (contains(used_instructions, &inst)) {
-          //            for (auto &item : used_instructions[&inst]) {
-          //              if (item.first->getParent() != bb) {
-          //                has_foreign_users = true;
-          //                break;
-          //              }
-          //            }
-          //          }
           if (has_foreign_users) {
             args.push_back(llvm::PointerType::get(inst.getType(), 0));
             wbb.out_args[&inst] = (u32)args.size() - 1;
@@ -3528,22 +3502,11 @@ struct Spirv_Builder {
 
         llvm::BasicBlock *mirror_bb = llvm::BasicBlock::Create(c, "pseudo_" + bb->getName());
         mirror_bb->insertInto(cur_fun);
-
-        //        if (contains(deferred_phis, bb)) {
-        //          for (auto &j : deferred_phis[bb]) {
-        //            kto(opt_subgroup_size) {
-        //              args.push_back(j.result_type);
-        //              wbb.in_args[j.dummy_values[k]] = (u32)args.size() - 1;
-        //            }
-        //          }
-        //        }
         char tmp_buf[0x100];
         snprintf(tmp_buf, sizeof(tmp_buf), "deinlined_%s", bb->getName().str().c_str());
         llvm::Function *fun =
             llvm::Function::Create(llvm::FunctionType::get(llvm::Type::getVoidTy(c), args, false),
                                    llvm::GlobalValue::InternalLinkage, tmp_buf, module.get());
-        //        llvm::Instruction *bb_begin  = &bb->front();
-
         bb->insertInto(fun);
         llvm::Instruction *this_mask = NULL;
         if (bb->begin() == bb->end()) {
@@ -3572,6 +3535,8 @@ struct Spirv_Builder {
             unreach = llvm::dyn_cast<llvm::UnreachableInst>(&inst);
           }
         }
+        // No unreachable bbs
+        ASSERT_ALWAYS(unreach == NULL);
         // Store locals to the arguments
         for (auto &item : wbb.out_args) {
           new llvm::StoreInst(item.first, fun->getArg(item.second), bb);
@@ -3593,13 +3558,6 @@ struct Spirv_Builder {
                 inst.setOperand(i, arg);
               }
             }
-            //            for (llvm::Use &use : inst.uses()) {
-            //              llvm::Instruction *used_inst =
-            //              llvm::dyn_cast<llvm::Instruction>(use.getUser()); if (used_inst == val)
-            //              {
-            //                for ()
-            //              }
-            //            }
           }
         }
         if (unreach != NULL) {
@@ -3613,6 +3571,8 @@ struct Spirv_Builder {
 
         return fun;
       };
+
+      // Replace phi nodes with regular load/stores
       for (auto &item : deferred_phis) {
         llvm::BasicBlock *bb = item.first;
         for (auto &j : item.second) {
@@ -3631,34 +3591,15 @@ struct Spirv_Builder {
             }
             masked_store(values, addresses, parent_bb);
           }
-
-          //            llvm::PHINode *llvm_phi =
-          //                llvm::PHINode::Create(j.result_type, (u32)j.vars.size(), "phi",
-          //                local_cfg[bb]);
-          //            ito(j.vars.size()) {
-          //              llvm::Value *     value     = llvm_values_per_lane[k][j.vars[i].first];
-          //              llvm::BasicBlock *parent_bb = local_cfg[llvm_labels[j.vars[i].second]];
-          //              NOTNULL(parent_bb);
-          //              NOTNULL(value);
-          //              llvm_phi->addIncoming(value, parent_bb);
-          //            }
-          //            llvm::Value *dummy_value = j.dummy_values[k];
-          //            ASSERT_ALWAYS(contains(wrapped_bbs, bb));
-          //            WrappedBB &wbb = wrapped_bbs[bb];
-          //            if (contains(wbb.in_args, dummy_value)) {
-          //              wbb.in_args[llvm_phi] = wbb.in_args[dummy_value];
-          //              wbb.in_args.erase(dummy_value);
-          //            }
-          //            dummy_value->replaceAllUsesWith(llvm_phi);
-
-          //            llvm_phi->insertBefore(local_cfg[bb]->getFirstNonPHI());
         }
       }
 
       // Wrap each basic block in a function
+      // This is going to build a table of export/import(shared) values fro bbs
       for (llvm::BasicBlock *bb : bbs) {
         wrap_bb(bb);
       }
+
       // Allocate a storage for each shared variable
       for (llvm::Value *item : shared_values) {
         llvm::Value *val = item;
@@ -3674,9 +3615,14 @@ struct Spirv_Builder {
           TRAP;
         }
       }
+
+      // genenrates load stores for import/export variables at call site
       for (llvm::BasicBlock *bb : bbs) {
         call_bb(local_cfg[bb], bb);
       }
+
+      // node per bb
+      // keeps information needed to handle masks
       struct CFG_Node {
         u32                                        id   = 0;
         llvm::BasicBlock *                         prev = NULL;
@@ -3690,7 +3636,9 @@ struct Spirv_Builder {
 
       local_cfg[allocas_bb]        = allocas_bb;
       local_cfg[global_terminator] = global_terminator;
+
       // Build cfg
+      // We don't have anything but branches to govern our CFG
       for (BranchCond &cb : deferred_branches) {
         llvm::BasicBlock *bb = cb.bb;
         ASSERT_ALWAYS(bb != NULL);
@@ -3716,19 +3664,31 @@ struct Spirv_Builder {
         bb_cfg[bb].out_bbs.insert(dst_true);
         bb_cfg[dst_true].in_bbs.insert(bb);
       }
-      // @TODO: cleanup
-      //////////////////////////////////
-      /// 10 IQ brain doin' the moves //
-      //////////////////////////////////
 
-      // build dominator tree
-      // bb dominated by [...]
-      //      std::map<llvm::BasicBlock *, std::set<llvm::BasicBlock *>>      dom_tree;
-      std::set<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>>     dom_tree;
-      std::function<bool(llvm::BasicBlock * a, llvm::BasicBlock * b)> dominates =
+      // Remove unreachables
+      {
+        for (llvm::BasicBlock *bb : bbs) {
+          if (contains(unreachables, bb)) {
+            // Make sure it's really unreachable
+            // TODO: Remove branhces to unreachable or emit llvm analog
+            // they might be actually important to convey constraints
+            ASSERT_ALWAYS(bb_cfg[bb].in_bbs.size() == 0);
+            bb_cfg.erase(bb);
+            bb->deleteValue();
+          } else { // do nothin
+          }
+        }
+      }
+
+      // reachable relation query. uses a cache to amortize stuff
+      // we need it to topo sort the CFG for linearization
+      //
+      // bb reachable from [...]
+      std::set<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>>     reachable_cache;
+      std::function<bool(llvm::BasicBlock * a, llvm::BasicBlock * b)> reachable =
           [&](llvm::BasicBlock *a, llvm::BasicBlock *b) {
             if (a == b) return true;
-            if (contains(dom_tree, std::pair<llvm::BasicBlock *, llvm::BasicBlock *>{b, a}))
+            if (contains(reachable_cache, std::pair<llvm::BasicBlock *, llvm::BasicBlock *>{b, a}))
               return true;
             std::set<llvm::BasicBlock *>   visited;
             std::deque<llvm::BasicBlock *> to_visit;
@@ -3740,63 +3700,77 @@ struct Spirv_Builder {
               if (contains(visited, cur)) continue;
               visited.insert(cur);
               for (llvm::BasicBlock *in : bb_cfg[cur].in_bbs) {
-                dom_tree.insert({b, in});
+                reachable_cache.insert({b, in});
                 if (in == a) {
                   return true;
                 }
                 to_visit.push_back(in);
               }
             }
-            //            ASSERT_ALWAYS(contains(bb_cfg, a));
-            //            if (bb_cfg[a].out_bbs.size() == 0)
-            //              return false;
-            //            for (llvm::BasicBlock *out : bb_cfg[a].out_bbs) {
-            //              if (b == out) {
-            //                dom_tree.insert({b, a});
-            //                return true;
-            //              }
-            //            }
-
-            //            for (llvm::BasicBlock *out : bb_cfg[a].out_bbs) {
-            //              if (dominates(out, b)) {
-            //                dom_tree.insert({b, a});
-            //                return true;
-            //              }
-            //            }
             return false;
           };
-      //      {
-      //        for (llvm::BasicBlock *bb : bbs) {
-      //          for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
-      //          }
-      //        }
-      //      }
-      //      {
-      //        std::set<llvm::BasicBlock *>   visited;
-      //        std::deque<llvm::BasicBlock *> to_visit;
-      //        to_visit.push_back(entry_bb);
 
-      //        while (!to_visit.empty()) {
-      //          llvm::BasicBlock *cur = to_visit.front();
-      //          to_visit.pop_front();
-      //          if (contains(visited, cur)) continue;
-      //          // insert all visited so far as dominators
-      //          for (llvm::BasicBlock *v : visited) {
-      //            dom_tree[cur].insert(v);
-      //          }
-      //          visited.insert(cur);
-      //          for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
-      //          }
-      //        }
-      //      }
+      //
+      // Now we gotta linearize CFG
+      // it's easy just sort bbs in topological order so that
+      // every bb comes before all bbs that are reachable from it
+      //
+      //       |
+      //       A
+      //      / \   ===>  A -> B -> C -> D
+      //     B  C
+      //      \ /
+      //       D
+      //       |
+      //
+      // Except there are loops. we allow only reducible loops
+      // the ones with only one entry point
+      //
+      //   +--A <-+
+      //   |  |   |
+      //   |  C---+
+      //   |  |
+      //   B  D      where C could be a nested CFG with loops
+      //             (A, C) is a strognly connected component here - a loop
+      //
+      //  We also want to detect nested loops
+      //
+      //          |
+      //    +-----D <----+
+      //    |     |      |
+      //    |     |      |
+      //    |     |      |
+      //    |     A <-+  |
+      //    |     |   |  |
+      //    |     C---+  |
+      //    |            |
+      //    |            |
+      //    |            |
+      //    B------------+
+      //    |
+      //
+      //-> D -> A -> C -> B-->
+      //   ^    ^____|    |   one way of linearization
+      //   |              |
+      //   |______________|
+
       // detect loops
+      // Linearized loop is a sequence of commands with 'back' jumps
       struct Loop {
+        // parts of the strongly connected component
         std::set<llvm::BasicBlock *> bbs;
+        // Reducible loops must have only one entry
+        // a node that has an input connection outside the loop
         std::set<llvm::BasicBlock *> entries;
+        // a node that has an output connection outside the loop
+        // could be an entry
         std::set<llvm::BasicBlock *> escapes;
       };
       std::vector<Loop>                 loops;
       std::map<llvm::BasicBlock *, u32> looped_bbs;
+
+      {
+      // first pass: detect mutually reachable nodes
       {
         std::set<llvm::BasicBlock *>   visited;
         std::deque<llvm::BasicBlock *> to_visit;
@@ -3809,7 +3783,7 @@ struct Spirv_Builder {
           for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
             // loop detected
             if (contains(visited, out)) {
-              if (!dominates(out, cur)) continue;
+              if (!reachable(out, cur)) continue;
               if (!contains(looped_bbs, out)) {
                 if (contains(looped_bbs, cur)) {
                   looped_bbs[out] = looped_bbs[cur];
@@ -3828,10 +3802,12 @@ struct Spirv_Builder {
             }
           }
         }
-        // expand loop
+        }
+        // second pass: expand loop
         ito(loops.size()) {
-          Loop &                         loop = loops[i];
-          std::set<llvm::BasicBlock *>   reachable;
+          Loop &loop = loops[i];
+          // strongly connected component
+          std::set<llvm::BasicBlock *>   scc;
           std::deque<llvm::BasicBlock *> to_visit;
           for (llvm::BasicBlock *bb : loop.bbs) {
             to_visit.push_back(bb);
@@ -3839,17 +3815,21 @@ struct Spirv_Builder {
           while (to_visit.size() != 0) {
             llvm::BasicBlock *cur = to_visit.front();
             to_visit.pop_front();
-            if (contains(reachable, cur)) continue;
-            reachable.insert(cur);
+            if (contains(scc, cur)) continue;
+            scc.insert(cur);
             for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
-              if (bb_cfg[out].in_bbs.size() == 1) to_visit.push_back(out);
+              if (bb_cfg[out].in_bbs.size() == 1 &&
+                  // there's a loop reachable(a, b) both reachable(b, a) are true
+                  reachable(out, cur))
+                to_visit.push_back(out);
             }
           }
-          for (llvm::BasicBlock *bb : reachable) {
+          for (llvm::BasicBlock *bb : scc) {
+            // different loops are disjoint
             ASSERT_ALWAYS(!contains(looped_bbs, bb) || looped_bbs[bb] == i);
             looped_bbs[bb] = i;
           }
-          loop.bbs = reachable;
+          loop.bbs = scc;
           for (llvm::BasicBlock *bb : loop.bbs) {
             bool entry  = false;
             bool escape = false;
@@ -3866,7 +3846,14 @@ struct Spirv_Builder {
             if (entry) loop.entries.insert(bb);
             if (escape) loop.escapes.insert(bb);
           }
+          // reducible loops have 1 entry
+          // ASSERT_ALWAYS(loop.entries.size() == 1);
         }
+        // Next step is splitting loops
+        // we might actually have nested loops so we need
+        // to detect minimal strongly connected components
+        // and remove them from the parent loop
+        {}
         // @Debug
         if (0) {
           for (auto &item : looped_bbs) {
@@ -3876,6 +3863,18 @@ struct Spirv_Builder {
           fflush(stdout);
         }
       }
+
+      // The reason why we cant' just sort based on trivial travers a la breadth first is this:
+      //
+      //    A
+      //   / \
+      //  B  |  in breadth first C could be placed before B
+      //  \ /
+      //   C
+      //        so we actually need topological sort (loop aware)
+      //          in loops the jump always goes to the block that is
+      //        earlier in the path from entry to the jumping node
+      //
       // sort cfg
       {
         std::vector<llvm::BasicBlock *> sorted_bbs;
@@ -3887,6 +3886,7 @@ struct Spirv_Builder {
           for (llvm::BasicBlock *bb : bbs) {
             to_visit.push_back(bb);
           }
+//            to_visit.push_back(entry_bb);
         }
         while (!to_visit.empty()) {
           llvm::BasicBlock *bb = to_visit.front();
@@ -3903,6 +3903,10 @@ struct Spirv_Builder {
             to_visit.push_back(bb);
             continue;
           }
+//          for (llvm::BasicBlock *out : bb_cfg[bb].out_bbs) {
+//            to_visit.push_front(out);
+//          }
+          //
           visited.insert(bb);
           sorted_bbs.push_back(bb);
         }
@@ -3914,160 +3918,161 @@ struct Spirv_Builder {
         ito(sorted_bbs.size()) { bb_cfg[sorted_bbs[i]].id = i; }
       }
 
+      // Finally emit branches with mask controls
       // dst -> (src -> mask expression)
-      std::map<llvm::BasicBlock *, llvm::Value *>                                mask_control;
-      std::map<llvm::BasicBlock *, std::pair<llvm::BasicBlock *, llvm::Value *>> loop_jumps;
+//      std::map<llvm::BasicBlock *, llvm::Value *>                                mask_control;
+//      std::map<llvm::BasicBlock *, std::pair<llvm::BasicBlock *, llvm::Value *>> loop_jumps;
 
-      for (BranchCond &cb : deferred_branches) {
-        llvm::BasicBlock *bb = cb.bb;
-        ASSERT_ALWAYS(bb != NULL);
-        llvm::BasicBlock *dst_true = llvm_labels[cb.true_id];
-        NOTNULL(dst_true);
-        CFG_Node &        node         = bb_cfg[bb];
-        llvm::BasicBlock *dst_false    = NULL;
-        llvm::BasicBlock *dst_merge    = NULL;
-        llvm::BasicBlock *dst_continue = NULL;
-        if (cb.false_id != 0) {
-          dst_false = llvm_labels[cb.false_id];
-        }
-        if (cb.merge_id != 0) {
-          dst_merge = llvm_labels[cb.merge_id];
-        }
-        if (cb.continue_id != 0) {
-          dst_continue = llvm_labels[cb.continue_id];
-        }
+//      for (BranchCond &cb : deferred_branches) {
+//        llvm::BasicBlock *bb = cb.bb;
+//        ASSERT_ALWAYS(bb != NULL);
+//        llvm::BasicBlock *dst_true = llvm_labels[cb.true_id];
+//        NOTNULL(dst_true);
+//        CFG_Node &        node         = bb_cfg[bb];
+//        llvm::BasicBlock *dst_false    = NULL;
+//        llvm::BasicBlock *dst_merge    = NULL;
+//        llvm::BasicBlock *dst_continue = NULL;
+//        if (cb.false_id != 0) {
+//          dst_false = llvm_labels[cb.false_id];
+//        }
+//        if (cb.merge_id != 0) {
+//          dst_merge = llvm_labels[cb.merge_id];
+//        }
+//        if (cb.continue_id != 0) {
+//          dst_continue = llvm_labels[cb.continue_id];
+//        }
 
-        llvm_builder.reset(new LLVM_IR_Builder_t(local_cfg[bb], llvm::NoFolder()));
-        defer(llvm_builder.release());
-        // Conditional branch
-        if (cb.cond_id != 0) {
-          llvm::Value *cond_mask = NULL;
-          llvm::Value *i1_vec    = llvm::UndefValue::get(
-              llvm::VectorType::get(llvm::Type::getInt1Ty(c), opt_subgroup_size));
-          kto(opt_subgroup_size) {
-            llvm::Instruction *src_cond =
-                llvm::dyn_cast<llvm::Instruction>(llvm_values_per_lane[k][cb.cond_id]);
-            NOTNULL(src_cond);
-            llvm::Value *cond = llvm_builder->CreateLoad(shared_values_stash[src_cond]);
-            NOTNULL(cond);
-            ASSERT_ALWAYS(cond->getType()->isIntegerTy());
-            i1_vec = llvm_builder->CreateInsertElement(i1_vec, cond, k);
-          }
-          cond_mask = i1_vec_to_mask(i1_vec);
+//        llvm_builder.reset(new LLVM_IR_Builder_t(local_cfg[bb], llvm::NoFolder()));
+//        defer(llvm_builder.release());
+//        // Conditional branch
+//        if (cb.cond_id != 0) {
+//          llvm::Value *cond_mask = NULL;
+//          llvm::Value *i1_vec    = llvm::UndefValue::get(
+//              llvm::VectorType::get(llvm::Type::getInt1Ty(c), opt_subgroup_size));
+//          kto(opt_subgroup_size) {
+//            llvm::Instruction *src_cond =
+//                llvm::dyn_cast<llvm::Instruction>(llvm_values_per_lane[k][cb.cond_id]);
+//            NOTNULL(src_cond);
+//            llvm::Value *cond = llvm_builder->CreateLoad(shared_values_stash[src_cond]);
+//            NOTNULL(cond);
+//            ASSERT_ALWAYS(cond->getType()->isIntegerTy());
+//            i1_vec = llvm_builder->CreateInsertElement(i1_vec, cond, k);
+//          }
+//          cond_mask = i1_vec_to_mask(i1_vec);
 
-          llvm::Value *old_mask  = llvm_builder->CreateLoad(cur_mask, "old_mask");
-          llvm::Value *true_mask = llvm_builder->CreateAnd(old_mask, cond_mask, "true_mask");
-          llvm::Value *false_mask =
-              llvm_builder->CreateAnd(old_mask, llvm_builder->CreateNot(cond_mask), "false_mask");
+//          llvm::Value *old_mask  = llvm_builder->CreateLoad(cur_mask, "old_mask");
+//          llvm::Value *true_mask = llvm_builder->CreateAnd(old_mask, cond_mask, "true_mask");
+//          llvm::Value *false_mask =
+//              llvm_builder->CreateAnd(old_mask, llvm_builder->CreateNot(cond_mask), "false_mask");
 
-          if (node.next == dst_true) {
-            new llvm::StoreInst(true_mask, cur_mask, local_cfg[bb]);
-            ASSERT_ALWAYS(!contains(mask_control, dst_false));
-            // backward jump
-            if (bb_cfg[dst_false].id < bb_cfg[bb].id) {
-              loop_jumps[bb] = {dst_false, false_mask};
-            } else {
-              mask_control[dst_false] = false_mask;
-            }
+//          if (node.next == dst_true) {
+//            new llvm::StoreInst(true_mask, cur_mask, local_cfg[bb]);
+//            ASSERT_ALWAYS(!contains(mask_control, dst_false));
+//            // backward jump
+//            if (bb_cfg[dst_false].id < bb_cfg[bb].id) {
+//              loop_jumps[bb] = {dst_false, false_mask};
+//            } else {
+//              mask_control[dst_false] = false_mask;
+//            }
 
-          } else if (node.next == dst_false) {
-            new llvm::StoreInst(false_mask, cur_mask, local_cfg[bb]);
-            ASSERT_ALWAYS(!contains(mask_control, dst_true));
+//          } else if (node.next == dst_false) {
+//            new llvm::StoreInst(false_mask, cur_mask, local_cfg[bb]);
+//            ASSERT_ALWAYS(!contains(mask_control, dst_true));
 
-            // backward jump
-            if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
-              loop_jumps[bb] = {dst_true, true_mask};
-            } else {
-              mask_control[dst_true] = true_mask;
-            }
+//            // backward jump
+//            if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
+//              loop_jumps[bb] = {dst_true, true_mask};
+//            } else {
+//              mask_control[dst_true] = true_mask;
+//            }
 
-          } else {
-            UNIMPLEMENTED;
-          }
-          //        call_bb(bb, true_mask, dst_true, flow_control_bb);
-          //        call_bb(flow_control_bb, false_mask, dst_false, dst_merge);
+//          } else {
+//            UNIMPLEMENTED;
+//          }
+//          //        call_bb(bb, true_mask, dst_true, flow_control_bb);
+//          //        call_bb(flow_control_bb, false_mask, dst_false, dst_merge);
 
-          //          llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c,
-          //          "flow_control", cur_fun); llvm::Value *all_true  =
-          //          llvm_builder->CreateICmpEQ(true_mask, old_mask); llvm::Value *all_false =
-          //          llvm_builder->CreateICmpEQ(true_mask, llvm_get_constant_i64(0));
+//          //          llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c,
+//          //          "flow_control", cur_fun); llvm::Value *all_true  =
+//          //          llvm_builder->CreateICmpEQ(true_mask, old_mask); llvm::Value *all_false =
+//          //          llvm_builder->CreateICmpEQ(true_mask, llvm_get_constant_i64(0));
 
-          //          llvm::BranchInst::Create(create_masked_jump(flow_control_bb, old_mask),
-          //                                   create_masked_jump(dst_true, true_mask), all_false,
-          //                                   local_cfg[bb]);
+//          //          llvm::BranchInst::Create(create_masked_jump(flow_control_bb, old_mask),
+//          //                                   create_masked_jump(dst_true, true_mask), all_false,
+//          //                                   local_cfg[bb]);
 
-          //          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
-          //                                   create_masked_jump(dst_false, true_mask), all_true,
-          //                                   flow_control_bb);
-        } else { // unconditional branch
-          if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
-            loop_jumps[bb] = {dst_true, NULL};
-          }
-          //          if (node.next == dst_true)
-          //            llvm::BranchInst::Create(local_cfg[dst_true], local_cfg[bb]);
-          //          else {
+//          //          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
+//          //                                   create_masked_jump(dst_false, true_mask), all_true,
+//          //                                   flow_control_bb);
+//        } else { // unconditional branch
+//          if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
+//            loop_jumps[bb] = {dst_true, NULL};
+//          }
+//          //          if (node.next == dst_true)
+//          //            llvm::BranchInst::Create(local_cfg[dst_true], local_cfg[bb]);
+//          //          else {
 
-          //          }
-        }
-        //        call_bb(local_cfg[bb], dst_true);
+//          //          }
+//        }
+//        //        call_bb(local_cfg[bb], dst_true);
 
-        //        //        new llvm::StoreInst(true_mask, cur_mask, dst_true->getFirstNonPHI());
-        //        //        new llvm::StoreInst(false_mask, cur_mask, dst_false->getFirstNonPHI());
-        //        //        new llvm::StoreInst(old_mask, cur_mask, dst_merge->getFirstNonPHI());
-      }
-      llvm::BranchInst::Create(local_cfg[entry_bb], allocas_bb);
-      for (llvm::BasicBlock *bb : bbs) {
-        if (contains(terminators, bb)) continue;
-        if (bb == global_terminator) continue;
-        CFG_Node &node = bb_cfg[bb];
-        NOTNULL(node.next);
-        //        if (contains(backward_jumps, bb)) {
-        //          ASSERT_ALWAYS(contains(mask_control, node.next));
-        //          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
-        //                                   create_masked_jump(dst_false, true_mask), all_true,
-        //                                   flow_control_bb);
-        //        } else {
+//        //        //        new llvm::StoreInst(true_mask, cur_mask, dst_true->getFirstNonPHI());
+//        //        //        new llvm::StoreInst(false_mask, cur_mask, dst_false->getFirstNonPHI());
+//        //        //        new llvm::StoreInst(old_mask, cur_mask, dst_merge->getFirstNonPHI());
+//      }
+//      llvm::BranchInst::Create(local_cfg[entry_bb], allocas_bb);
+//      for (llvm::BasicBlock *bb : bbs) {
+//        if (contains(terminators, bb)) continue;
+//        if (bb == global_terminator) continue;
+//        CFG_Node &node = bb_cfg[bb];
+//        NOTNULL(node.next);
+//        //        if (contains(backward_jumps, bb)) {
+//        //          ASSERT_ALWAYS(contains(mask_control, node.next));
+//        //          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
+//        //                                   create_masked_jump(dst_false, true_mask), all_true,
+//        //                                   flow_control_bb);
+//        //        } else {
 
-        if (contains(loop_jumps, bb)) {
-          llvm::Value *mask      = new llvm::LoadInst(mask_t, cur_mask, "mask", local_cfg[bb]);
-          llvm::Value *all_false = new llvm::ICmpInst(
-              *local_cfg[bb], llvm::ICmpInst::Predicate::ICMP_EQ, mask, llvm_get_constant_i64(0));
-          auto &item = loop_jumps[bb];
-          if (item.second != NULL) {
-            ASSERT_ALWAYS(contains(mask_control, node.next));
-            llvm::BranchInst::Create(
-                create_masked_jump(local_cfg[node.next], mask_control[node.next]),
-                create_masked_jump(local_cfg[item.first], item.second), all_false, local_cfg[bb]);
-          } else {
-            llvm::BranchInst::Create(
-                create_masked_jump(local_cfg[node.next], mask_control[node.next]),
-                local_cfg[item.first], all_false, local_cfg[bb]);
-          }
-        } else {
-          if (contains(mask_control, node.next)) {
-            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
-          }
-          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
-        }
-        //        }
-      }
-      for (llvm::BasicBlock *item : terminators) {
-        CFG_Node &node = bb_cfg[item];
-        NOTNULL(node.next);
-        if (node.next == global_terminator) {
-          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[item]);
-        } else {
-          llvm::Value *all_lanes_are_off = llvm::CallInst::Create(
-              spv_disable_lanes,
-              {state_ptr, new llvm::LoadInst(mask_t, cur_mask, "old_mask", local_cfg[item])},
-              "return", local_cfg[item]);
-          if (contains(mask_control, node.next)) {
-            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[item]);
-          }
-          llvm::BranchInst::Create(global_terminator, local_cfg[node.next], all_lanes_are_off,
-                                   local_cfg[item]);
-        }
-      }
+//        if (contains(loop_jumps, bb)) {
+//          llvm::Value *mask      = new llvm::LoadInst(mask_t, cur_mask, "mask", local_cfg[bb]);
+//          llvm::Value *all_false = new llvm::ICmpInst(
+//              *local_cfg[bb], llvm::ICmpInst::Predicate::ICMP_EQ, mask, llvm_get_constant_i64(0));
+//          auto &item = loop_jumps[bb];
+//          if (item.second != NULL) {
+//            ASSERT_ALWAYS(contains(mask_control, node.next));
+//            llvm::BranchInst::Create(
+//                create_masked_jump(local_cfg[node.next], mask_control[node.next]),
+//                create_masked_jump(local_cfg[item.first], item.second), all_false, local_cfg[bb]);
+//          } else {
+//            llvm::BranchInst::Create(
+//                create_masked_jump(local_cfg[node.next], mask_control[node.next]),
+//                local_cfg[item.first], all_false, local_cfg[bb]);
+//          }
+//        } else {
+//          if (contains(mask_control, node.next)) {
+//            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
+//          }
+//          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
+//        }
+//        //        }
+//      }
+//      for (llvm::BasicBlock *item : terminators) {
+//        CFG_Node &node = bb_cfg[item];
+//        NOTNULL(node.next);
+//        if (node.next == global_terminator) {
+//          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[item]);
+//        } else {
+//          llvm::Value *all_lanes_are_off = llvm::CallInst::Create(
+//              spv_disable_lanes,
+//              {state_ptr, new llvm::LoadInst(mask_t, cur_mask, "old_mask", local_cfg[item])},
+//              "return", local_cfg[item]);
+//          if (contains(mask_control, node.next)) {
+//            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[item]);
+//          }
+//          llvm::BranchInst::Create(global_terminator, local_cfg[node.next], all_lanes_are_off,
+//                                   local_cfg[item]);
+//        }
+//      }
       auto dump_cfg = [&]() {
         static std::map<llvm::BasicBlock *, u32> bb_to_id;
         {
@@ -4078,10 +4083,6 @@ struct Spirv_Builder {
           }
           bb_to_id[global_terminator] = id++;
         }
-
-        //        char tmp_name[0x100];
-        //        snprintf(tmp_name, sizeof(tmp_name), "%s.cfg.dot",
-        //        cur_fun->getName().str().c_str());
         static FILE *dotgraph = NULL;
         static defer({
           fprintf(dotgraph, "}\n");
@@ -4172,13 +4173,12 @@ struct Spirv_Builder {
           }
         }
       };
-//          dump_cfg();
+      dump_cfg();
     finish_function:
       continue;
     }
-    //  module->dump();
-    //  exit(1);
-    //  NOCOMMIT;
+      module->dump();
+      exit(1); //  NOCOMMIT;
 
     // @llvm/finish_module
     // Make a function that returns the size of private space required by this
@@ -4364,6 +4364,13 @@ struct Spirv_Builder {
           std::make_unique<llvm::legacy::PassManager>();
       if (!opt_debug_info) {
         llvm::StripDebugInfo(*module);
+      }
+      if (opt_llvm_dump) {
+        std::string              str;
+        llvm::raw_string_ostream os(str);
+        module->print(os, NULL);
+        os.flush();
+        fprintf(stdout, "%s", os.str().c_str());
       }
       if (opt_dump) {
         FPM->add(create_my_dump_pass(code_hash));

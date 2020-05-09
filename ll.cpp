@@ -135,7 +135,6 @@ void dump_list_graph(List *root) {
 }
 
 List *parse(string_ref text) {
-
   List *root = list_storage.alloc_zero(1);
   List *cur  = root;
   ts.enter_scope();
@@ -198,7 +197,8 @@ List *parse(string_ref text) {
   auto cur_non_empty = [&]() { return cur != NULL && cur->symbol.len != 0; };
   auto cur_has_child = [&]() { return cur != NULL && cur->child != NULL; };
 
-  i = 0;
+  i                = 0;
+  State prev_state = State::UNDEFINED;
   while (i < text.len) {
     char  c     = text.ptr[i];
     State state = state_table[(u8)c];
@@ -215,7 +215,7 @@ List *parse(string_ref text) {
       break;
     }
     case State::SAW_LPAREN: {
-      if (cur_has_child()) next_item();
+      if (cur_has_child() || cur_non_empty()) next_item();
       push_item();
       break;
     }
@@ -224,15 +224,17 @@ List *parse(string_ref text) {
       break;
     }
     case State::SAW_SEPARATOR: {
-      if (cur_non_empty()) next_item();
+      //      if (cur_non_empty()) next_item();
       break;
     }
     case State::SAW_PRINTABLE: {
       if (cur_has_child()) next_item();
+      if (cur_non_empty() && prev_state != State::SAW_PRINTABLE) next_item();
       append_char();
       break;
     }
     }
+    prev_state = state;
     i += 1;
   }
 exit_loop:
@@ -258,10 +260,7 @@ bool parse_decimal_int(char const *str, size_t len, int32_t *result) {
   int32_t  pow   = 1;
   int32_t  sign  = 1;
   uint32_t i     = 0;
-  if (str[0] == '-') {
-    sign = -1;
-    i    = 1;
-  }
+  // parsing in reverse order
   for (; i < len; ++i) {
     switch (str[len - 1 - i]) {
     case '0': break;
@@ -274,6 +273,21 @@ bool parse_decimal_int(char const *str, size_t len, int32_t *result) {
     case '7': final += 7 * pow; break;
     case '8': final += 8 * pow; break;
     case '9': final += 9 * pow; break;
+    // it's ok to have '-'/'+' as the first char in a string
+    case '-': {
+      if (i == len - 1)
+        sign = -1;
+      else
+        return false;
+      break;
+    }
+    case '+': {
+      if (i == len - 1)
+        sign = 1;
+      else
+        return false;
+      break;
+    }
     default: return false;
     }
     pow *= 10;
@@ -340,6 +354,9 @@ void llvm_gen_module(List *root) {
   auto                               llvm_get_constant_i32 = [&c](u32 a) {
     return llvm::ConstantInt::get(llvm::IntegerType::getInt32Ty(c), a);
   };
+  auto llvm_get_constant_f32 = [&c](f32 a) {
+    return llvm::ConstantFP::get(llvm::IntegerType::getFloatTy(c), (f64)a);
+  };
   auto llvm_get_constant_i64 = [&c](u64 a) {
     return llvm::ConstantInt::get(llvm::IntegerType::getInt64Ty(c), a);
   };
@@ -367,12 +384,19 @@ void llvm_gen_module(List *root) {
 
     LOOKUP_FN(ll_printf);
 
-    llvm::Function *                     cur_fun   = NULL;
-    llvm::BasicBlock *                   cur_bb    = NULL;
-    llvm::BasicBlock *                   alloca_bb = NULL;
-    std::map<std::string, llvm::Value *> symbol_table;
-    std::unique_ptr<LLVM_IR_Builder_t>   llvm_builder;
-    auto                                 parse_int = [&](List *l) {
+    llvm::Function *                                 cur_fun   = NULL;
+    llvm::BasicBlock *                               cur_bb    = NULL;
+    llvm::BasicBlock *                               alloca_bb = NULL;
+    std::map<std::string, llvm::Value *>             symbol_table;
+    std::unique_ptr<llvm::IRBuilder<llvm::NoFolder>> llvm_builder;
+    struct Deferred_Branch {
+      llvm::Value *cond         = NULL;
+      string_ref   true_target  = {};
+      string_ref   false_target = {};
+      llvm::Value *src          = NULL;
+    };
+    std::vector<Deferred_Branch> deferred_branches;
+    auto                         parse_int = [&](List *l) {
       NOTNULL(l);
       ASSERT_ALWAYS(l->nonempty());
       int32_t i = 0;
@@ -417,7 +441,26 @@ void llvm_gen_module(List *root) {
       llvm::Value *ref = lookup_val(l->get_symbol());
       return ref; // llvm_builder->CreateLoad(ref);
     };
-    std::function<llvm::Value *(List *)> emit_instr = [&](List *instr) -> llvm::Value * {
+    std::function<llvm::Value *(List *)> emit_instr;
+    auto make_vector = [&](llvm::Type *type, List *l) -> llvm::Value * {
+      SmallArray<List *, 8> args;
+      args.init();
+      defer(args.release(););
+      {
+        List *arg = l;
+        while (arg != NULL) {
+          args.push(arg);
+          arg = arg->next;
+        }
+      }
+      ASSERT_ALWAYS(args.get_size() > 1);
+      //      llvm::Type * type   = get_type(args[0]);
+      llvm::Type * arr_ty      = llvm::VectorType::get(type, args.get_size());
+      llvm::Value *arr         = llvm::UndefValue::get(arr_ty);
+      ito(args.get_size()) arr = llvm_builder->CreateInsertElement(arr, emit_instr(args[i]), i);
+      return arr;
+    };
+    emit_instr = [&](List *instr) -> llvm::Value * {
       NOTNULL(instr);
       NOTNULL(cur_bb);
       if (!instr->nonempty()) {
@@ -436,42 +479,164 @@ void llvm_gen_module(List *root) {
           arg = arg->next;
         }
       }
-      if (llvm::Type *ty = get_type(instr)) {
+      i32  imm32;
+      f32  immf32;
+      bool is_imm32  = parse_decimal_int(instr->symbol.ptr, instr->symbol.len, &imm32);
+      bool is_immf32 = parse_float(instr->symbol.ptr, instr->symbol.len, &immf32);
+      if (is_imm32) {
+        return llvm_get_constant_i32(imm32);
+      } else if (is_immf32) {
+        return llvm_get_constant_f32(immf32);
+      } else if (llvm::Type *ty = get_type(instr)) {
         ASSERT_ALWAYS(args.get_size() == 1);
         llvm::Value *val = llvm_get_constant_i32(parse_int(args[0]));
         return val;
-      } else if (contains(symbol_table, stref_to_tmp_cstr(instr->symbol)) &&
-                 instr->child == NULL) {
+      } else if (contains(symbol_table, stref_to_tmp_cstr(instr->symbol)) && instr->child == NULL) {
         return get_val(instr);
-      } else if (instr->symbol == stref_s("add")) {
-        ASSERT_ALWAYS(args.get_size() == 2);
-        llvm::Value *val_0 = emit_instr(args[0]);
-        llvm::Value *val_1 = emit_instr(args[1]);
-        return llvm_builder->CreateFAdd(val_0, val_1);
-      } else if (instr->symbol == stref_s("load")) {
+      } else if (instr->symbol == stref_s("fcmp")) {
+        ASSERT_ALWAYS(args.get_size() == 3);
+        llvm::FCmpInst::Predicate type = llvm::FCmpInst::FCMP_FALSE;
+        if (args[0]->get_symbol() == stref_s("eq")) {
+          type = llvm::FCmpInst::FCMP_OEQ;
+        } else if (args[0]->get_symbol() == stref_s("lt")) {
+          type = llvm::FCmpInst::FCMP_OLT;
+        } else if (args[0]->get_symbol() == stref_s("le")) {
+          type = llvm::FCmpInst::FCMP_OLE;
+        } else if (args[0]->get_symbol() == stref_s("gt")) {
+          type = llvm::FCmpInst::FCMP_OGT;
+        } else if (args[0]->get_symbol() == stref_s("ge")) {
+          type = llvm::FCmpInst::FCMP_OGE;
+        } else {
+          UNIMPLEMENTED;
+        }
+        llvm::Value *val_0 = emit_instr(args[1]);
+        llvm::Value *val_1 = emit_instr(args[2]);
+        return llvm_builder->CreateFCmp(type, val_0, val_1);
+      } else
+#define BINOP(mn, fn)                                                                              \
+  if (instr->symbol == stref_s(mn)) {                                                              \
+    ASSERT_ALWAYS(args.get_size() == 2);                                                           \
+    llvm::Value *val_0 = emit_instr(args[0]);                                                      \
+    llvm::Value *val_1 = emit_instr(args[1]);                                                      \
+    return llvm_builder->fn(val_0, val_1);                                                         \
+  }
+        // clang-format off
+      BINOP("fadd", CreateFAdd)
+      else
+      BINOP("fsub", CreateFSub)
+      else
+      BINOP("fmul", CreateFMul)
+      else
+      BINOP("fdiv", CreateFDiv)
+      else
+      BINOP("add", CreateAdd)
+      else
+      BINOP("sub", CreateSub)
+      else
+      BINOP("sdiv", CreateSDiv)
+      else
+      BINOP("smul", CreateNSWMul)
+      else
+      BINOP("udiv", CreateUDiv)
+      else
+      BINOP("umul", CreateNUWMul)
+      else
+     #undef BINOP
+          // clang-format on
+          if (instr->symbol == stref_s("load")) {
         ASSERT_ALWAYS(args.get_size() == 1);
         return llvm_builder->CreateLoad(emit_instr(args[0]));
-      } else if (instr->symbol == stref_s("gep")) {
+      }
+      else if (instr->symbol == stref_s("at")) {
+        ASSERT_ALWAYS(args.get_size() > 1);
+        llvm::SmallVector<llvm::Value *, 4> chain;
+        ito(args.get_size() - 1) { chain.push_back(llvm_get_constant_i32(parse_int(args[i + 1]))); }
+        return llvm_builder->CreateLoad(llvm_builder->CreateGEP(emit_instr(args[0]), chain));
+      }
+      else if (instr->symbol == stref_s("gep")) {
         ASSERT_ALWAYS(args.get_size() > 1);
         llvm::SmallVector<llvm::Value *, 4> chain;
         ito(args.get_size() - 1) { chain.push_back(llvm_get_constant_i32(parse_int(args[i + 1]))); }
         return llvm_builder->CreateGEP(emit_instr(args[0]), chain);
-      } else if (instr->symbol == stref_s("store")) {
+      }
+      else if (instr->symbol == stref_s("extract_element")) {
+        ASSERT_ALWAYS(args.get_size() > 1);
+        return llvm_builder->CreateExtractElement(emit_instr(args[0]),
+                                                  llvm_get_constant_i32(parse_int(args[1])));
+      }
+      else if (instr->symbol == stref_s("insert_element")) {
+        ASSERT_ALWAYS(args.get_size() > 1);
+        return llvm_builder->CreateInsertElement(emit_instr(args[0]), emit_instr(args[1]),
+                                                 parse_int(args[2]));
+      }
+      else if (instr->symbol == stref_s("extract_value")) {
+        ASSERT_ALWAYS(args.get_size() > 1);
+        llvm::SmallVector<u32, 4> indxs;
+        ito(args.get_size() - 1) { indxs.push_back(parse_int(args[i + 1])); }
+        return llvm_builder->CreateExtractValue(emit_instr(args[0]), indxs);
+      }
+      else if (instr->symbol == stref_s("insert_value")) {
+        ASSERT_ALWAYS(args.get_size() > 1);
+        llvm::SmallVector<u32, 4> indxs;
+        ito(args.get_size() - 2) { indxs.push_back(parse_int(args[i + 2])); }
+        return llvm_builder->CreateInsertValue(emit_instr(args[0]), emit_instr(args[1]), indxs);
+      }
+      else if (instr->symbol == stref_s("store")) {
         ASSERT_ALWAYS(args.get_size() == 2);
         return llvm_builder->CreateStore(emit_instr(args[0]), emit_instr(args[1]));
-      } else if (instr->symbol == stref_s("alloca")) {
+      }
+      else if (instr->symbol == stref_s("alloca")) {
         ASSERT_ALWAYS(args.get_size() == 1);
         return llvm_builder->CreateAlloca(get_type(args[0]));
-      } else if (instr->symbol == stref_s("let")) {
+      }
+      else if (instr->symbol == stref_s("make_array")) {
+        ASSERT_ALWAYS(args.get_size() > 1);
+        llvm::Type * type   = get_type(args[0]);
+        llvm::Type * arr_ty = llvm::ArrayType::get(type, args.get_size() - 1);
+        llvm::Value *arr    = llvm::UndefValue::get(arr_ty);
+        ito(args.get_size() - 1) arr =
+            llvm_builder->CreateInsertValue(arr, emit_instr(args[1 + i]), i);
+        return arr;
+      }
+      else if (instr->symbol == stref_s("make_matrix")) {
+        ASSERT_ALWAYS(args.get_size() > 1);
+        llvm::Type *                        type = get_type(args[0]);
+        llvm::SmallVector<llvm::Value *, 4> rows;
+        ito(args.get_size() - 1) {
+          llvm::SmallVector<llvm::Value *, 4> row_values;
+          List *                              cur = args[1 + i]->child;
+          rows.push_back(make_vector(type, cur));
+        }
+        llvm::Type * arr_ty  = llvm::ArrayType::get(rows[0]->getType(), rows.size());
+        llvm::Value *arr     = llvm::UndefValue::get(arr_ty);
+        ito(rows.size()) arr = llvm_builder->CreateInsertValue(arr, rows[i], i);
+        return arr;
+      }
+      else if (instr->symbol == stref_s("make_vector")) {
+        return make_vector(get_type(instr->next), instr->next->next);
+      }
+      else if (instr->symbol == stref_s("let")) {
         ASSERT_ALWAYS(args.get_size() == 2);
         string_ref   val_name                     = args[0]->get_symbol();
         llvm::Value *val                          = emit_instr(args[1]);
         symbol_table[stref_to_tmp_cstr(val_name)] = val;
-      } else if (instr->symbol == stref_s("printf")) {
+      }
+      else if (instr->symbol == stref_s("printf")) {
         ASSERT_ALWAYS(args.get_size() > 1);
-        List *fmt = args[0];
-        llvm_builder->CreateCall(ll_printf, {lookup_string(stref_to_tmp_cstr(fmt->symbol))});
-      } else if (instr->symbol == stref_s("ret")) {
+        List *                              fmt = args[0];
+        llvm::SmallVector<llvm::Value *, 4> args_values;
+        args_values.push_back(lookup_string(stref_to_tmp_cstr(fmt->symbol)));
+        ito(args.get_size() - 1) args_values.push_back(emit_instr(args[1 + i]));
+        llvm_builder->CreateCall(ll_printf, args_values);
+      }
+      else if (instr->symbol == stref_s("jmp")) {
+        ASSERT_ALWAYS(args.get_size() > 1);
+        Deferred_Branch db = {};
+        db.true_target     = args[0]->get_symbol();
+        db.src             = cur_bb;
+        deferred_branches.push_back(db);
+      }
+      else if (instr->symbol == stref_s("ret")) {
         if (args.get_size() > 0) {
           ASSERT_ALWAYS(args.get_size() == 2);
           llvm::Type * ret_type = get_type(args[0]);
@@ -482,7 +647,10 @@ void llvm_gen_module(List *root) {
         }
         cur_bb = NULL;
         llvm_builder.release();
-      } else {
+      }
+      else if (instr->symbol == stref_s("ignore")) {
+      }
+      else {
         UNIMPLEMENTED;
       }
       return NULL;
@@ -515,10 +683,7 @@ void llvm_gen_module(List *root) {
                                    llvm::Twine(stref_to_tmp_cstr(name->symbol)), *module);
         alloca_bb    = llvm::BasicBlock::Create(c, "allocas", cur_fun);
         symbol_table = {};
-        ito(argv.size()) {
-          llvm::Value *alloca = new llvm::AllocaInst(argv[i], 0, argv_names[i], alloca_bb);
-          new llvm::StoreInst(cur_fun->getArg(i), alloca, alloca_bb);
-        }
+        ito(argv.size()) { symbol_table[argv_names[i]] = cur_fun->getArg(i); }
       }
       bool first_bb = true;
       func_node->match_children("label", [&](List *label_node) {
@@ -559,34 +724,9 @@ int main(int argc, char **argv) {
   //  ASSERT_ALWAYS(argc == 2);
   // argv[1]
   char const *text = R"(
-  (module
-    (function i32 main (
-                    (i32 argc)
-                    ((pointer (pointer i8)) argv)
-                   )
-      (label entry ()
-        (let a (alloca (vector f32 4)))
-        (let b (alloca (vector f32 4)))
-        (let c (add (load a) (load b)))
-        (store c a)
-        (let c (load (gep a 0 1)))
-        (printf "the number of arguments: %i\n" argc)
-        (printf "the first argument: %s\n" (at argv 0))
-        (let i_ptr (alloca i32))
-        (store (i32 0) i_ptr)
-        (ret i32 0)
-      )
-      (label loop_entry ()
-        (let i (load i_ptr))
-      )
-    )
-  )
+
   )";
-  //  (let a (makevector f32 0.0 0.0 0.1 0.2))
-  //        (let b (makevector f32 0.1 0.2 0.3 3.4))
-  //        (let c (fcmplt a b))
-  //        (dump c)
-  List *root = parse(stref_s(text));
+  List *      root = parse(stref_s(read_file_tmp("test.lsp")));
   dump_list_graph(root);
   llvm_gen_module(root);
   return 0;

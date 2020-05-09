@@ -26,3 +26,13 @@ insmod pfc.ko
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_EXPORT_COMPILE_COMMANDS=1 .. && make
 ```
+
+## Reference
+
+* [Whole-Function Vectorization](https://pdfs.semanticscholar.org/b01e/d17d21d9c69b60aa3e5018358e14b5e30b6e.pdf)
+
+* [Introducing Control Flow into Vectorized Code](https://dl.acm.org/doi/pdf/10.5555/1299042.1299055?download=true)
+
+* Aart J. C. Bik. The Software Vectorization Handbook. Intel Press, 2004.
+
+* Automatic SIMD Vectorization of SSA-based Control Flow Graphs

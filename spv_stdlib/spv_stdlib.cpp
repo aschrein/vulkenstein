@@ -532,5 +532,6 @@ FNATTR void dump_mask(Invocation_Info *state, uint64_t mask) {
   for (int i = 0; i < state->wave_width; i++) ((printf_t)state->print_fn)("%i", ((mask >> i) & 1));
   ((printf_t)state->print_fn)("\n");
 }
+FNATTR void *spv_dummy_call() { return NULL; }
 }
 #endif

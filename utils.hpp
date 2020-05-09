@@ -49,12 +49,18 @@ template <typename M, typename K> bool contains(M const &in, K const &key) {
   return in.find(key) != in.end();
 }
 
+template<typename T, typename F>
+bool any(T set, F f) {
+  for (auto const &item : set)
+    if (f(item)) return true;
+  return false;
+}
+
 #define UNIMPLEMENTED_(s)                                                                          \
   {                                                                                                \
     fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);                            \
     abort();                                                                                       \
   }
-
 #define UNIMPLEMENTED UNIMPLEMENTED_("")
 #define TRAP UNIMPLEMENTED_("")
 #define NOCOMMIT (void)0
@@ -575,7 +581,7 @@ template <typename T, u32 N, typename Allcator_t = Default_Allocator> struct Sma
     if (i < N)
       return _local[i];
     else
-      return _array[i];
+      return _array[i - N];
   }
   void push(T const &val) {
     if (_size < N) {
