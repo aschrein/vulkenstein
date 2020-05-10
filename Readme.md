@@ -36,3 +36,9 @@ cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=cla
 * Aart J. C. Bik. The Software Vectorization Handbook. Intel Press, 2004.
 
 * Automatic SIMD Vectorization of SSA-based Control Flow Graphs
+
+* [Loops: Presentation](https://pdfs.semanticscholar.org/6dd6/cb34570c33e0cd456352aaed4a65659801d2.pdf)
+
+* [CS447:CodeOptimization](https://www.csd.uwo.ca/~mmorenom/CS447/Lectures/CodeOptimization.html/node6.html)
+
+* [EECS 583 – Class 2 Control Flow Analysis LLVM Introduction](http://www.eecs.umich.edu/courses/eecs583/slides/Lecture2.pdf)

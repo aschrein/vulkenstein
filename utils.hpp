@@ -49,6 +49,25 @@ template <typename M, typename K> bool contains(M const &in, K const &key) {
   return in.find(key) != in.end();
 }
 
+template <typename M> bool sets_equal(M const &a, M const &b) {
+  if (a.size() != b.size())
+    return false;
+  for (auto const &item : a) {
+    if (!contains(b, item))
+      return false;
+  }
+  return true;
+}
+
+template <typename M> M get_intersection(M const &a, M const &b) {
+  M out;
+  for (auto const &item : a) {
+    if (contains(b, item))
+      out.insert(item);
+  }
+  return out;
+}
+
 template<typename T, typename F>
 bool any(T set, F f) {
   for (auto const &item : set)

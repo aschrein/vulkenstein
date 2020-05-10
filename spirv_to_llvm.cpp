@@ -3681,10 +3681,11 @@ struct Spirv_Builder {
       }
 
       // reachable relation query. uses a cache to amortize stuff
-      // we need it to topo sort the CFG for linearization
+      // we need it to detect loops
       //
       // bb reachable from [...]
-      std::set<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>>     reachable_cache;
+      std::set<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>> reachable_cache;
+      // true if b is reachable from a
       std::function<bool(llvm::BasicBlock * a, llvm::BasicBlock * b)> reachable =
           [&](llvm::BasicBlock *a, llvm::BasicBlock *b) {
             if (a == b) return true;
@@ -3704,12 +3705,79 @@ struct Spirv_Builder {
                 if (in == a) {
                   return true;
                 }
+                // breadth-first
                 to_visit.push_back(in);
               }
             }
             return false;
           };
-
+      // bb dominated by [...]
+      std::map<llvm::BasicBlock *, std::set<llvm::BasicBlock *>> dom_cache;
+      // Naive O(N^2) algorithm
+      // TODO: Lengauer-Tarjan
+      {
+        for (llvm::BasicBlock *bb : bbs) dom_cache[bb] = {bb};
+        for (llvm::BasicBlock *bb : bbs) {
+          if (bb == entry_bb) continue;
+          std::set<llvm::BasicBlock *>   visited;
+          std::deque<llvm::BasicBlock *> to_visit;
+          to_visit.push_back(entry_bb);
+          while (!to_visit.empty()) {
+            llvm::BasicBlock *cur = to_visit.front();
+            to_visit.pop_front();
+            if (contains(visited, cur)) continue;
+            visited.insert(cur);
+            for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
+              if (out != bb) to_visit.push_front(out);
+            }
+          }
+          for (llvm::BasicBlock *i : bbs)
+            if (!contains(visited, i)) dom_cache[i].insert(bb);
+        }
+      }
+      // true if b is dominated by a
+      std::function<bool(llvm::BasicBlock * a, llvm::BasicBlock * b)> dominates =
+          [&](llvm::BasicBlock *a, llvm::BasicBlock *b) {
+            ASSERT_ALWAYS(contains(dom_cache, b));
+            return contains(dom_cache[b], a);
+          };
+      // clang-format off
+      //   __          ___ _    _                _ _
+      //   \ \        / (_) |  (_)              | (_)
+      //    \ \  /\  / / _| | ___ _ __   ___  __| |_  __ _
+      //     \ \/  \/ / | | |/ / | '_ \ / _ \/ _` | |/ _` |
+      //      \  /\  /  | |   <| | |_) |  __/ (_| | | (_| |
+      //       \/  \/   |_|_|\_\_| .__/ \___|\__,_|_|\__,_|
+      //                         | |
+      //                         |_|
+      //
+      // Some definitions for quick reference:
+      // +----------------------------------------------------------------------------------------------------
+      // | -- A back edge is a CFG edge whose target dominates its source.
+      // |
+      // | -- A natural loop for back edge t → h is a subgraph containing t and h,
+      // | and all nodes from which t can be reached without passing through h.
+      // |
+      // | -- A loop header (sometimes called the entry point of the loop) is a dominator that is the
+      // | target of a loop-forming back edge. The loop header dominates all blocks in the loop body.
+      // | A block may be a loop header for more than one loop. A loop may have multiple entry points,
+      // | in which case it has no "loop header".
+      // |
+      // | -- The loop for a header h is the union of all natural loops for back edges whose target is h.
+      // |
+      // | -- A subgraph of a graph is strongly connected if there is a path in the subgraph from every
+      // | node to every other node.
+      // |
+      // | -- Every loop is a strongly connected subgraph.
+      // |
+      // | -- A CFG is reducible if every strongly connected subgraph contains a unique node (the header)
+      // | that dominates all nodes in the subgraph.
+      // |
+      // | -- A reducible CFG is one with edges that can be partitioned into two disjoint sets:
+      // | forward edges, and back edges, such that:
+      // | * Forward edges form a directed acyclic graph with all nodes reachable from the entry node.
+      // | * For all back edges (A, B), node B dominates node A.
+      // +----------------------------------------------------------------------------------------------------
       //
       // Now we gotta linearize CFG
       // it's easy just sort bbs in topological order so that
@@ -3737,10 +3805,10 @@ struct Spirv_Builder {
       //
       //          |
       //    +-----D <----+
-      //    |     |      |
-      //    |     |      |
-      //    |     |      |
-      //    |     A <-+  |
+      //    |     | <-+  |
+      //    |     |   |  |
+      //    |     |   |  |
+      //    |     A   |  |
       //    |     |   |  |
       //    |     C---+  |
       //    |            |
@@ -3749,122 +3817,25 @@ struct Spirv_Builder {
       //    B------------+
       //    |
       //
-      //-> D -> A -> C -> B-->
-      //   ^    ^____|    |   one way of linearization
-      //   |              |
-      //   |______________|
+      // -> D -> A -> C -> B-->
+      //    ^    ^____|    |   one way of linearization
+      //    |              |
+      //    |______________|
+      // clang-format on
 
-      // detect loops
-      // Linearized loop is a sequence of commands with 'back' jumps
-      struct Loop {
-        // parts of the strongly connected component
-        std::set<llvm::BasicBlock *> bbs;
-        // Reducible loops must have only one entry
-        // a node that has an input connection outside the loop
-        std::set<llvm::BasicBlock *> entries;
-        // a node that has an output connection outside the loop
-        // could be an entry
-        std::set<llvm::BasicBlock *> escapes;
+      std::set<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>> back_edges;
+      auto is_back_edge = [&](llvm::BasicBlock *from, llvm::BasicBlock *to) {
+        return contains(back_edges, std::pair<llvm::BasicBlock *, llvm::BasicBlock *>{from, to});
       };
-      std::vector<Loop>                 loops;
-      std::map<llvm::BasicBlock *, u32> looped_bbs;
-
       {
-      // first pass: detect mutually reachable nodes
-      {
-        std::set<llvm::BasicBlock *>   visited;
-        std::deque<llvm::BasicBlock *> to_visit;
-        to_visit.push_back(entry_bb);
-
-        while (!to_visit.empty()) {
-          llvm::BasicBlock *cur = to_visit.front();
-          to_visit.pop_front();
-          visited.insert(cur);
+        for (llvm::BasicBlock *cur : bbs) {
           for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
-            // loop detected
-            if (contains(visited, out)) {
-              if (!reachable(out, cur)) continue;
-              if (!contains(looped_bbs, out)) {
-                if (contains(looped_bbs, cur)) {
-                  looped_bbs[out] = looped_bbs[cur];
-                } else {
-                  Loop loop;
-                  loops.push_back(loop);
-                  looped_bbs[out] = loops.size() - 1;
-                }
-              }
-              u32 id = looped_bbs[out];
-              loops[id].bbs.insert(cur);
-              loops[id].bbs.insert(out);
-              looped_bbs[cur] = id;
-            } else {
-              to_visit.push_back(out);
-            }
+            if (dominates(out, cur)) back_edges.insert({cur, out});
           }
-        }
-        }
-        // second pass: expand loop
-        ito(loops.size()) {
-          Loop &loop = loops[i];
-          // strongly connected component
-          std::set<llvm::BasicBlock *>   scc;
-          std::deque<llvm::BasicBlock *> to_visit;
-          for (llvm::BasicBlock *bb : loop.bbs) {
-            to_visit.push_back(bb);
-          }
-          while (to_visit.size() != 0) {
-            llvm::BasicBlock *cur = to_visit.front();
-            to_visit.pop_front();
-            if (contains(scc, cur)) continue;
-            scc.insert(cur);
-            for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
-              if (bb_cfg[out].in_bbs.size() == 1 &&
-                  // there's a loop reachable(a, b) both reachable(b, a) are true
-                  reachable(out, cur))
-                to_visit.push_back(out);
-            }
-          }
-          for (llvm::BasicBlock *bb : scc) {
-            // different loops are disjoint
-            ASSERT_ALWAYS(!contains(looped_bbs, bb) || looped_bbs[bb] == i);
-            looped_bbs[bb] = i;
-          }
-          loop.bbs = scc;
-          for (llvm::BasicBlock *bb : loop.bbs) {
-            bool entry  = false;
-            bool escape = false;
-            for (llvm::BasicBlock *out : bb_cfg[bb].out_bbs) {
-              if (!contains(looped_bbs, out) || looped_bbs[out] != i) {
-                escape = true;
-              }
-            }
-            for (llvm::BasicBlock *in : bb_cfg[bb].in_bbs) {
-              if (!contains(looped_bbs, in) || looped_bbs[bb] != i) {
-                entry = true;
-              }
-            }
-            if (entry) loop.entries.insert(bb);
-            if (escape) loop.escapes.insert(bb);
-          }
-          // reducible loops have 1 entry
-          // ASSERT_ALWAYS(loop.entries.size() == 1);
-        }
-        // Next step is splitting loops
-        // we might actually have nested loops so we need
-        // to detect minimal strongly connected components
-        // and remove them from the parent loop
-        {}
-        // @Debug
-        if (0) {
-          for (auto &item : looped_bbs) {
-            fprintf(stdout, "looped bb: %s -> %i\n", item.first->getName().str().c_str(),
-                    item.second);
-          }
-          fflush(stdout);
         }
       }
 
-      // The reason why we cant' just sort based on trivial travers a la breadth first is this:
+      // The reason why we cant' just sort based on breadth first is this:
       //
       //    A
       //   / \
@@ -3873,41 +3844,39 @@ struct Spirv_Builder {
       //   C
       //        so we actually need topological sort (loop aware)
       //          in loops the jump always goes to the block that is
-      //        earlier in the path from entry to the jumping node
+      //        earlier in the path from entry to the jumping node (back edge)
       //
       // sort cfg
       {
         std::vector<llvm::BasicBlock *> sorted_bbs;
-        std::set<llvm::BasicBlock *>    visited;
-        std::deque<llvm::BasicBlock *>  to_visit;
+        std::set<llvm::BasicBlock *>    sorted_bbs_set;
+        // a queue of nodes which weren't yet sorted
+        std::deque<llvm::BasicBlock *> to_visit;
         {
-          visited.insert(allocas_bb);
           sorted_bbs.push_back(allocas_bb);
+          sorted_bbs_set.insert(allocas_bb);
           for (llvm::BasicBlock *bb : bbs) {
             to_visit.push_back(bb);
           }
-//            to_visit.push_back(entry_bb);
         }
+        // loop aware topo-sort
         while (!to_visit.empty()) {
           llvm::BasicBlock *bb = to_visit.front();
           to_visit.pop_front();
-          if (contains(visited, bb)) continue;
+          // ready when all dependencies are ready or there are none
           bool ready_to_insert = true;
           for (llvm::BasicBlock *in : bb_cfg[bb].in_bbs) {
-            if (!contains(visited, in) && !contains(looped_bbs, in)) {
+            if (!contains(sorted_bbs_set, in) && !is_back_edge(in, bb)) {
               ready_to_insert = false;
               break;
             }
           }
           if (!ready_to_insert) {
+            // put at the end of queue
             to_visit.push_back(bb);
             continue;
           }
-//          for (llvm::BasicBlock *out : bb_cfg[bb].out_bbs) {
-//            to_visit.push_front(out);
-//          }
-          //
-          visited.insert(bb);
+          sorted_bbs_set.insert(bb);
           sorted_bbs.push_back(bb);
         }
         ito(sorted_bbs.size() - 1) {
@@ -3918,161 +3887,6 @@ struct Spirv_Builder {
         ito(sorted_bbs.size()) { bb_cfg[sorted_bbs[i]].id = i; }
       }
 
-      // Finally emit branches with mask controls
-      // dst -> (src -> mask expression)
-//      std::map<llvm::BasicBlock *, llvm::Value *>                                mask_control;
-//      std::map<llvm::BasicBlock *, std::pair<llvm::BasicBlock *, llvm::Value *>> loop_jumps;
-
-//      for (BranchCond &cb : deferred_branches) {
-//        llvm::BasicBlock *bb = cb.bb;
-//        ASSERT_ALWAYS(bb != NULL);
-//        llvm::BasicBlock *dst_true = llvm_labels[cb.true_id];
-//        NOTNULL(dst_true);
-//        CFG_Node &        node         = bb_cfg[bb];
-//        llvm::BasicBlock *dst_false    = NULL;
-//        llvm::BasicBlock *dst_merge    = NULL;
-//        llvm::BasicBlock *dst_continue = NULL;
-//        if (cb.false_id != 0) {
-//          dst_false = llvm_labels[cb.false_id];
-//        }
-//        if (cb.merge_id != 0) {
-//          dst_merge = llvm_labels[cb.merge_id];
-//        }
-//        if (cb.continue_id != 0) {
-//          dst_continue = llvm_labels[cb.continue_id];
-//        }
-
-//        llvm_builder.reset(new LLVM_IR_Builder_t(local_cfg[bb], llvm::NoFolder()));
-//        defer(llvm_builder.release());
-//        // Conditional branch
-//        if (cb.cond_id != 0) {
-//          llvm::Value *cond_mask = NULL;
-//          llvm::Value *i1_vec    = llvm::UndefValue::get(
-//              llvm::VectorType::get(llvm::Type::getInt1Ty(c), opt_subgroup_size));
-//          kto(opt_subgroup_size) {
-//            llvm::Instruction *src_cond =
-//                llvm::dyn_cast<llvm::Instruction>(llvm_values_per_lane[k][cb.cond_id]);
-//            NOTNULL(src_cond);
-//            llvm::Value *cond = llvm_builder->CreateLoad(shared_values_stash[src_cond]);
-//            NOTNULL(cond);
-//            ASSERT_ALWAYS(cond->getType()->isIntegerTy());
-//            i1_vec = llvm_builder->CreateInsertElement(i1_vec, cond, k);
-//          }
-//          cond_mask = i1_vec_to_mask(i1_vec);
-
-//          llvm::Value *old_mask  = llvm_builder->CreateLoad(cur_mask, "old_mask");
-//          llvm::Value *true_mask = llvm_builder->CreateAnd(old_mask, cond_mask, "true_mask");
-//          llvm::Value *false_mask =
-//              llvm_builder->CreateAnd(old_mask, llvm_builder->CreateNot(cond_mask), "false_mask");
-
-//          if (node.next == dst_true) {
-//            new llvm::StoreInst(true_mask, cur_mask, local_cfg[bb]);
-//            ASSERT_ALWAYS(!contains(mask_control, dst_false));
-//            // backward jump
-//            if (bb_cfg[dst_false].id < bb_cfg[bb].id) {
-//              loop_jumps[bb] = {dst_false, false_mask};
-//            } else {
-//              mask_control[dst_false] = false_mask;
-//            }
-
-//          } else if (node.next == dst_false) {
-//            new llvm::StoreInst(false_mask, cur_mask, local_cfg[bb]);
-//            ASSERT_ALWAYS(!contains(mask_control, dst_true));
-
-//            // backward jump
-//            if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
-//              loop_jumps[bb] = {dst_true, true_mask};
-//            } else {
-//              mask_control[dst_true] = true_mask;
-//            }
-
-//          } else {
-//            UNIMPLEMENTED;
-//          }
-//          //        call_bb(bb, true_mask, dst_true, flow_control_bb);
-//          //        call_bb(flow_control_bb, false_mask, dst_false, dst_merge);
-
-//          //          llvm::BasicBlock *flow_control_bb = llvm::BasicBlock::Create(c,
-//          //          "flow_control", cur_fun); llvm::Value *all_true  =
-//          //          llvm_builder->CreateICmpEQ(true_mask, old_mask); llvm::Value *all_false =
-//          //          llvm_builder->CreateICmpEQ(true_mask, llvm_get_constant_i64(0));
-
-//          //          llvm::BranchInst::Create(create_masked_jump(flow_control_bb, old_mask),
-//          //                                   create_masked_jump(dst_true, true_mask), all_false,
-//          //                                   local_cfg[bb]);
-
-//          //          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
-//          //                                   create_masked_jump(dst_false, true_mask), all_true,
-//          //                                   flow_control_bb);
-//        } else { // unconditional branch
-//          if (bb_cfg[dst_true].id < bb_cfg[bb].id) {
-//            loop_jumps[bb] = {dst_true, NULL};
-//          }
-//          //          if (node.next == dst_true)
-//          //            llvm::BranchInst::Create(local_cfg[dst_true], local_cfg[bb]);
-//          //          else {
-
-//          //          }
-//        }
-//        //        call_bb(local_cfg[bb], dst_true);
-
-//        //        //        new llvm::StoreInst(true_mask, cur_mask, dst_true->getFirstNonPHI());
-//        //        //        new llvm::StoreInst(false_mask, cur_mask, dst_false->getFirstNonPHI());
-//        //        //        new llvm::StoreInst(old_mask, cur_mask, dst_merge->getFirstNonPHI());
-//      }
-//      llvm::BranchInst::Create(local_cfg[entry_bb], allocas_bb);
-//      for (llvm::BasicBlock *bb : bbs) {
-//        if (contains(terminators, bb)) continue;
-//        if (bb == global_terminator) continue;
-//        CFG_Node &node = bb_cfg[bb];
-//        NOTNULL(node.next);
-//        //        if (contains(backward_jumps, bb)) {
-//        //          ASSERT_ALWAYS(contains(mask_control, node.next));
-//        //          llvm::BranchInst::Create(create_masked_jump(local_cfg[dst_merge], old_mask),
-//        //                                   create_masked_jump(dst_false, true_mask), all_true,
-//        //                                   flow_control_bb);
-//        //        } else {
-
-//        if (contains(loop_jumps, bb)) {
-//          llvm::Value *mask      = new llvm::LoadInst(mask_t, cur_mask, "mask", local_cfg[bb]);
-//          llvm::Value *all_false = new llvm::ICmpInst(
-//              *local_cfg[bb], llvm::ICmpInst::Predicate::ICMP_EQ, mask, llvm_get_constant_i64(0));
-//          auto &item = loop_jumps[bb];
-//          if (item.second != NULL) {
-//            ASSERT_ALWAYS(contains(mask_control, node.next));
-//            llvm::BranchInst::Create(
-//                create_masked_jump(local_cfg[node.next], mask_control[node.next]),
-//                create_masked_jump(local_cfg[item.first], item.second), all_false, local_cfg[bb]);
-//          } else {
-//            llvm::BranchInst::Create(
-//                create_masked_jump(local_cfg[node.next], mask_control[node.next]),
-//                local_cfg[item.first], all_false, local_cfg[bb]);
-//          }
-//        } else {
-//          if (contains(mask_control, node.next)) {
-//            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[bb]);
-//          }
-//          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
-//        }
-//        //        }
-//      }
-//      for (llvm::BasicBlock *item : terminators) {
-//        CFG_Node &node = bb_cfg[item];
-//        NOTNULL(node.next);
-//        if (node.next == global_terminator) {
-//          llvm::BranchInst::Create(local_cfg[node.next], local_cfg[item]);
-//        } else {
-//          llvm::Value *all_lanes_are_off = llvm::CallInst::Create(
-//              spv_disable_lanes,
-//              {state_ptr, new llvm::LoadInst(mask_t, cur_mask, "old_mask", local_cfg[item])},
-//              "return", local_cfg[item]);
-//          if (contains(mask_control, node.next)) {
-//            new llvm::StoreInst(mask_control[node.next], cur_mask, local_cfg[item]);
-//          }
-//          llvm::BranchInst::Create(global_terminator, local_cfg[node.next], all_lanes_are_off,
-//                                   local_cfg[item]);
-//        }
-//      }
       auto dump_cfg = [&]() {
         static std::map<llvm::BasicBlock *, u32> bb_to_id;
         {
@@ -4107,41 +3921,17 @@ struct Spirv_Builder {
                       : bb_cfg[bb].in_bbs.size() == 0
                             ? "record"
                             : bb_cfg[bb].out_bbs.size() > 1 ? "triangle" : "circle",
-                  contains(looped_bbs, bb)
-                      ? (contains(loops[looped_bbs[bb]].entries, bb)
-                             ? "green"
-                             : contains(loops[looped_bbs[bb]].escapes, bb) ? "red" : "white")
-                      : "white"
+                  //                  contains(looped_bbs, bb)
+                  //                      ? (contains(loops[looped_bbs[bb]].entries, bb)
+                  //                             ? "green"
+                  //                             : contains(loops[looped_bbs[bb]].escapes, bb) ?
+                  //                             "red" : "white")
+                  //                      :
+                  "white"
 
           );
         }
         llvm::BasicBlock *cur = entry_bb;
-        // add loops to the cluster
-        ito(loops.size()) {
-          //          subgraph cluster_0 {
-          //		style=filled;
-          //		color=lightgrey;
-          //		node [style=filled,color=white];
-          //		a0 -> a1 -> a2 -> a3;
-          //		label = "process #1";
-          //	}
-          static u32 loop_cnt = 0;
-          loop_cnt++;
-          fprintf(dotgraph, "subgraph cluster_%i {\n", loop_cnt);
-          fprintf(dotgraph, "style=filled;\n");
-          fprintf(dotgraph, "color=lightgrey;\n");
-          Loop &loop = loops[i];
-          for (llvm::BasicBlock *bb : loop.bbs) {
-            u32       src_id = bb_to_id[bb];
-            CFG_Node &node   = bb_cfg[bb];
-            for (auto &dst_bb : node.out_bbs) {
-              if (!contains(loop.bbs, dst_bb)) continue;
-              u32 dst_id = bb_to_id[dst_bb];
-              fprintf(dotgraph, "%i -> %i;\n", src_id, dst_id);
-            }
-          }
-          fprintf(dotgraph, "}\n");
-        }
         while (cur) {
           CFG_Node &node = bb_cfg[cur];
           if (node.next == NULL) break;
@@ -4154,31 +3944,32 @@ struct Spirv_Builder {
           u32       src_id = bb_to_id[bb];
           CFG_Node &node   = bb_cfg[bb];
           for (auto &dst_bb : node.out_bbs) {
-            //  skip edges from the same loop as we already handled them above
-            if (contains(looped_bbs, dst_bb) && contains(looped_bbs, bb) &&
-                looped_bbs[dst_bb] == looped_bbs[bb])
-              continue;
             u32 dst_id = bb_to_id[dst_bb];
-            fprintf(dotgraph, "%i -> %i [constraint = false];\n", src_id, dst_id);
+            if (is_back_edge(bb, dst_bb))
+              fprintf(dotgraph, "%i -> %i [constraint = false, color=red];\n", src_id, dst_id);
+            else
+              fprintf(dotgraph, "%i -> %i [constraint = false];\n", src_id, dst_id);
           }
-          if (node.cont != NULL) {
-            u32 dst_id = bb_to_id[node.cont];
-            fprintf(dotgraph, "%i -> %i [label=\"C\", style=dashed, constraint = false];\n", src_id,
-                    dst_id);
-          }
-          if (node.merge != NULL) {
-            u32 dst_id = bb_to_id[node.merge];
-            fprintf(dotgraph, "%i -> %i [label=\"M\", style=dashed, constraint = false];\n", src_id,
-                    dst_id);
-          }
+          //          if (node.cont != NULL) {
+          //            u32 dst_id = bb_to_id[node.cont];
+          //            fprintf(dotgraph, "%i -> %i [label=\"C\", style=dashed, constraint =
+          //            false];\n", src_id,
+          //                    dst_id);
+          //          }
+          //          if (node.merge != NULL) {
+          //            u32 dst_id = bb_to_id[node.merge];
+          //            fprintf(dotgraph, "%i -> %i [label=\"M\", style=dashed, constraint =
+          //            false];\n", src_id,
+          //                    dst_id);
+          //          }
         }
       };
       dump_cfg();
     finish_function:
       continue;
     }
-      module->dump();
-      exit(1); //  NOCOMMIT;
+    module->dump();
+    exit(1); //  NOCOMMIT;
 
     // @llvm/finish_module
     // Make a function that returns the size of private space required by this
