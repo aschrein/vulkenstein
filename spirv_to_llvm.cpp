@@ -1085,10 +1085,10 @@ struct Spirv_Builder {
 
       std::unique_ptr<LLVM_IR_Builder_t> llvm_builder;
       llvm_builder.reset(new LLVM_IR_Builder_t(cur_bb, llvm::NoFolder()));
-      llvm::Value *cur_mask = llvm_builder->CreateAlloca(mask_t, NULL, "current_mask");
-      llvm_builder->CreateStore(cur_fun->getArg(1), cur_mask);
+      llvm::Value *mask_register = llvm_builder->CreateAlloca(mask_t, NULL, "mask_register");
+      llvm_builder->CreateStore(cur_fun->getArg(1), mask_register);
       auto get_lane_mask_bit = [&](u32 lane_id) {
-        llvm::Value *mask = llvm_builder->CreateLoad(cur_mask);
+        llvm::Value *mask = llvm_builder->CreateLoad(mask_register);
         return llvm_builder->CreateCall(spv_get_lane_mask,
                                         {state_ptr, mask, llvm_get_constant_i32(lane_id)});
         //          return llvm::ConstantInt::get(llvm::Type::getInt1Ty(c), 1);
@@ -1113,11 +1113,11 @@ struct Spirv_Builder {
                               llvm::BasicBlock *                    bb) {
         //        llvm_print_string("mask:");
         //        llvm_builder->CreateCall(dump_mask, {state_ptr,
-        //        llvm_builder->CreateLoad(cur_mask)});
+        //        llvm_builder->CreateLoad(mask_register)});
         kto(opt_subgroup_size) {
           llvm::Value *old_value =
               new llvm::LoadInst(values[k]->getType(), addresses[k], "old_value", bb);
-          llvm::Value *mask = new llvm::LoadInst(mask_t, cur_mask, "cur_mask", bb);
+          llvm::Value *mask = new llvm::LoadInst(mask_t, mask_register, "mask_register", bb);
           //        lane_bit llvm_builder->CreateCall(spv_get_lane_mask,
           //                                        {state_ptr, mask,
           //                                        llvm_get_constant_i32(lane_id)});
@@ -1613,7 +1613,6 @@ struct Spirv_Builder {
           masked_store(values, addresses, cur_bb);
           break;
         }
-        // Skip structured control flow instructions for now
         case spv::Op::OpLoopMerge: {
           cur_merge_id    = (int32_t)word1;
           cur_continue_id = (int32_t)word2;
@@ -1697,7 +1696,7 @@ struct Spirv_Builder {
               llvm_builder->CreateAnd(llvm_get_constant_i32(0), llvm_get_constant_i32(0));
           kto(opt_subgroup_size) {
             llvm::Value *pred_val  = llvm_values_per_lane[k][predicate_id];
-            llvm::Value *lane_mask = llvm_builder->CreateExtractElement(cur_mask, k);
+            llvm::Value *lane_mask = llvm_builder->CreateExtractElement(mask_register, k);
             llvm::Value *and_val   = llvm_builder->CreateAnd(pred_val, lane_mask);
             llvm::Value *zext = llvm_builder->CreateZExt(and_val, llvm::IntegerType::getInt32Ty(c));
             if (k < 32) {
@@ -1732,8 +1731,9 @@ struct Spirv_Builder {
             NOTNULL(val);
             ASSERT_ALWAYS(val->getType()->isVectorTy() && llvm_vec_num_elems(val->getType()) == 4 &&
                           llvm_vec_elem_type(val->getType())->isIntegerTy(32));
-            llvm::Value *lane_mask_i32 = llvm_builder->CreateSExt(
-                llvm_builder->CreateExtractElement(cur_mask, (u64)k), llvm::Type::getInt32Ty(c));
+            llvm::Value *lane_mask_i32 =
+                llvm_builder->CreateSExt(llvm_builder->CreateExtractElement(mask_register, (u64)k),
+                                         llvm::Type::getInt32Ty(c));
             llvm::Value *popcnt_0 = llvm_builder->CreateIntrinsic(
                 llvm::Intrinsic::ctpop, {llvm::IntegerType::getInt32Ty(c)},
                 {llvm_builder->CreateExtractElement(val, (u64)0)});
@@ -1780,8 +1780,8 @@ struct Spirv_Builder {
               opt_subgroup_size,
               llvm::Constant::getIntegerValue(llvm::Type::getInt1Ty(c), llvm::APInt(1, 0)));
           ASSERT_ALWAYS(opt_subgroup_size <= 64);
-          llvm::Value *cur_mask_packed =
-              llvm_builder->CreateBitCast(cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
+          llvm::Value *cur_mask_packed = llvm_builder->CreateBitCast(
+              mask_register, llvm::IntegerType::get(c, opt_subgroup_size));
           llvm::Value *cur_mask_i64 =
               llvm_builder->CreateZExt(cur_mask_packed, llvm::IntegerType::get(c, 64));
           llvm::Value *lsb           = llvm_builder->CreateCall(spv_lsb_i64, cur_mask_i64);
@@ -1813,8 +1813,8 @@ struct Spirv_Builder {
             llvm::Value *lane_val = llvm_values_per_lane[k][value_id];
             result                = llvm_builder->CreateInsertValue(result, lane_val, {(u32)k});
           }
-          llvm::Value *cur_mask_packed =
-              llvm_builder->CreateBitCast(cur_mask, llvm::IntegerType::get(c, opt_subgroup_size));
+          llvm::Value *cur_mask_packed = llvm_builder->CreateBitCast(
+              mask_register, llvm::IntegerType::get(c, opt_subgroup_size));
           llvm::Value *cur_mask_i64 =
               llvm_builder->CreateZExt(cur_mask_packed, llvm::IntegerType::get(c, 64));
           llvm::Value *lsb         = llvm_builder->CreateCall(spv_lsb_i64, cur_mask_i64);
@@ -2616,7 +2616,7 @@ struct Spirv_Builder {
           llvm::SmallVector<llvm::Value *, 4> args;
           // Prepend state * and mask
           args.push_back(state_ptr);
-          args.push_back(llvm_builder->CreateLoad(cur_mask));
+          args.push_back(llvm_builder->CreateLoad(mask_register));
           llvm::Value *enabled_lanes = save_enabled_lanes_mask();
           u32          args_count    = (WordCount - 4) * opt_subgroup_size + 2;
           for (int i = 4; i < WordCount; i++) {
@@ -3405,7 +3405,7 @@ struct Spirv_Builder {
       //      }
       auto create_masked_jump = [&](llvm::BasicBlock *dst, llvm::Value *mask) {
         llvm::BasicBlock *set_mask_bb = llvm::BasicBlock::Create(c, "set_mask", cur_fun);
-        new llvm::StoreInst(mask, cur_mask, set_mask_bb);
+        new llvm::StoreInst(mask, mask_register, set_mask_bb);
         llvm::BranchInst::Create(dst, set_mask_bb);
         return set_mask_bb;
       };
@@ -3421,7 +3421,7 @@ struct Spirv_Builder {
         NOTNULL(fun_ty);
         args.resize(fun_ty->getNumParams());
         args[0] = state_ptr;
-        args[1] = new llvm::LoadInst(mask_t, cur_mask, "mask", src);
+        args[1] = new llvm::LoadInst(mask_t, mask_register, "mask", src);
         for (auto &item : wbb.in_args) {
           if (contains(shared_values_stash, item.first)) {
             ASSERT_ALWAYS(contains(shared_values_stash, item.first));
@@ -3462,7 +3462,7 @@ struct Spirv_Builder {
         for (llvm::Instruction &inst : *bb) {
           ito(inst.getNumOperands()) {
             llvm::Value *op = inst.getOperand(i);
-            if (op == state_ptr || op == cur_mask) continue;
+            if (op == state_ptr || op == mask_register) continue;
             llvm::Instruction *used_inst = llvm::dyn_cast<llvm::Instruction>(op);
             if (used_inst != NULL && used_inst->getParent() != bb &&
                 !contains(used_foreign_values, used_inst)) {
@@ -3526,7 +3526,7 @@ struct Spirv_Builder {
           ito(inst.getNumOperands()) {
             if (inst.getOperand(i) == state_ptr) {
               inst.setOperand(i, fun->getArg(0));
-            } else if (inst.getOperand(i) == cur_mask) {
+            } else if (inst.getOperand(i) == mask_register) {
               inst.setOperand(i, this_mask);
             }
           }
@@ -3621,6 +3621,24 @@ struct Spirv_Builder {
         call_bb(local_cfg[bb], bb);
       }
 
+      // We want to restrict supported configurations to just structured CFG
+      // for example:
+      //
+      //    |  |
+      //    A  B
+      //   / \/ \  we're gonna have troubles merging at D
+      //  C  D  E  so we want each predecessor to be dominated by only one branch block
+      //  |  |  |
+      //
+      // Structured CFG basic patterns:
+      //
+      //   A     A    A        |
+      //   |    /|   / \     <-A<-+
+      //   B   B |  B   C      |  |
+      //        \|   \ /       B--+
+      //         C    D
+      // Basically those are Single entry Single exit building blocks
+      //
       // node per bb
       // keeps information needed to handle masks
       struct CFG_Node {
@@ -3633,10 +3651,10 @@ struct Spirv_Builder {
         llvm::BasicBlock *                         cont  = NULL;
       };
       std::map<llvm::BasicBlock *, CFG_Node> bb_cfg;
-
       local_cfg[allocas_bb]        = allocas_bb;
       local_cfg[global_terminator] = global_terminator;
-
+      // dst -> (src -> mask)
+      std::map<llvm::BasicBlock *, std::map<llvm::BasicBlock *, llvm::Value *>> cond_edges;
       // Build cfg
       // We don't have anything but branches to govern our CFG
       for (BranchCond &cb : deferred_branches) {
@@ -3660,7 +3678,6 @@ struct Spirv_Builder {
           dst_continue    = llvm_labels[cb.continue_id];
           bb_cfg[bb].cont = dst_continue;
         }
-
         bb_cfg[bb].out_bbs.insert(dst_true);
         bb_cfg[dst_true].in_bbs.insert(bb);
       }
@@ -3713,7 +3730,8 @@ struct Spirv_Builder {
           };
       // bb dominated by [...]
       std::map<llvm::BasicBlock *, std::set<llvm::BasicBlock *>> dom_cache;
-      // Naive O(N^2) algorithm
+      std::map<llvm::BasicBlock *, std::set<llvm::BasicBlock *>> postdom_cache;
+      // Naive O(N^2)(at least. O(logN * N^2) in reality) algorithm
       // TODO: Lengauer-Tarjan
       {
         for (llvm::BasicBlock *bb : bbs) dom_cache[bb] = {bb};
@@ -3734,6 +3752,56 @@ struct Spirv_Builder {
           for (llvm::BasicBlock *i : bbs)
             if (!contains(visited, i)) dom_cache[i].insert(bb);
         }
+        if (0) {
+          for (auto &item : dom_cache) {
+            fprintf(stdout, "%s dominated by\n", item.first->getName().str().c_str());
+            for (auto &dom : item.second) {
+              fprintf(stdout, "  %s\n", dom->getName().str().c_str());
+            }
+          }
+          fflush(stdout);
+        }
+      }
+      // Post dominator tree
+      // Naive N^2 solution
+      // assume every exit is post dominated by a virtual single exit
+      {
+        for (llvm::BasicBlock *bb : bbs) {
+          for (llvm::BasicBlock *bb2 : bbs) {
+            postdom_cache[bb].insert(bb2);
+          }
+        }
+        bool change = true;
+        while (change) {
+          change = false;
+          for (llvm::BasicBlock *bb : bbs) {
+            std::set<llvm::BasicBlock *> intersection;
+            for (llvm::BasicBlock *cur : bb_cfg[bb].out_bbs) {
+              std::set<llvm::BasicBlock *> p_doms = postdom_cache[cur];
+              if (intersection.empty())
+                intersection = p_doms;
+              else {
+                intersection = get_intersection(intersection, p_doms);
+              }
+            }
+            intersection.insert(bb);
+            bool this_change = !sets_equal(intersection, postdom_cache[bb]);
+            if (this_change) {
+              postdom_cache[bb] = intersection;
+              change            = true;
+            }
+          }
+        }
+        // @Debug
+        if (0) {
+          for (auto &item : postdom_cache) {
+            fprintf(stdout, "%s postdominated by\n", item.first->getName().str().c_str());
+            for (auto &dom : item.second) {
+              fprintf(stdout, "  %s\n", dom->getName().str().c_str());
+            }
+          }
+          fflush(stdout);
+        }
       }
       // true if b is dominated by a
       std::function<bool(llvm::BasicBlock * a, llvm::BasicBlock * b)> dominates =
@@ -3741,6 +3809,45 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(contains(dom_cache, b));
             return contains(dom_cache[b], a);
           };
+      // true if b is postdominated by a
+      std::function<bool(llvm::BasicBlock * a, llvm::BasicBlock * b)> postdominates =
+          [&](llvm::BasicBlock *a, llvm::BasicBlock *b) {
+            ASSERT_ALWAYS(contains(postdom_cache, b));
+            return contains(postdom_cache[b], a);
+          };
+      auto get_closest_branch = [&](llvm::BasicBlock *bb) {
+        std::set<llvm::BasicBlock *> doms   = dom_cache[bb];
+        u32                          max_id = 0;
+        llvm::BasicBlock *           max_bb = NULL;
+        for (llvm::BasicBlock *dom : doms) {
+          if (contains(cond_edges, dom)) {
+            CFG_Node &node = bb_cfg[dom];
+            if (node.id > max_id) {
+              max_id = node.id;
+              max_bb = dom;
+            }
+          }
+        }
+        return max_bb;
+      };
+      // strict
+      auto get_closest_postdom = [&](llvm::BasicBlock *bb) -> llvm::BasicBlock * {
+        std::set<llvm::BasicBlock *>   postdoms = postdom_cache[bb];
+        std::set<llvm::BasicBlock *>   visited;
+        std::deque<llvm::BasicBlock *> to_visit;
+        to_visit.push_back(bb);
+        while (!to_visit.empty()) {
+          llvm::BasicBlock *cur = to_visit.front();
+          to_visit.pop_front();
+          if (cur != bb && contains(postdoms, cur)) return cur;
+          if (contains(visited, cur)) continue;
+          visited.insert(cur);
+          for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
+            to_visit.push_back(out);
+          }
+        }
+        return NULL;
+      };
       // clang-format off
       //   __          ___ _    _                _ _
       //   \ \        / (_) |  (_)              | (_)
@@ -3786,7 +3893,7 @@ struct Spirv_Builder {
       //       |
       //       A
       //      / \   ===>  A -> B -> C -> D
-      //     B  C
+      //     B   C
       //      \ /
       //       D
       //       |
@@ -3801,45 +3908,34 @@ struct Spirv_Builder {
       //   B  D      where C could be a nested CFG with loops
       //             (A, C) is a strognly connected component here - a loop
       //
-      //  We also want to detect nested loops
-      //
-      //          |
-      //    +-----D <----+
-      //    |     | <-+  |
-      //    |     |   |  |
-      //    |     |   |  |
-      //    |     A   |  |
-      //    |     |   |  |
-      //    |     C---+  |
-      //    |            |
-      //    |            |
-      //    |            |
-      //    B------------+
-      //    |
-      //
       // -> D -> A -> C -> B-->
-      //    ^    ^____|    |   one way of linearization
+      //    ^    ^____|    |   one way of loop linearization
       //    |              |
       //    |______________|
+      //
       // clang-format on
 
       std::set<std::pair<llvm::BasicBlock *, llvm::BasicBlock *>> back_edges;
+      std::set<llvm::BasicBlock *>                                loop_headers;
       auto is_back_edge = [&](llvm::BasicBlock *from, llvm::BasicBlock *to) {
         return contains(back_edges, std::pair<llvm::BasicBlock *, llvm::BasicBlock *>{from, to});
       };
       {
         for (llvm::BasicBlock *cur : bbs) {
           for (llvm::BasicBlock *out : bb_cfg[cur].out_bbs) {
-            if (dominates(out, cur)) back_edges.insert({cur, out});
+            if (dominates(out, cur)) {
+              back_edges.insert({cur, out});
+              loop_headers.insert(out);
+            }
           }
         }
       }
 
-      // The reason why we cant' just sort based on breadth first is this:
+      // The reason why we can't just sort based on breadth first is this:
       //
       //    A
       //   / \
-      //  B  |  in breadth first C could be placed before B
+      //  B  /  in breadth first C could be placed before B
       //  \ /
       //   C
       //        so we actually need topological sort (loop aware)
@@ -3855,14 +3951,13 @@ struct Spirv_Builder {
         {
           sorted_bbs.push_back(allocas_bb);
           sorted_bbs_set.insert(allocas_bb);
-          for (llvm::BasicBlock *bb : bbs) {
-            to_visit.push_back(bb);
-          }
+          to_visit.push_back(entry_bb);
         }
         // loop aware topo-sort
         while (!to_visit.empty()) {
           llvm::BasicBlock *bb = to_visit.front();
           to_visit.pop_front();
+          if (contains(sorted_bbs_set, bb)) continue;
           // ready when all dependencies are ready or there are none
           bool ready_to_insert = true;
           for (llvm::BasicBlock *in : bb_cfg[bb].in_bbs) {
@@ -3876,6 +3971,10 @@ struct Spirv_Builder {
             to_visit.push_back(bb);
             continue;
           }
+          for (llvm::BasicBlock *out : bb_cfg[bb].out_bbs) {
+            // depth-first to make sure successors of a branch are part of the original CFG
+            to_visit.push_front(out);
+          }
           sorted_bbs_set.insert(bb);
           sorted_bbs.push_back(bb);
         }
@@ -3887,6 +3986,184 @@ struct Spirv_Builder {
         ito(sorted_bbs.size()) { bb_cfg[sorted_bbs[i]].id = i; }
       }
 
+      // Now to the mask handling
+      // +-----------------------------------------------------------------
+      // | We have basically these edges:
+      // +-----------------------------------------------------------------
+      // | 1) A -> B unconditionally, just pass-through. no need for masks
+      // | 2) A -> B is a conditional branch
+      // |    I)  A comes after B in linearized CFG
+      // |    II) A comes after some other node in linearized CFG
+      // | 3) A -> B is a back jump
+      // | 4) A -> nil - return, need to disable the lane for this function
+      // |
+      // +-----------------------------------------------------------------
+      // | A node could be either one of these or some of these:
+      // +-----------------------------------------------------------------
+      // | 1) Entry point
+      // | 2) Loop header - could also be a branched node
+      // | 3) Pass-through
+      // | 4) Conditionally branched(2 edges only) - no switch case for now
+      // | 5) Terminator - a return statement at the end
+      // | 6) Unreachable - not handled
+      // |
+      // +-----------------------------------------------------------------
+      // | We have at least two masks: one for conditional execution, one
+      // | to signify disabled(returned) lanes. Also one for fragment shader
+      // | for discards.
+      // | Every bit of observable behavior should be masked. naive approach
+      // | is to mask every store. keeping the loads unmasked. of course this
+      // | leads to UB when addresses are invalid but we don't care at that
+      // | stage yet.
+      // |
+      // +-----------------------------------------------------------------
+      std::map<llvm::BasicBlock *, llvm::Value *> mergers;
+      std::map<llvm::BasicBlock *, llvm::Value *> branch_targets;
+      for (BranchCond &cb : deferred_branches) {
+        llvm::BasicBlock *bb = cb.bb;
+        ASSERT_ALWAYS(bb != NULL);
+        llvm::BasicBlock *dst_true = llvm_labels[cb.true_id];
+        NOTNULL(dst_true);
+        CFG_Node &        node         = bb_cfg[bb];
+        llvm::BasicBlock *dst_false    = NULL;
+        llvm::BasicBlock *dst_merge    = NULL;
+        llvm::BasicBlock *dst_continue = NULL;
+        if (cb.false_id != 0) {
+          dst_false = llvm_labels[cb.false_id];
+        }
+        if (cb.merge_id != 0) {
+          dst_merge = llvm_labels[cb.merge_id];
+        }
+        if (cb.continue_id != 0) {
+          dst_continue = llvm_labels[cb.continue_id];
+        }
+        if (cb.cond_id != 0) {
+          // Load condition into an integer
+          llvm_builder.reset(new LLVM_IR_Builder_t(local_cfg[bb], llvm::NoFolder()));
+          defer(llvm_builder.release());
+          llvm::Value *i1_vec = llvm::UndefValue::get(
+              llvm::VectorType::get(llvm::Type::getInt1Ty(c), opt_subgroup_size));
+          kto(opt_subgroup_size) {
+            llvm::Instruction *src_cond =
+                llvm::dyn_cast<llvm::Instruction>(llvm_values_per_lane[k][cb.cond_id]);
+            NOTNULL(src_cond);
+            llvm::Value *cond = llvm_builder->CreateLoad(shared_values_stash[src_cond]);
+            NOTNULL(cond);
+            ASSERT_ALWAYS(cond->getType()->isIntegerTy());
+            i1_vec = llvm_builder->CreateInsertElement(i1_vec, cond, k);
+          }
+          llvm::Value *cond_mask = i1_vec_to_mask(i1_vec);
+          llvm::Value *mask      = llvm_builder->CreateLoad(mask_register, "mask");
+          llvm::Value *true_mask = llvm_builder->CreateAnd(mask, cond_mask, "true_mask");
+          llvm::Value *false_mask =
+              llvm_builder->CreateAnd(mask, llvm_builder->CreateNot(cond_mask), "false_mask");
+          NOTNULL(dst_false);
+          ASSERT_ALWAYS(!contains(cond_edges[dst_true], bb));
+          ASSERT_ALWAYS(!contains(cond_edges[dst_false], bb));
+          cond_edges[dst_true][bb]  = true_mask;
+          cond_edges[dst_false][bb] = false_mask;
+          llvm::BasicBlock *postdom = get_closest_postdom(bb);
+          NOTNULL(postdom);
+          ASSERT_ALWAYS(!contains(mergers, postdom));
+          ASSERT_ALWAYS(!contains(branch_targets, dst_true));
+          ASSERT_ALWAYS(!contains(branch_targets, dst_false));
+          mergers[postdom]          = mask;
+          branch_targets[dst_true]  = true_mask;
+          branch_targets[dst_false] = false_mask;
+        }
+        bb_cfg[bb].out_bbs.insert(dst_true);
+        bb_cfg[dst_true].in_bbs.insert(bb);
+      }
+      for (BranchCond &cb : deferred_branches) {
+        llvm::BasicBlock *bb = cb.bb;
+        ASSERT_ALWAYS(bb != NULL);
+        llvm::BasicBlock *dst_true = llvm_labels[cb.true_id];
+        NOTNULL(dst_true);
+        CFG_Node &        node         = bb_cfg[bb];
+        llvm::BasicBlock *dst_false    = NULL;
+        llvm::BasicBlock *dst_merge    = NULL;
+        llvm::BasicBlock *dst_continue = NULL;
+        if (cb.false_id != 0) {
+          dst_false = llvm_labels[cb.false_id];
+        }
+        if (cb.merge_id != 0) {
+          dst_merge = llvm_labels[cb.merge_id];
+        }
+        if (cb.continue_id != 0) {
+          dst_continue = llvm_labels[cb.continue_id];
+        }
+
+        if (dst_false == NULL) { // unconditional jump
+          ASSERT_ALWAYS(node.out_bbs.size() == 1);
+          CFG_Node &dst_true_node = bb_cfg[dst_true];
+          //
+          // 1) case for A
+          //
+          //       A         sorted;
+          //       |         => A -> B
+          //       B
+          //
+          // 2) case with B or C (we can't generally assume that there's only 2 edges merging)
+          //
+          //     |   |       sorted;
+          //     B   C       => -> B -> C -> D | -> C -> B -> D
+          //      \ /
+          //       D <- merge needed
+          //
+          //
+          // 3) back jump to the loop header case for D
+          //       |
+          //       A<-+
+          //       :  |
+          //       D--+
+          //       |
+
+          // case 1(A->B), 2(C->D or B->D)
+          if (node.next == dst_true) {
+            if (dst_true_node.in_bbs.size() == 1 ||
+                // it's either a pass-through or a loop header
+                // where the second incoming edge is a back edge
+                dst_true_node.in_bbs.size() == 2 &&
+                    contains(loop_headers, dst_true)) { // case 1: pass-through
+              llvm::BranchInst::Create(local_cfg[node.next], local_cfg[bb]);
+            } else { // either 2(C->D or B->D)
+              // merger needs to happen
+              // we operate on DAGs with only one entry point and no unreachable nodes
+              // that implies #merges == #divergencies during execution
+              // that means we can stackify mask handling
+              ASSERT_ALWAYS(contains(mergers, node.next));
+              llvm::BranchInst::Create(create_masked_jump(local_cfg[node.next], mergers[node.next]),
+                                       local_cfg[bb]);
+            }
+          }
+          // case 4
+          else if (is_back_edge(bb, dst_true)) { // jump to the loop header
+            llvm::BranchInst::Create(local_cfg[dst_true], local_cfg[bb]);
+          } else {
+            if (contains(branch_targets, node.next)) {
+              ASSERT_ALWAYS(!contains(mergers, node.next));
+              llvm::BranchInst::Create(
+                  create_masked_jump(local_cfg[node.next], branch_targets[node.next]),
+                  local_cfg[bb]);
+            } else {
+              ASSERT_ALWAYS(contains(mergers, node.next));
+              llvm::BranchInst::Create(create_masked_jump(local_cfg[node.next], mergers[node.next]),
+                                       local_cfg[bb]);
+            }
+          }
+        } else {
+          ASSERT_ALWAYS(node.out_bbs.size() == 2);
+        }
+      }
+      // @Debug
+      if (0) {
+        for (llvm::BasicBlock *bb : bbs) {
+          if (bb_cfg[bb].out_bbs.size() < 2) continue;
+          fprintf(stdout, "%s postdominated by %s\n", bb->getName().str().c_str(),
+                  get_closest_postdom(bb)->getName().str().c_str());
+        }
+        fflush(stdout);
+      }
       auto dump_cfg = [&]() {
         static std::map<llvm::BasicBlock *, u32> bb_to_id;
         {
@@ -3950,24 +4227,23 @@ struct Spirv_Builder {
             else
               fprintf(dotgraph, "%i -> %i [constraint = false];\n", src_id, dst_id);
           }
-          //          if (node.cont != NULL) {
-          //            u32 dst_id = bb_to_id[node.cont];
-          //            fprintf(dotgraph, "%i -> %i [label=\"C\", style=dashed, constraint =
-          //            false];\n", src_id,
-          //                    dst_id);
-          //          }
-          //          if (node.merge != NULL) {
-          //            u32 dst_id = bb_to_id[node.merge];
-          //            fprintf(dotgraph, "%i -> %i [label=\"M\", style=dashed, constraint =
-          //            false];\n", src_id,
-          //                    dst_id);
-          //          }
+          if (node.cont != NULL) {
+            u32 dst_id = bb_to_id[node.cont];
+            fprintf(dotgraph, "%i -> %i [label=\"C\", style=dashed, constraint = false];\n", src_id,
+                    dst_id);
+          }
+          if (node.merge != NULL) {
+            u32 dst_id = bb_to_id[node.merge];
+            fprintf(dotgraph, "%i -> %i [label=\"M\", style=dashed, constraint = false];\n", src_id,
+                    dst_id);
+          }
         }
       };
       dump_cfg();
     finish_function:
       continue;
     }
+    llvm::StripDebugInfo(*module);
     module->dump();
     exit(1); //  NOCOMMIT;
 

@@ -42,3 +42,9 @@ cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=cla
 * [CS447:CodeOptimization](https://www.csd.uwo.ca/~mmorenom/CS447/Lectures/CodeOptimization.html/node6.html)
 
 * [EECS 583 – Class 2 Control Flow Analysis LLVM Introduction](http://www.eecs.umich.edu/courses/eecs583/slides/Lecture2.pdf)
+
+* [Solving the structured control flow problem once and for all](https://medium.com/leaningtech/solving-the-structured-control-flow-problem-once-and-for-all-5123117b1ee2)
+
+* [NIR Docs](https://people.freedesktop.org/~cwabbott0/nir-docs/control_flow.html)
+
+* [Formalizing Structured Control Flow Graphs](https://pdfs.semanticscholar.org/e1d7/2c75a29c3976b24eafa2cd05a155d12f2170.pdf)

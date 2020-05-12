@@ -13,13 +13,13 @@
 #include <unistd.h>
 
 #define ASSERT_ALWAYS(x)                                                                           \
-  {                                                                                                \
+  do {                                                                                                \
     if (!(x)) {                                                                                    \
       fprintf(stderr, "%s:%i [FAIL] at %s\n", __FILE__, __LINE__, #x);                             \
       (void)(*(volatile int *)(NULL) = 0);                                                         \
       abort();                                                                                     \
     }                                                                                              \
-  }
+  } while(0)
 #define ASSERT_DEBUG(x) ASSERT_ALWAYS(x)
 #define NOTNULL(x) ASSERT_ALWAYS((x) != NULL)
 
@@ -76,10 +76,10 @@ bool any(T set, F f) {
 }
 
 #define UNIMPLEMENTED_(s)                                                                          \
-  {                                                                                                \
+  do {                                                                                                \
     fprintf(stderr, "%s:%i UNIMPLEMENTED %s\n", __FILE__, __LINE__, s);                            \
     abort();                                                                                       \
-  }
+  } while(0)
 #define UNIMPLEMENTED UNIMPLEMENTED_("")
 #define TRAP UNIMPLEMENTED_("")
 #define NOCOMMIT (void)0
@@ -115,11 +115,11 @@ template <typename F> __Defer__<F> defer_func(F f) { return __Defer__<F>(f); }
   tl_alloc_tmp_enter();                                                                            \
   defer(tl_alloc_tmp_exit(););
 #define SWAP(x, y)                                                                                 \
-  {                                                                                                \
+  do {                                                                                                \
     auto tmp = x;                                                                                  \
     x        = y;                                                                                  \
     y        = tmp;                                                                                \
-  }
+  } while(0)
 
 static size_t get_page_size() { return sysconf(_SC_PAGE_SIZE); }
 
