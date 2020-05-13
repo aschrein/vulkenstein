@@ -8,33 +8,22 @@ const uint32_t NUM_INVOCATIONS = 128;
 
 void spv_main(void *, uint64_t);
 uint get_num(uint t) {
-  while (t < 666) {
-    if (t == 0) {
-      t += 1;
-      continue;
-    }
-    t = t + 1;
+  if (t < 888) {
+     while (t < 666) {
+       t = (t ^ (t << 1)) + 1;
+       if (t > 100)
+         continue;
+       t = t * (t - 1) + 1;
+       if (t > 200)
+         return t;
+       if (t > 10)
+         break;
+     }
+    t = (t << 2) + 1;
+    return t;
+  } else {
+    return t + t * t * t;
   }
-  return t;
-  //if (t < 888) {
-  //   while (t < 666) {
-  //     t = t + 1;
-  //     if (t == 444)
-  //       continue;
-  //     t = t * (t - 1) + 1;
-  //     if (t > 100500)
-  //       return t;
-  //     if (t == 777)
-  //       break;
-  //
-  //   }
-  //  t = t / 44;
-  //  return t;
-  //  //return 555;
-  //} else {
-  //  return t + t * t * t;
-  //  //return 666;
-  //}
 }
 void test_launch(void *_printf) {
   uint32_t g_buf_0[NUM_INVOCATIONS];
@@ -90,33 +79,22 @@ r"""
 [[vk::binding(1, 0)]] RWBuffer <uint> g_buf_1;
 
 uint get_num(uint t) {
-  while (t < 666) {
-    if (t == 0) {
-      t += 1;
-      continue;
-    }
-    t = t + 1;
+  if (t < 888) {
+     while (t < 666) {
+       t = (t ^ (t << 1)) + 1;
+       if (t > 100)
+         continue;
+       t = t * (t - 1) + 1;
+       if (t > 200)
+         return t;
+       if (t > 10)
+         break;
+     }
+    t = (t << 2) + 1;
+    return t;
+  } else {
+    return t + t * t * t;
   }
-  return t;
-  //if (t < 888) {
-  //   while (t < 666) {
-  //     t = t + 1;
-  //     if (t == 444)
-  //       continue;
-  //     t = t * (t - 1) + 1;
-  //     if (t > 100500)
-  //       return t;
-  //     if (t == 777)
-  //       break;
-  //
-  //   }
-  //  t = t / 44;
-  //  return t;
-  //  //return 555;
-  //} else {
-  //  return t + t * t * t;
-  //  //return 666;
-  //}
 }
 
 [numthreads(4, 1, 1)]
