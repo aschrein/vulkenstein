@@ -353,10 +353,10 @@ struct Spirv_Builder {
   //////////////////////
   //     Options      //
   //////////////////////
-  u32  opt_subgroup_size  = 1;
+  u32  opt_subgroup_size  = 4;
   bool opt_debug_comments = false;
-  bool opt_debug_info     = false;
-  bool opt_dump           = true;
+  bool opt_debug_info     = true;
+  bool opt_dump           = false;
   bool opt_llvm_dump      = false;
   //  bool opt_deinterleave_attributes = false;
 
@@ -662,12 +662,13 @@ struct Spirv_Builder {
     LOOKUP_FN(spv_is_front_face);
     //    LOOKUP_FN(spv_push_mask);
     //    LOOKUP_FN(spv_pop_mask);
-    LOOKUP_FN(spv_get_lane_mask);
-    LOOKUP_FN(spv_disable_lanes);
-    LOOKUP_FN(spv_set_enabled_lanes);
-    LOOKUP_FN(spv_get_enabled_lanes);
+    //    LOOKUP_FN(spv_get_lane_mask);
+    //    LOOKUP_FN(spv_disable_lanes);
+    //    LOOKUP_FN(spv_set_enabled_lanes);
+    //    LOOKUP_FN(spv_get_enabled_lanes);
     LOOKUP_FN(spv_dummy_call);
     LOOKUP_FN(dump_mask);
+    LOOKUP_FN(dump_invocation_id);
     std::map<std::string, llvm::GlobalVariable *> global_strings;
     auto                                          lookup_string = [&](std::string str) {
       if (contains(global_strings, str)) return global_strings[str];
@@ -1089,10 +1090,28 @@ struct Spirv_Builder {
       std::map<llvm::BasicBlock *, llvm::Value *> mask_registers;
       mask_registers[allocas_bb] = mask_register;
       llvm_builder->CreateStore(cur_fun->getArg(1), mask_register);
-      auto get_lane_mask_bit = [&](u32 lane_id) {
-        llvm::Value *mask = llvm_builder->CreateLoad(mask_register);
-        return llvm_builder->CreateCall(spv_get_lane_mask,
-                                        {state_ptr, mask, llvm_get_constant_i32(lane_id)});
+      // one register per function
+      llvm::Value *enabled_lanes_register =
+          llvm_builder->CreateAlloca(mask_t, NULL, "enabled_lanes_register");
+      llvm_builder->CreateStore(cur_fun->getArg(1), enabled_lanes_register);
+      // @Debug
+      if (0) {
+        llvm_builder->CreateCall(dump_invocation_id, {state_ptr});
+      }
+      auto get_lane_mask_bit = [&](u32 lane_id, llvm::BasicBlock *bb) {
+        return new llvm::TruncInst(
+            llvm::BinaryOperator::Create(
+                llvm::BinaryOperator::BinaryOps::And,
+                llvm::BinaryOperator::Create(
+                    llvm::BinaryOperator::BinaryOps::LShr,
+                    new llvm::LoadInst(mask_t, mask_registers[bb], "mask", bb),
+                    llvm_get_constant_i64(lane_id), ">>", bb),
+                llvm_get_constant_i64(1), "&", bb),
+            llvm::Type::getInt1Ty(c), "trunc_to_i1", bb);
+        //        return llvm_builder->CreateCall(spv_get_lane_mask,
+        //                                        {llvm_builder->CreateLoad(enabled_lanes_register),
+        //                                         llvm_builder->CreateLoad(mask_registers[bb]),
+        //                                         llvm_get_constant_i32(lane_id)});
         //          return llvm::ConstantInt::get(llvm::Type::getInt1Ty(c), 1);
       };
       auto i1_vec_to_mask = [&](llvm::Value *i1vec) {
@@ -1103,46 +1122,41 @@ struct Spirv_Builder {
             llvm_builder->CreateBitCast(i1vec, llvm::Type::getIntNTy(c, vtype->getNumElements()));
         return llvm_builder->CreateZExt(bitcast, llvm::Type::getInt64Ty(c));
       };
-      auto llvm_print_string = [&](char const *str) {
+      auto llvm_print_string = [&](char const *str, llvm::BasicBlock *bb) {
         llvm::Value *str_const = lookup_string(str);
-        llvm_builder->CreateCall(
+        llvm::CallInst::Create(
             dump_string,
-            {state_ptr, llvm_builder->CreateBitCast(str_const, llvm::Type::getInt8PtrTy(c))});
+            {state_ptr, llvm::BitCastInst::Create(llvm::Instruction::CastOps::BitCast, str_const,
+                                                  llvm::Type::getInt8PtrTy(c), "", bb)
+
+            },
+            "", bb);
       };
 
       auto masked_store = [&](llvm::SmallVector<llvm::Value *, 64> &values,
                               llvm::SmallVector<llvm::Value *, 64> &addresses,
                               llvm::BasicBlock *                    bb) {
-        //        llvm_print_string("mask:");
-        //        llvm_builder->CreateCall(dump_mask, {state_ptr,
-        //        llvm_builder->CreateLoad(mask_register)});
         kto(opt_subgroup_size) {
           llvm::Value *old_value =
               new llvm::LoadInst(values[k]->getType(), addresses[k], "old_value", bb);
-          llvm::Value *mask = new llvm::LoadInst(mask_t, mask_registers[bb], "mask_register", bb);
-          //        lane_bit llvm_builder->CreateCall(spv_get_lane_mask,
-          //                                        {state_ptr, mask,
-          //                                        llvm_get_constant_i32(lane_id)});
 
-          //          llvm::Value *lane_bit = get_lane_mask_bit(k);
-          llvm::Value *lane_bit = llvm::CallInst::Create(
-              spv_get_lane_mask, {state_ptr, mask, llvm_get_constant_i32(k)}, "lane_bit", bb);
+          llvm::Value *lane_bit = get_lane_mask_bit(k, bb);
           llvm::Value *select =
               llvm::SelectInst::Create(lane_bit, values[k], old_value, "select", bb);
           new llvm::StoreInst(select, addresses[k], bb);
         }
       };
-      auto save_enabled_lanes_mask = [&]() {
-        llvm::Value *mask =
-            llvm_builder->CreateCall(spv_get_enabled_lanes, {state_ptr}, "enabled_lanes");
-        llvm::Value *alloca = llvm_builder->CreateAlloca(mask_t);
-        llvm_builder->CreateStore(mask, alloca);
-        return alloca;
-      };
-      auto restore_enabled_lanes_mask = [&](llvm::Value *alloca) {
-        llvm::Value *mask = llvm_builder->CreateLoad(alloca);
-        llvm_builder->CreateCall(spv_set_enabled_lanes, {state_ptr, mask});
-      };
+      //      auto save_enabled_lanes_mask = [&]() {
+      //        llvm::Value *mask =
+      //            llvm_builder->CreateCall(spv_get_enabled_lanes, {state_ptr}, "enabled_lanes");
+      //        llvm::Value *alloca = llvm_builder->CreateAlloca(mask_t);
+      //        llvm_builder->CreateStore(mask, alloca);
+      //        return alloca;
+      //      };
+      //      auto restore_enabled_lanes_mask = [&](llvm::Value *alloca) {
+      //        llvm::Value *mask = llvm_builder->CreateLoad(alloca);
+      //        llvm_builder->CreateCall(spv_set_enabled_lanes, {state_ptr, mask});
+      //      };
 
       // Debug line number
       u32            cur_spirv_line = function.spirv_line;
@@ -2529,7 +2543,7 @@ struct Spirv_Builder {
           llvm_builder.release();
           cur_merge_id    = -1;
           cur_continue_id = -1;
-          mask_register = NULL;
+          mask_register   = NULL;
           break;
         }
         case spv::Op::OpReturn: {
@@ -2548,7 +2562,7 @@ struct Spirv_Builder {
           llvm_builder.release();
           cur_merge_id    = -1;
           cur_continue_id = -1;
-          mask_register = NULL;
+          mask_register   = NULL;
           break;
         }
         case spv::Op::OpFNegate: {
@@ -2592,7 +2606,7 @@ struct Spirv_Builder {
             ASSERT_ALWAYS(texel != NULL);
             llvm_builder->CreateCall(lookup_image_op(texel->getType(), coord->getType(),
                                                      /*read =*/false),
-                                     {image, coord, texel, get_lane_mask_bit(k)});
+                                     {image, coord, texel, get_lane_mask_bit(k, cur_bb)});
           }
           break;
         }
@@ -2627,8 +2641,7 @@ struct Spirv_Builder {
           // Prepend state * and mask
           args.push_back(state_ptr);
           args.push_back(llvm_builder->CreateLoad(mask_register));
-          llvm::Value *enabled_lanes = save_enabled_lanes_mask();
-          u32          args_count    = (WordCount - 4) * opt_subgroup_size + 2;
+          u32 args_count = (WordCount - 4) * opt_subgroup_size + 2;
           for (int i = 4; i < WordCount; i++) {
             kto(opt_subgroup_size) {
               llvm::Value *arg = llvm_values_per_lane[k][pCode[i]];
@@ -2657,7 +2670,6 @@ struct Spirv_Builder {
               llvm_values_per_lane[k][res_id] = llvm_builder->CreateLoad(return_values[k]);
             }
           }
-          restore_enabled_lanes_mask(enabled_lanes);
           break;
         }
         case spv::Op::OpMatrixTimesScalar: {
@@ -3512,6 +3524,24 @@ struct Spirv_Builder {
 
         llvm::BasicBlock *mirror_bb = llvm::BasicBlock::Create(c, "pseudo_" + bb->getName());
         mirror_bb->insertInto(cur_fun);
+        {
+          new llvm::StoreInst(
+              llvm::BinaryOperator::Create(
+                  llvm::BinaryOperator::BinaryOps::And,
+                  new llvm::LoadInst(mask_t, mask_registers[bb], "mask", mirror_bb),
+                  new llvm::LoadInst(mask_t, enabled_lanes_register, "enabled_mask", mirror_bb),
+                  "and", mirror_bb),
+              mask_registers[bb], mirror_bb);
+          // @Debug
+          if (0) {
+            llvm_print_string(bb->getName().str().c_str(), mirror_bb);
+
+            llvm::CallInst::Create(
+                dump_mask,
+                {state_ptr, new llvm::LoadInst(mask_t, mask_registers[bb], "mask", mirror_bb)}, "",
+                mirror_bb);
+          }
+        }
         char tmp_buf[0x100];
         snprintf(tmp_buf, sizeof(tmp_buf), "deinlined_%s", bb->getName().str().c_str());
         llvm::Function *fun =
@@ -4054,6 +4084,32 @@ struct Spirv_Builder {
             mask_registers[entry_bb]);
         llvm::BranchInst::Create(local_cfg[entry_bb], allocas_bb);
       }
+      std::map<llvm::BasicBlock *, llvm::BasicBlock *> dispatch_chain;
+      {
+        llvm::BasicBlock *cur = entry_bb;
+        while (cur != NULL) {
+          llvm::BasicBlock *dispatch = llvm::BasicBlock::Create(c, name_buf, cur_fun);
+          dispatch_chain[cur]        = dispatch;
+          cur                        = bb_cfg[cur].next;
+        }
+        cur = entry_bb;
+        while (cur != NULL) {
+          snprintf(name_buf, sizeof(name_buf), "dispatch_%s", cur->getName().str().c_str());
+          llvm::BasicBlock *dispatch = dispatch_chain[cur];
+          llvm_builder.reset(new LLVM_IR_Builder_t(dispatch, llvm::NoFolder()));
+          defer(llvm_builder.release());
+          if (bb_cfg[cur].next == NULL) {
+            llvm::BranchInst::Create(global_terminator, dispatch);
+          } else {
+            llvm::Value *mask      = llvm_builder->CreateLoad(mask_registers[cur], "mask");
+            llvm::Value *all_false = new llvm::ICmpInst(
+                *dispatch, llvm::ICmpInst::Predicate::ICMP_EQ, mask, llvm_get_constant_i64(0));
+            llvm::BranchInst::Create(dispatch_chain[bb_cfg[cur].next], local_cfg[cur], all_false,
+                                     dispatch);
+          }
+          cur = bb_cfg[cur].next;
+        }
+      }
       for (BranchCond &cb : deferred_branches) {
         llvm::BasicBlock *bb = cb.bb;
         ASSERT_ALWAYS(bb != NULL);
@@ -4086,26 +4142,22 @@ struct Spirv_Builder {
               llvm_builder->CreateAnd(mask, llvm_builder->CreateNot(cond_mask), "false_mask");
           NOTNULL(dst_false);
 
-          {
-            llvm::Value *true_target_mask =
-                llvm_builder->CreateLoad(mask_registers[dst_true], "true_target_mask");
-            llvm_builder->CreateStore(llvm_builder->CreateOr(true_mask, true_target_mask),
-                                      mask_registers[dst_true]);
-          }
-          {
-            llvm::Value *false_target_mask =
-                llvm_builder->CreateLoad(mask_registers[dst_false], "false_target_mask");
-            llvm_builder->CreateStore(llvm_builder->CreateOr(false_mask, false_target_mask),
-                                      mask_registers[dst_false]);
-          }
+          llvm::Value *true_target_mask = llvm_builder->CreateOr(
+              true_mask, llvm_builder->CreateLoad(mask_registers[dst_true]), "true_target_mask");
+          llvm_builder->CreateStore(true_target_mask, mask_registers[dst_true]);
+
+          llvm::Value *false_target_mask = llvm_builder->CreateOr(
+              false_mask, llvm_builder->CreateLoad(mask_registers[dst_false]), "false_target_mask");
+          llvm_builder->CreateStore(false_target_mask, mask_registers[dst_false]);
+
           ASSERT_ALWAYS(node.out_bbs.size() == 2);
           // the way we sort enforces this ordering
           ASSERT_ALWAYS(node.next == dst_true || node.next == dst_false);
           ASSERT_ALWAYS(!is_back_edge(bb, dst_true) && !is_back_edge(bb, dst_false));
-          llvm::Value *     next_mask   = true_mask;
+          llvm::Value *     next_mask   = true_target_mask;
           llvm::BasicBlock *other_block = dst_false;
           if (node.next == dst_false) {
-            next_mask   = false_mask;
+            next_mask   = false_target_mask;
             other_block = dst_true;
           }
           // reset the mask register at the end of bb
@@ -4113,8 +4165,11 @@ struct Spirv_Builder {
           llvm::Value *all_false =
               new llvm::ICmpInst(*local_cfg[bb], llvm::ICmpInst::Predicate::ICMP_EQ, next_mask,
                                  llvm_get_constant_i64(0));
-          llvm::BranchInst::Create(local_cfg[other_block], local_cfg[node.next], all_false,
-                                   local_cfg[bb]);
+          ASSERT_ALWAYS(contains(dispatch_chain, node.next));
+          llvm::BranchInst::Create(dispatch_chain[node.next], local_cfg[bb]);
+          //          llvm::BranchInst::Create(local_cfg[other_block], local_cfg[node.next],
+          //          all_false,
+          //                                   local_cfg[bb]);
 
         } else {
 
@@ -4148,94 +4203,103 @@ struct Spirv_Builder {
         if (node.next == global_terminator) {
           llvm::BranchInst::Create(local_cfg[node.next], local_cfg[item]);
         } else {
+          llvm::Value *new_enabled_lanes = llvm::BinaryOperator::Create(
+              llvm::BinaryOperator::BinaryOps::And,
+              new llvm::LoadInst(mask_t, enabled_lanes_register, "enabled_lanes", local_cfg[item]),
+              llvm::BinaryOperator::Create(
+                  llvm::BinaryOperator::BinaryOps::Xor,
+                  new llvm::LoadInst(mask_t, mask_registers[item], "mask", local_cfg[item]),
+                  llvm_get_constant_i32(~0), "not_mask", local_cfg[item]),
+              "new_enabled_mask", local_cfg[item]);
+          new llvm::StoreInst(new_enabled_lanes, enabled_lanes_register, local_cfg[item]);
           llvm::Value *all_lanes_are_off =
-              llvm::CallInst::Create(spv_disable_lanes,
-                                     {state_ptr, new llvm::LoadInst(mask_t, mask_registers[item],
-                                                                    "old_mask", local_cfg[item])},
-                                     "return", local_cfg[item]);
+              new llvm::ICmpInst(*local_cfg[item], llvm::ICmpInst::Predicate::ICMP_EQ,
+                                 new_enabled_lanes, llvm_get_constant_i64(0));
           llvm::BranchInst::Create(global_terminator, local_cfg[node.next], all_lanes_are_off,
                                    local_cfg[item]);
         }
       }
-      auto dump_cfg = [&]() {
-        static std::map<llvm::BasicBlock *, u32> bb_to_id;
-        {
-          static u32 id      = 1;
-          bb_to_id[entry_bb] = id++;
-          for (auto &bb : bbs) {
-            bb_to_id[bb] = id++;
+      if (opt_dump) {
+        auto dump_cfg = [&]() {
+          static std::map<llvm::BasicBlock *, u32> bb_to_id;
+          {
+            static u32 id      = 1;
+            bb_to_id[entry_bb] = id++;
+            for (auto &bb : bbs) {
+              bb_to_id[bb] = id++;
+            }
+            bb_to_id[global_terminator] = id++;
           }
-          bb_to_id[global_terminator] = id++;
-        }
-        static FILE *dotgraph = NULL;
-        static defer({
-          fprintf(dotgraph, "}\n");
-          fflush(dotgraph);
-          fclose(dotgraph);
-          dotgraph = NULL;
-        });
-        if (dotgraph == NULL) {
-          dotgraph = fopen("cfg.dot", "wb");
-          fprintf(dotgraph, "digraph {\n");
-        }
-        fprintf(dotgraph, "node [shape=record];\n");
-        // 1348 -> 1350 [style=dashed];
-        // 1348 -> 1351 [style=dotted];
-        fprintf(dotgraph, "%i [label = \"terminator\", shape = record];\n",
-                bb_to_id[global_terminator]);
-        for (llvm::BasicBlock *bb : bbs) {
-          fprintf(dotgraph, "%i [style=filled, label = \"%s\", shape = %s, fillcolor = %s];\n",
-                  bb_to_id[bb], bb->getName().str().c_str(),
-                  contains(terminators, bb)
-                      ? "invtriangle"
-                      : bb_cfg[bb].in_bbs.size() == 0
-                            ? "record"
-                            : bb_cfg[bb].out_bbs.size() > 1 ? "triangle" : "circle",
-                  //                  contains(looped_bbs, bb)
-                  //                      ? (contains(loops[looped_bbs[bb]].entries, bb)
-                  //                             ? "green"
-                  //                             : contains(loops[looped_bbs[bb]].escapes, bb) ?
-                  //                             "red" : "white")
-                  //                      :
-                  "white"
+          static FILE *dotgraph = NULL;
+          static defer({
+            fprintf(dotgraph, "}\n");
+            fflush(dotgraph);
+            fclose(dotgraph);
+            dotgraph = NULL;
+          });
+          if (dotgraph == NULL) {
+            dotgraph = fopen("cfg.dot", "wb");
+            fprintf(dotgraph, "digraph {\n");
+          }
+          fprintf(dotgraph, "node [shape=record];\n");
+          // 1348 -> 1350 [style=dashed];
+          // 1348 -> 1351 [style=dotted];
+          fprintf(dotgraph, "%i [label = \"terminator\", shape = record];\n",
+                  bb_to_id[global_terminator]);
+          for (llvm::BasicBlock *bb : bbs) {
+            fprintf(dotgraph, "%i [style=filled, label = \"%s\", shape = %s, fillcolor = %s];\n",
+                    bb_to_id[bb], bb->getName().str().c_str(),
+                    contains(terminators, bb)
+                        ? "invtriangle"
+                        : bb_cfg[bb].in_bbs.size() == 0
+                              ? "record"
+                              : bb_cfg[bb].out_bbs.size() > 1 ? "triangle" : "circle",
+                    //                  contains(looped_bbs, bb)
+                    //                      ? (contains(loops[looped_bbs[bb]].entries, bb)
+                    //                             ? "green"
+                    //                             : contains(loops[looped_bbs[bb]].escapes, bb) ?
+                    //                             "red" : "white")
+                    //                      :
+                    "white"
 
-          );
-        }
-        llvm::BasicBlock *cur = entry_bb;
-        while (cur) {
-          CFG_Node &node = bb_cfg[cur];
-          if (node.next == NULL) break;
-          u32 src_id = bb_to_id[cur];
-          u32 dst_id = bb_to_id[node.next];
-          fprintf(dotgraph, "%i -> %i [style=dotted];\n", src_id, dst_id);
-          cur = node.next;
-        }
-        for (llvm::BasicBlock *bb : bbs) {
-          u32       src_id = bb_to_id[bb];
-          CFG_Node &node   = bb_cfg[bb];
-          for (auto &dst_bb : node.out_bbs) {
-            u32 dst_id = bb_to_id[dst_bb];
-            if (is_back_edge(bb, dst_bb))
-              fprintf(dotgraph, "%i -> %i [constraint = false, color=red];\n", src_id, dst_id);
-            else
-              fprintf(dotgraph, "%i -> %i [constraint = false];\n", src_id, dst_id);
+            );
           }
-          //          if (node.cont != NULL) {
-          //            u32 dst_id = bb_to_id[node.cont];
-          //            fprintf(dotgraph, "%i -> %i [label=\"C\", style=dashed, constraint =
-          //            false];\n", src_id,
-          //                    dst_id);
-          //          }
-          //          if (node.merge != NULL) {
-          //            u32 dst_id = bb_to_id[node.merge];
-          //            fprintf(dotgraph, "%i -> %i [label=\"M\", style=dashed, constraint =
-          //            false];\n", src_id,
-          //                    dst_id);
-          //          }
-        }
-      };
-      dump_cfg();
-      //            cur_fun->viewCFG();
+          llvm::BasicBlock *cur = entry_bb;
+          while (cur) {
+            CFG_Node &node = bb_cfg[cur];
+            if (node.next == NULL) break;
+            u32 src_id = bb_to_id[cur];
+            u32 dst_id = bb_to_id[node.next];
+            fprintf(dotgraph, "%i -> %i [style=dotted];\n", src_id, dst_id);
+            cur = node.next;
+          }
+          for (llvm::BasicBlock *bb : bbs) {
+            u32       src_id = bb_to_id[bb];
+            CFG_Node &node   = bb_cfg[bb];
+            for (auto &dst_bb : node.out_bbs) {
+              u32 dst_id = bb_to_id[dst_bb];
+              if (is_back_edge(bb, dst_bb))
+                fprintf(dotgraph, "%i -> %i [constraint = false, color=red];\n", src_id, dst_id);
+              else
+                fprintf(dotgraph, "%i -> %i [constraint = false];\n", src_id, dst_id);
+            }
+            //          if (node.cont != NULL) {
+            //            u32 dst_id = bb_to_id[node.cont];
+            //            fprintf(dotgraph, "%i -> %i [label=\"C\", style=dashed, constraint =
+            //            false];\n", src_id,
+            //                    dst_id);
+            //          }
+            //          if (node.merge != NULL) {
+            //            u32 dst_id = bb_to_id[node.merge];
+            //            fprintf(dotgraph, "%i -> %i [label=\"M\", style=dashed, constraint =
+            //            false];\n", src_id,
+            //                    dst_id);
+            //          }
+          }
+        };
+        dump_cfg();
+      }
+      //                  cur_fun->viewCFG();
     finish_function:
       continue;
     }
@@ -4538,7 +4602,7 @@ struct Spirv_Builder {
     this->code      = pCode;
     this->code_size = codeSize;
     code_hash       = hash_of(string_ref{(char const *)pCode, (size_t)codeSize * 4});
-    if (opt_dump) {
+    if (opt_dump || opt_debug_info) {
       TMP_STORAGE_SCOPE;
       char buf[0x100];
 
@@ -4550,17 +4614,19 @@ struct Spirv_Builder {
         string_ref final_path = stref_concat(dir, stref_s(buf));
         snprintf(shader_dump_path, sizeof(shader_dump_path), "%.*s", (int)final_path.len,
                  final_path.ptr);
-        spv_context context = spvContextCreate(SPV_ENV_VULKAN_1_2);
-        u32         options = SPV_BINARY_TO_TEXT_OPTION_NONE;
-        options |= SPV_BINARY_TO_TEXT_OPTION_NO_HEADER;
-        options |= SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES;
-        spv_text       text;
-        spv_diagnostic diagnostic = nullptr;
-        spv_result_t   error =
-            spvBinaryToText(context, pCode, code_size, options, &text, &diagnostic);
-        spvContextDestroy(context);
-        dump_file(stref_to_tmp_cstr(final_path), text->str, text->length);
-        spvTextDestroy(text);
+        if (opt_dump) {
+          spv_context context = spvContextCreate(SPV_ENV_VULKAN_1_2);
+          u32         options = SPV_BINARY_TO_TEXT_OPTION_NONE;
+          options |= SPV_BINARY_TO_TEXT_OPTION_NO_HEADER;
+          options |= SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES;
+          spv_text       text;
+          spv_diagnostic diagnostic = nullptr;
+          spv_result_t   error =
+              spvBinaryToText(context, pCode, code_size, options, &text, &diagnostic);
+          spvContextDestroy(context);
+          dump_file(stref_to_tmp_cstr(final_path), text->str, text->length);
+          spvTextDestroy(text);
+        }
       }
     }
     ASSERT_ALWAYS(pCode[0] == spv::MagicNumber);

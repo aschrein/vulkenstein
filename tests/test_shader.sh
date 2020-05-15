@@ -19,6 +19,7 @@ mkdir -p $SCRIPTPATH/../build/tests && cd $SCRIPTPATH/../build/tests && \
 python3 $INPUT && \
 spirv-dis --raw-id shader.spv -o shader.spv.S && \
 s2l shader.spv $WAVE_WIDTH > shader.ll && \
+
 llvm-as shader.ll -o shader.bc && \
 clang++ -I$SCRIPTPATH -I$SCRIPTPATH/.. -DWAVE_WIDTH="$WAVE_WIDTH" -fPIC -g runner.cpp -c -o runner.o && \
 opt -O3  shader.bc -o shader.bc && \

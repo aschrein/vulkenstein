@@ -1308,6 +1308,7 @@ extern "C" void clear_attachment(vki::VkImageView_Impl *attachment, VkClearValue
     }
     break;
   }
+  case VkFormat::VK_FORMAT_R8G8B8A8_UNORM:
   case VkFormat::VK_FORMAT_R8G8B8A8_SRGB: {
     uint32_t *data = (uint32_t *)attachment->img->get_ptr();
     uint32_t  tval = rgba32f_to_rgba8_unorm(val.color.float32[0], val.color.float32[1],
@@ -2326,8 +2327,7 @@ struct Draw_Call {
       info.output           = vs.vs_output + i * subgroup_size * vs_symbols->output_stride;
       // Assume there's only gl_Position
       info.builtin_output = vs.vs_vertex_positions + i * subgroup_size;
-      info.enabled_lanes = ~0ull;
-      vs_symbols->spv_main(&info, (~0));
+      vs_symbols->spv_main(&info, ((~00ull) >> (64 - vs_symbols->subgroup_size)));
     }
   }
   ATTR_USED
@@ -2712,7 +2712,7 @@ struct Draw_Call {
         info.pixel_positions = cur_tile.pixel_positions_input + i * subgroup_size * 3;
         info.wave_width      = ps_symbols->subgroup_size;
         info.is_front_face = &is_front_face[0];
-        ps_symbols->spv_main(&info, (~0));
+        ps_symbols->spv_main(&info, ((~0ull) >> (64 - ps_symbols->subgroup_size)));
       }
     }
   }
@@ -2749,7 +2749,10 @@ struct Draw_Call {
         jto(pipeline->OM_blend_state.attachmentCount) {
           VkPipelineColorBlendAttachmentState bstate = pipeline->OM_blend_state.pAttachments[j];
           uint32_t *                          dst = ((uint32_t *)cur_tile.rts[j]->img->get_ptr());
-          ASSERT_ALWAYS(cur_tile.rts[j]->format == VkFormat::VK_FORMAT_R8G8B8A8_SRGB);
+          ASSERT_ALWAYS(
+          cur_tile.rts[j]->format == VkFormat::VK_FORMAT_R8G8B8A8_SRGB ||
+          cur_tile.rts[j]->format == VkFormat::VK_FORMAT_R8G8B8A8_UNORM
+          );
           if (bstate.blendEnable) {
             ASSERT_ALWAYS(bstate.colorWriteMask ==
                           (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -2815,6 +2818,18 @@ struct Draw_Call {
             (void **)ts.alloc_align(sizeof(void *) * state->descriptor_sets[i]->slot_count, 32);
         jto(state->descriptor_sets[i]->slot_count) {
           switch (state->descriptor_sets[i]->slots[j].type) {
+          case VkDescriptorType::VK_DESCRIPTOR_TYPE_SAMPLER: {
+            Sampler *       s   = ALLOC_TMP(samplers);
+            s->address_mode     = Sampler::Address_Mode::ADDRESS_MODE_REPEAT;
+            s->filter           = Sampler::Filter::NEAREST;
+            s->mipmap_mode      = Sampler::Mipmap_Mode::MIPMAP_MODE_LINEAR;
+//            vki::VkSampler_Impl *sampler = state->descriptor_sets[i]->slots[j].sampler;
+//            NOTNULL(sampler);
+            uint64_t *slot                               = ALLOC_TMP(handle_slots);
+            *slot                                        = (uint64_t)s;
+            descriptor_sets[i][j]                        = slot;
+            break;
+          }
           case VkDescriptorType::VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: {
             vki::VkBuffer_Impl *buffer = state->descriptor_sets[i]->slots[j].buffer;
             NOTNULL(buffer);

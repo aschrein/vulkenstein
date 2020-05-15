@@ -27,7 +27,6 @@ void test_launch(void *_printf) {
   info.subgroup_y_offset  = 0x0;
   info.subgroup_z_bits    = 0x0;
   info.subgroup_z_offset  = 0x0;
-  info.enabled_lanes = 0xffffffffffffffffull;
     info.print_fn = _printf;
     info.wave_width = WAVE_WIDTH;
 

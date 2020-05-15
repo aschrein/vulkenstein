@@ -5,9 +5,13 @@
 #include <dlfcn.h>
 
 extern "C" {
-//void printf(char const *fmt, ...) {
-//  fprintf(stdout, "[SUCCESS]\n");
-//}
+void _printf(char const *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  vfprintf(stdout, fmt, args);
+  va_end(args);
+  fflush(stdout);
+}
 }
 
 int main(int argc, char **argv) {
@@ -23,7 +27,7 @@ int main(int argc, char **argv) {
   }
   main_t func = (main_t)dlsym(myso, "test_launch");
   ASSERT_ALWAYS(func != NULL);
-  func((void*)&printf);
+  func((void*)&_printf);
   dlclose(myso);
   return 0;
 }

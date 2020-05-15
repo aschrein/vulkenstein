@@ -9,14 +9,14 @@ const uint32_t NUM_INVOCATIONS = 128;
 void spv_main(void *, uint64_t);
 uint get_num(uint t) {
   if (t < 888) {
-     while (t < 666) {
+     while (true) {
        t = (t ^ (t << 1)) + 1;
-       if (t > 100)
+       if ((t & 7) == 7)
          continue;
        t = t * (t - 1) + 1;
        if (t > 200)
          return t;
-       if (t > 10)
+       if ((t & 8) != 0)
          break;
      }
     t = (t << 2) + 1;
@@ -28,11 +28,12 @@ uint get_num(uint t) {
 void test_launch(void *_printf) {
   uint32_t g_buf_0[NUM_INVOCATIONS];
   uint32_t g_buf_1[NUM_INVOCATIONS];
-  for (uint32_t i = 1; i < NUM_INVOCATIONS; i++) {
+  for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
     g_buf_1[i] = i;
+    g_buf_0[i] = 100500;
   }
   Invocation_Info info;
-  for (uint32_t i = 1; i < sizeof(info); i++)
+  for (uint32_t i = 0; i < sizeof(info); i++)
     ((uint8_t*)&info)[i] = 0;
   info.work_group_size    = (uint3){256, 1, 1};
   info.invocation_count   = (uint3){NUM_INVOCATIONS / 256, 1, 1};
@@ -43,9 +44,8 @@ void test_launch(void *_printf) {
   info.subgroup_y_offset  = 0x0;
   info.subgroup_z_bits    = 0x0;
   info.subgroup_z_offset  = 0x0;
-    info.print_fn = _printf;
-    info.wave_width = WAVE_WIDTH;
-  info.enabled_lanes = 0xffffffffffffffffull;
+  info.print_fn = _printf;
+  info.wave_width = WAVE_WIDTH;
   void *descriptor_set_0[] = {NULL, NULL};
   Image img_0;
   Image img_1;
@@ -61,8 +61,7 @@ void test_launch(void *_printf) {
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS/WAVE_WIDTH; i++) {
     info.invocation_id = (uint3){i, 0, 0};
-    info.enabled_lanes = (1 << WAVE_WIDTH) - 1;
-    spv_main(&info, (1 << WAVE_WIDTH) - 1);
+    spv_main(&info, ((~0ull) >> (64 - WAVE_WIDTH)));
   }
 
   for (uint32_t i = 0; i < NUM_INVOCATIONS; i++) {
@@ -80,14 +79,14 @@ r"""
 
 uint get_num(uint t) {
   if (t < 888) {
-     while (t < 666) {
+     while (true) {
        t = (t ^ (t << 1)) + 1;
-       if (t > 100)
+       if ((t & 7) == 7)
          continue;
        t = t * (t - 1) + 1;
        if (t > 200)
          return t;
-       if (t > 10)
+       if ((t & 8) != 0)
          break;
      }
     t = (t << 2) + 1;

@@ -51,7 +51,7 @@ struct Invocation_Info {
   float *  barycentrics;
   void **  descriptor_sets[0x10];
   uint8_t *is_front_face;
-  uint64_t enabled_lanes;
+//  uint64_t enabled_lanes;
   uint64_t discarded_lanes;
 //  // if we take paths with lowest popcnt we don't need
 //  // more than logN depth
@@ -133,36 +133,35 @@ FNATTR float4 get_pixel_position(Invocation_Info *state, uint32_t lane_id, float
 //  return state->mask_stack[--state->mask_top];
 //}
 
-FNATTR bool spv_get_lane_mask(Invocation_Info *state, uint64_t mask, uint32_t lane_id) {
-  return (((state->enabled_lanes & mask) >> lane_id) & 1) == 1;
-}
+//FNATTR bool spv_get_lane_mask(uint64_t enabled_mask, uint64_t mask, uint32_t lane_id) {
+//  return (((enabled_mask & mask) >> lane_id) & 1) == 1;
+//}
 
 // Disable unmasked lanes
 // returns true if all lanes are disabled
-FNATTR bool spv_disable_lanes(Invocation_Info *state, uint64_t lane_mask) {
-  state->enabled_lanes &= ~lane_mask;
-  return state->enabled_lanes == 0;
-}
+//FNATTR bool spv_disable_lanes(Invocation_Info *state, uint64_t lane_mask) {
+//  state->enabled_lanes &= ~lane_mask;
+//  return state->enabled_lanes == 0;
+//}
 
 // Discard unmasked lanes
 // returns true if all lanes are disabled
-FNATTR bool spv_discard_lanes(Invocation_Info *state, uint64_t lane_mask) {
+FNATTR void spv_discard_lanes(Invocation_Info *state, uint64_t lane_mask) {
   state->discarded_lanes &= ~lane_mask;
-  state->enabled_lanes &= ~lane_mask;
-  return state->enabled_lanes == 0;
+//  state->enabled_lanes &= ~lane_mask;
 }
 
 FNATTR void pixel_store_depth(Invocation_Info *state, uint32_t lane_id, float d) {
   ((float *)state->builtin_output)[lane_id] = d;
 }
 
-FNATTR u64 spv_get_enabled_lanes(Invocation_Info *state) {
-  return state->enabled_lanes;
-}
+//FNATTR u64 spv_get_enabled_lanes(Invocation_Info *state) {
+//  return state->enabled_lanes;
+//}
 
-FNATTR void spv_set_enabled_lanes(Invocation_Info *state, u64 mask) {
-  state->enabled_lanes = mask;
-}
+//FNATTR void spv_set_enabled_lanes(Invocation_Info *state, u64 mask) {
+//  state->enabled_lanes = mask;
+//}
 
 // For pixel shaders we follow morton curve order
 // There are a number of configurations employed in this implementation
@@ -527,6 +526,13 @@ FNATTR void dump_float(Invocation_Info *state, float m) {
 }
 FNATTR void dump_string(Invocation_Info *state, char const *str) {
   ((printf_t)state->print_fn)("%s\n", str);
+}
+FNATTR void dump_invocation_id(Invocation_Info *state) {
+  ((printf_t)state->print_fn)("invoc_id: [%i %i %i]\n",
+    state->invocation_id.x,
+    state->invocation_id.y,
+    state->invocation_id.z
+    );
 }
 FNATTR void dump_mask(Invocation_Info *state, uint64_t mask) {
   for (int i = 0; i < state->wave_width; i++) ((printf_t)state->print_fn)("%i", ((mask >> i) & 1));
